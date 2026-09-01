@@ -1,0 +1,26 @@
+{
+  "name": "egolite-browser-agent-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "ego-lite Browser Agent Chrome MV3 extension (v1 CLI-first)",
+  "scripts": {
+    "build": "node scripts/build.js",
+    "watch": "node scripts/build.js --watch",
+    "dev": "node scripts/dev.mjs",
+    "dev:no-reload": "node scripts/dev.mjs --no-reload",
+    "build:host": "node scripts/build-host.mjs",
+    "host": "node native-host/host.js",
+    "register-host": "powershell -NoProfile -ExecutionPolicy Bypass -File native-host/register.ps1",
+    "test:host": "node native-host/test-host.mjs",
+    "test:host:exe": "node native-host/test-host-exe.mjs",
+    "test:profile": "node native-host/test-profile.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.280",
+    "esbuild": "^0.24.0",
+    "postject": "^1.0.0-alpha.6",
+    "typescript": "^5.6.0"
+  }
+}

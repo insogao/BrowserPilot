@@ -1,0 +1,9 @@
+{
+  "name": "com.egolite.browseragent",
+  "description": "ego-lite Browser Agent native messaging host",
+  "path": "D:\\work\\chrome\\plugin-v1\\native-host\\dist\\egolite-host.exe",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/"
+  ]
+}
