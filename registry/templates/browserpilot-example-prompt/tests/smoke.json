@@ -1,0 +1,7 @@
+{
+  "name": "basic prompt composition",
+  "params": {
+    "topic": "registry smoke test"
+  },
+  "expect": "registry smoke test"
+}

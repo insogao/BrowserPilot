@@ -105,7 +105,8 @@ async function handlePopup(msg: PopupRequest): Promise<unknown> {
     case "template_command": {
       const allowed = new Set([
         "install_template", "list_templates", "export_template", "uninstall_template",
-        "set_template_enabled", "check_template_update", "list_template_catalog", "update_template", "rollback_template",
+        "set_template_enabled", "check_template_update", "list_template_catalog", "sync_registry", "search_templates",
+        "get_template_detail", "compare_templates", "update_template", "rollback_template",
       ]);
       if (!msg.name || !allowed.has(msg.name)) throw new Error("不允许的模板管理命令");
       return dispatch({ type: "command", name: msg.name, args: msg.args ?? {}, requestId: "options-" + Date.now() });

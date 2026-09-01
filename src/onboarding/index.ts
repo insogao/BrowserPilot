@@ -13,6 +13,10 @@ interface TemplateListItem {
   contentHash?: string;
   canRollback?: boolean;
   capabilities?: string[];
+  installed?: boolean;
+  intents?: string[];
+  keywords?: string[];
+  sites?: string[];
 }
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string): T => document.getElementById(id) as T;
@@ -88,7 +92,7 @@ function renderCard(item: TemplateListItem): HTMLElement {
   const actions = document.createElement("div");
   actions.className = "toolbar";
   actions.append(button("查看", async () => {
-    const result = await templateCommand<{ markdown?: string; template?: unknown }>("export_template", { id: item.id, as: "md" });
+    const result = await templateCommand<{ markdown?: string; template?: unknown }>("get_template_detail", { id: item.id });
     const text = result.markdown ?? JSON.stringify(result.template, null, 2);
     const win = window.open("", "_blank");
     if (!win) throw new Error("浏览器阻止了详情窗口");
@@ -99,7 +103,14 @@ function renderCard(item: TemplateListItem): HTMLElement {
     win.document.body.append(pre);
   }));
 
-  if (!item.builtin) {
+  if (item.installed === false) {
+    actions.append(button("安装", async () => {
+      if (item.source?.type !== "github") throw new Error("该搜索结果没有可安装的 GitHub 来源");
+      await templateCommand("install_template", { source: item.source });
+      status("模板已安装：" + item.id);
+      await refreshTemplates();
+    }, "primary"));
+  } else if (!item.builtin) {
     actions.append(button(item.enabled === false ? "启用" : "停用", async () => {
       await templateCommand("set_template_enabled", { id: item.id, enabled: item.enabled === false });
       status("模板状态已更新：" + item.id);
@@ -138,10 +149,30 @@ function renderCard(item: TemplateListItem): HTMLElement {
 async function refreshTemplates(): Promise<void> {
   const list = await templateCommand<TemplateListItem[]>("list_templates");
   const root = $("template-list");
-  root.replaceChildren(...list.map(renderCard));
+  root.replaceChildren(...list.map((item) => renderCard({ ...item, installed: true })));
   const installed = list.filter((item) => !item.builtin).length;
   $("template-summary").textContent = list.length + " 个模板（内置 " + (list.length - installed) + "，已安装 " + installed + "）";
 }
+
+async function searchRegistry(refresh = false): Promise<void> {
+  const query = $<HTMLInputElement>("template-search").value.trim();
+  const result = await templateCommand<{ templates: TemplateListItem[]; registry: { syncedAt: number } }>("search_templates", { query, refresh });
+  $("registry-results").replaceChildren(...result.templates.map(renderCard));
+  status("找到 " + result.templates.length + " 个候选模板；目录同步于 " + new Date(result.registry.syncedAt).toLocaleString());
+}
+
+$("search-registry").addEventListener("click", async () => {
+  try { await searchRegistry(false); } catch (e) { status(e instanceof Error ? e.message : String(e), true); }
+});
+
+$("sync-registry").addEventListener("click", async () => {
+  try { await templateCommand("sync_registry"); await searchRegistry(false); }
+  catch (e) { status(e instanceof Error ? e.message : String(e), true); }
+});
+
+$<HTMLInputElement>("template-search").addEventListener("keydown", (event) => {
+  if (event.key === "Enter") void searchRegistry(false).catch((e) => status(e instanceof Error ? e.message : String(e), true));
+});
 
 $("refresh-templates").addEventListener("click", async () => {
   try { await refreshTemplates(); status("模板列表已刷新"); }

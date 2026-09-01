@@ -184,9 +184,15 @@
 | `set_template_enabled` | `{id,enabled}` | 启用或停用已安装模板 |
 | `check_template_update` | `{id}` | 比较远端 hash/version |
 | `list_template_catalog` | `{repo,ref?,path?}` | 读取 GitHub `registry/catalog.json` |
+| `sync_registry` | `{repo?,ref?,path?}` | 同步并缓存 Registry 目录 |
+| `search_templates` | `{query,repo?,ref?,limit?}` | 动态搜索功能、站点、intent、关键词和能力 |
+| `get_template_detail` | `{id,repo?,ref?}` | 读取安装模板或远端模板的权威定义与生成详情 |
+| `compare_templates` | `{ids?,candidate?}` | 按语义字段计算相似度，创建前检查重复 |
 | `update_template` | `{id}` | 从已绑定来源升级并保留上一 revision |
 | `rollback_template` | `{id}` | 在当前与上一 revision 间回滚 |
 | `uninstall_template` | `{id}` | 删除已安装模板；内置模板不可卸载 |
+
+Registry Protocol v1.1 规定每个公开模板使用目录包 `registry/templates/<id>/`，其中 `template.json` 是唯一真源，README/CHANGELOG/examples/tests 为配套资源。catalog 和详情 Markdown 通过 `npm run registry:build` 生成，CI 运行 `npm run registry:check`，禁止手工维护两套功能列表与详情数据。
 
 > `run_template` 顶层 `tabId` 会并入 params，使 `skipWhenParam:"tabId"` 与 `TAB_SCOPED` 注入生效（复用标签、不新开）。
 

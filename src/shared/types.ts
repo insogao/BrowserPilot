@@ -54,6 +54,10 @@ export type CommandName =
   | "set_template_enabled"
   | "check_template_update"
   | "list_template_catalog"
+  | "sync_registry"
+  | "search_templates"
+  | "get_template_detail"
+  | "compare_templates"
   | "update_template"
   | "rollback_template"
   // 模拟人工防限流（新需求，M10）

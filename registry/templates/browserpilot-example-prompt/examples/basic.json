@@ -1,0 +1,9 @@
+{
+  "params": {
+    "topic": "BrowserPilot 模板体系"
+  },
+  "expected": {
+    "kind": "prompt",
+    "contains": "BrowserPilot 模板体系"
+  }
+}

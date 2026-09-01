@@ -273,6 +273,7 @@ const BUILTINS: Record<string, Template> = Object.fromEntries(builtinTemplates()
 
 const STORE_KEY = "browserpilot.templates.v2";
 const LEGACY_STORE_KEY = "browserpilot.templates.v1";
+const REGISTRY_CACHE_KEY = "browserpilot.registry.cache.v1";
 // 仅约束 Registry 的 JSON/Markdown 定义，绝不约束模板引用或任务下载的图片/音视频资源。
 const MAX_TEMPLATE_DEFINITION_BYTES = 1_000_000;
 
@@ -359,6 +360,12 @@ export async function listTemplates(): Promise<unknown[]> {
     inputs: t.inputs,
     steps: t.steps,
     scope: t.scope,
+    sites: t.scope?.sites ?? [],
+    intents: t.discovery?.intents ?? [],
+    keywords: t.discovery?.keywords ?? [],
+    outputs: t.discovery?.outputs ?? [],
+    risk: t.discovery?.risk ?? "write",
+    aliases: t.discovery?.aliases ?? [],
     builtin: true,
     enabled: true,
     source: { type: "builtin" },
@@ -374,6 +381,12 @@ export async function listTemplates(): Promise<unknown[]> {
     inputs: r.template.inputs,
     steps: r.template.steps,
     scope: r.template.scope,
+    sites: r.template.scope?.sites ?? [],
+    intents: r.template.discovery?.intents ?? [],
+    keywords: r.template.discovery?.keywords ?? [],
+    outputs: r.template.discovery?.outputs ?? [],
+    risk: r.template.discovery?.risk ?? "write",
+    aliases: r.template.discovery?.aliases ?? [],
     builtin: false,
     enabled: r.enabled,
     source: r.source,
@@ -523,12 +536,12 @@ export async function checkTemplateUpdate(cmd: Command): Promise<unknown> {
 }
 
 export async function listTemplateCatalog(cmd: Command): Promise<unknown> {
-  const repo = String(cmd.args?.repo ?? "");
+  const repo = String(cmd.args?.repo ?? "insogao/BrowserPilot");
   const ref = String(cmd.args?.ref ?? "main");
   const catalogPath = String(cmd.args?.path ?? "registry/catalog.json");
   const text = await fetchSource({ type: "github", repo, ref, path: catalogPath });
   const parsed = JSON.parse(text) as { schemaVersion?: unknown; templates?: unknown };
-  if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.templates)) throw new Error("不支持的模板目录格式");
+  if (![1, 2].includes(Number(parsed.schemaVersion)) || !Array.isArray(parsed.templates)) throw new Error("不支持的模板目录格式");
   if (parsed.templates.length > 500) throw new Error("模板目录超过 500 项限制");
   const templates = parsed.templates.map((raw) => {
     if (!raw || typeof raw !== "object") throw new Error("模板目录包含无效条目");
@@ -539,6 +552,7 @@ export async function listTemplateCatalog(cmd: Command): Promise<unknown> {
       throw new Error("模板目录条目 id/path 无效");
     }
     return {
+      ...item,
       id,
       name: String(item.name ?? id),
       version: String(item.version ?? "0.0.0"),
@@ -546,7 +560,148 @@ export async function listTemplateCatalog(cmd: Command): Promise<unknown> {
       description: String(item.description ?? ""),
     };
   });
-  return { repo, ref, path: catalogPath, templates };
+  return { schemaVersion: Number(parsed.schemaVersion), repo, ref, path: catalogPath, templates };
+}
+
+interface RegistryCache {
+  repo: string;
+  ref: string;
+  path: string;
+  syncedAt: number;
+  templates: Array<Record<string, unknown>>;
+}
+
+export async function syncRegistry(cmd: Command): Promise<unknown> {
+  const result = await listTemplateCatalog(cmd) as { repo: string; ref: string; path: string; templates: Array<Record<string, unknown>> };
+  const cache: RegistryCache = { ...result, syncedAt: Date.now() };
+  await chrome.storage.local.set({ [REGISTRY_CACHE_KEY]: cache });
+  return { synced: true, repo: cache.repo, ref: cache.ref, path: cache.path, syncedAt: cache.syncedAt, count: cache.templates.length };
+}
+
+async function getRegistryCache(cmd: Command): Promise<RegistryCache> {
+  const repo = String(cmd.args?.repo ?? "insogao/BrowserPilot");
+  const ref = String(cmd.args?.ref ?? "main");
+  const catalogPath = String(cmd.args?.path ?? "registry/catalog.json");
+  const raw = await chrome.storage.local.get(REGISTRY_CACHE_KEY);
+  const cached = raw[REGISTRY_CACHE_KEY] as RegistryCache | undefined;
+  const fresh = cached && cached.repo === repo && cached.ref === ref && cached.path === catalogPath && Date.now() - cached.syncedAt < 15 * 60_000;
+  if (fresh && !cmd.args?.refresh) return cached;
+  await syncRegistry({ ...cmd, args: { ...cmd.args, repo, ref, path: catalogPath } });
+  const next = await chrome.storage.local.get(REGISTRY_CACHE_KEY);
+  return next[REGISTRY_CACHE_KEY] as RegistryCache;
+}
+
+function textScore(query: string, item: Record<string, unknown>): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 1;
+  const tokens = [...new Set([q, ...q.split(/[\s,，/]+/).filter(Boolean)])];
+  const fields: Array<[unknown, number]> = [
+    [item.id, 10], [item.name, 9], [item.aliases, 8], [item.intents, 8], [item.keywords, 7],
+    [item.sites, 6], [item.capabilities, 5], [item.description, 4], [item.category, 3],
+  ];
+  let score = 0;
+  for (const token of tokens) {
+    for (const [value, weight] of fields) {
+      const haystack = Array.isArray(value) ? value.join(" ").toLowerCase() : String(value ?? "").toLowerCase();
+      if (haystack === token) score += weight * 2;
+      else if (haystack.includes(token)) score += weight;
+    }
+  }
+  return score;
+}
+
+export async function searchTemplates(cmd: Command): Promise<unknown> {
+  const query = String(cmd.args?.query ?? "");
+  const cache = await getRegistryCache(cmd);
+  const installed = await listTemplates() as Array<Record<string, unknown>>;
+  const installedIds = new Set(installed.map((item) => String(item.id)));
+  const remote: Array<Record<string, unknown>> = cache.templates.map((item) => ({ ...item, installed: installedIds.has(String(item.id)), source: { type: "github", repo: cache.repo, ref: cache.ref, path: item.path } }));
+  const byId = new Map<string, Record<string, unknown>>();
+  const combined: Array<Record<string, unknown>> = [...remote, ...installed.map((x) => ({ ...x, installed: true }))];
+  for (const item of combined) byId.set(String(item.id), item);
+  const results: Array<Record<string, unknown>> = [...byId.values()]
+    .map((item): Record<string, unknown> => ({ ...item, score: textScore(query, item) }))
+    .filter((item) => Number(item.score) > 0)
+    .sort((a, b) => Number(b.score) - Number(a.score) || String(a.id).localeCompare(String(b.id)))
+    .slice(0, Math.max(1, Math.min(Number(cmd.args?.limit ?? 20), 100)));
+  return { query, count: results.length, registry: { repo: cache.repo, ref: cache.ref, syncedAt: cache.syncedAt }, templates: results };
+}
+
+export async function getTemplateDetail(cmd: Command): Promise<unknown> {
+  const id = String(cmd.args?.id ?? "");
+  if (!id) throw new Error("get_template_detail 需要 id");
+  const local = await resolveTemplateById(id, true);
+  if (local) {
+    const record = await resolveInstalledRecord(id);
+    return { id, installed: !!record || !!BUILTINS[id], builtin: !!BUILTINS[id], template: local, markdown: toMarkdown(local), record };
+  }
+  const cache = await getRegistryCache(cmd);
+  const entry = cache.templates.find((item) => String(item.id) === id);
+  if (!entry) throw new Error("Registry 未找到模板: " + id);
+  const templateText = await fetchSource({ type: "github", repo: cache.repo, ref: cache.ref, path: String(entry.path) });
+  const template = parseTemplateContent(templateText);
+  let markdown = toMarkdown(template);
+  if (entry.detailsPath) {
+    try { markdown = await fetchSource({ type: "github", repo: cache.repo, ref: cache.ref, path: String(entry.detailsPath) }); }
+    catch { /* 详情生成物可选，回退到 manifest 自动说明 */ }
+  }
+  return { id, installed: false, builtin: false, source: { type: "github", repo: cache.repo, ref: cache.ref, path: entry.path }, catalog: entry, template, markdown };
+}
+
+function asSet(value: unknown): Set<string> {
+  return new Set((Array.isArray(value) ? value : []).map((x) => String(x).toLowerCase()));
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (!a.size && !b.size) return 1;
+  const intersection = [...a].filter((x) => b.has(x)).length;
+  return intersection / (a.size + b.size - intersection || 1);
+}
+
+function catalogShape(item: Record<string, unknown>): Record<string, unknown> {
+  const template = item.template as Template | undefined;
+  if (!template) return item;
+  return {
+    id: template.id,
+    intents: template.discovery?.intents ?? [],
+    sites: template.scope?.sites ?? [],
+    capabilities: templateCapabilities(template),
+    inputs: template.inputs.map((x) => x.name + ":" + x.type),
+    outputs: template.discovery?.outputs.map((x) => x.name + ":" + x.type) ?? [],
+  };
+}
+
+function compareShapes(leftRaw: Record<string, unknown>, rightRaw: Record<string, unknown>): Record<string, unknown> {
+  const left = catalogShape(leftRaw);
+  const right = catalogShape(rightRaw);
+  const intents = jaccard(asSet(left.intents), asSet(right.intents));
+  const sites = jaccard(asSet(left.sites), asSet(right.sites));
+  const capabilities = jaccard(asSet(left.capabilities), asSet(right.capabilities));
+  const io = (jaccard(asSet(left.inputs), asSet(right.inputs)) + jaccard(asSet(left.outputs), asSet(right.outputs))) / 2;
+  const similarity = Number((intents * 0.35 + sites * 0.2 + capabilities * 0.25 + io * 0.2).toFixed(3));
+  return { leftId: left.id, rightId: right.id, similarity, exactFingerprint: !!left.fingerprint && left.fingerprint === right.fingerprint, likelyDuplicate: similarity >= 0.82 };
+}
+
+export async function compareTemplates(cmd: Command): Promise<unknown> {
+  const ids = Array.isArray(cmd.args?.ids) ? cmd.args.ids.map(String).slice(0, 10) : [];
+  let cache: RegistryCache | undefined;
+  const candidates: Array<Record<string, unknown>> = [];
+  for (const id of ids) {
+    const local = await resolveTemplateById(id, true);
+    if (local) candidates.push({ id, template: local });
+    else {
+      cache ??= await getRegistryCache(cmd);
+      const remote = cache.templates.find((item) => String(item.id) === id);
+      if (remote) candidates.push(remote);
+    }
+  }
+  if (cmd.args?.candidate && typeof cmd.args.candidate === "object") {
+    candidates.push({ id: String((cmd.args.candidate as Record<string, unknown>).id ?? "candidate"), template: validateTemplate(cmd.args.candidate) });
+  }
+  if (candidates.length < 2) throw new Error("compare_templates 至少需要两个有效模板/candidate");
+  const comparisons: Record<string, unknown>[] = [];
+  for (let i = 0; i < candidates.length; i++) for (let j = i + 1; j < candidates.length; j++) comparisons.push(compareShapes(candidates[i], candidates[j]));
+  return { count: comparisons.length, comparisons: comparisons.sort((a, b) => Number(b.similarity) - Number(a.similarity)) };
 }
 
 export async function updateTemplate(cmd: Command): Promise<unknown> {

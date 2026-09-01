@@ -62,7 +62,7 @@ assert.equal(mask.isHumanTakeover(7), false, "explicit resume did not clear take
 console.log("PASS core: human takeover lock survives visual mask release");
 
 const boardHtml = fs.readFileSync("dist/onboarding/index.html", "utf8");
-for (const id of ["template-list", "install-content", "install-github", "load-catalog", "catalog-template"]) {
+for (const id of ["template-list", "install-content", "install-github", "load-catalog", "catalog-template", "template-search", "search-registry", "sync-registry"]) {
   assert.match(boardHtml, new RegExp('id="' + id + '"'), "template board missing #" + id);
 }
 assert.ok(fs.existsSync("dist/onboarding/index.js"), "template board bundle missing");

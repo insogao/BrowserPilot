@@ -18,6 +18,8 @@
     "test:profile": "node native-host/test-profile.mjs",
     "test:core": "node scripts/test-core.mjs",
     "test:live": "node native-host/test-live.mjs",
+    "registry:build": "node scripts/build-registry.mjs",
+    "registry:check": "node scripts/build-registry.mjs --check",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

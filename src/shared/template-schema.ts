@@ -39,6 +39,27 @@ export interface TemplateScope {
   sites?: string[];
 }
 
+export interface TemplateOutput {
+  name: string;
+  type: "string" | "number" | "boolean" | "url" | "image" | "file" | "object" | "array";
+  description?: string;
+}
+
+/** 动态发现元数据：由模板单一真源生成 catalog、详情页和重复检测指纹。 */
+export interface TemplateDiscovery {
+  intents: string[];
+  keywords: string[];
+  outputs: TemplateOutput[];
+  risk: "read" | "write" | "download" | "high";
+  aliases?: string[];
+  replaces?: string[];
+  alternatives?: string[];
+  conflictsWith?: string[];
+  deprecated?: boolean;
+  supersededBy?: string;
+  browserpilot?: string;
+}
+
 export interface Template {
   id: string;
   name: string;
@@ -53,6 +74,7 @@ export interface Template {
   body: TemplateStep[] | string;
   tokenStrategy?: TemplateTokenStrategy;
   scope?: TemplateScope;
+  discovery?: TemplateDiscovery;
 }
 
 /** 远端/本地模板步骤可调用的运行能力；明确排除 reload/stop/模板管理命令与未实现能力。 */
@@ -89,6 +111,13 @@ export function validateTemplate(raw: unknown): Template {
     throw new Error(t.steps + " 模版的 body 必须是字符串");
   }
   if (!Array.isArray(t.inputs)) t.inputs = [];
+  if (t.discovery !== undefined) {
+    const d = t.discovery;
+    if (!d || !Array.isArray(d.intents) || !d.intents.every((x) => typeof x === "string" && !!x)) throw new Error("discovery.intents 无效");
+    if (!Array.isArray(d.keywords) || !d.keywords.every((x) => typeof x === "string" && !!x)) throw new Error("discovery.keywords 无效");
+    if (!Array.isArray(d.outputs) || !d.outputs.every((x) => x && typeof x.name === "string" && typeof x.type === "string")) throw new Error("discovery.outputs 无效");
+    if (!(["read", "write", "download", "high"] as string[]).includes(d.risk)) throw new Error("discovery.risk 无效");
+  }
   return t;
 }
 

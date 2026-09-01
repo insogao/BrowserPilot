@@ -121,6 +121,10 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   set_template_enabled: (cmd) => tpl.setTemplateEnabled(cmd),
   check_template_update: (cmd) => tpl.checkTemplateUpdate(cmd),
   list_template_catalog: (cmd) => tpl.listTemplateCatalog(cmd),
+  sync_registry: (cmd) => tpl.syncRegistry(cmd),
+  search_templates: (cmd) => tpl.searchTemplates(cmd),
+  get_template_detail: (cmd) => tpl.getTemplateDetail(cmd),
+  compare_templates: (cmd) => tpl.compareTemplates(cmd),
   update_template: (cmd) => tpl.updateTemplate(cmd),
   rollback_template: (cmd) => tpl.rollbackTemplate(cmd),
 
