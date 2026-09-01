@@ -23,7 +23,8 @@ export function drainEvents(opts: {
   if (opts.methods && opts.methods.length) list = list.filter((e) => opts.methods!.includes(e.name));
   const limit = opts.limit ?? 1000;
   const hasMore = list.length > limit;
-  const out = hasMore ? list.slice(list.length - limit) : list;
+  // 从最早尚未消费的事件开始分页，保证调用方按 cursor 连续拉取时不会跳过事件。
+  const out = hasMore ? list.slice(0, limit) : list;
   const cursor = out.length ? out[out.length - 1].sequence : after;
   const truncated = hasMore;
   return { events: out, cursor, hasMore, truncated };

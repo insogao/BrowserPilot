@@ -1,0 +1,20 @@
+{
+  "id": "browserpilot-example-prompt",
+  "name": "示例 Prompt 模板",
+  "version": "1.0.0",
+  "description": "把输入内容整理为一个不执行网页动作的示例提示词。",
+  "category": "generic",
+  "inputs": [
+    {
+      "name": "topic",
+      "type": "string",
+      "required": true,
+      "description": "要处理的主题"
+    }
+  ],
+  "steps": "prompt",
+  "body": "请围绕以下主题继续处理：$topic",
+  "scope": {
+    "sites": []
+  }
+}

@@ -1,17 +1,17 @@
 // 内容脚本（isolated world, all_frames）：L0 观测 + 消息桥。
-// M3 落地：snapshot_l0 生成 Markdown 树 + data-ego-id；read_text 读取元素/整页文本。
+// M3 落地：snapshot_l0 生成 Markdown 树 + data-bp-id；read_text 读取元素/整页文本。
 // 幂等守卫：用 window 全局标记，避免 manifest 声明 + executeScript 注入重复注册 listener。
 import { buildL0Snapshot } from "./snapshot-l0";
 import { maskOn, maskOff, maskAllowCdp, maskBlockCdp, isMaskShowing } from "./mask";
 
 declare global {
   interface Window {
-    __EGO_CONTENT__?: boolean;
+    __BP_CONTENT__?: boolean;
   }
 }
 
-if (!(window as Window).__EGO_CONTENT__) {
-  (window as Window).__EGO_CONTENT__ = true;
+if (!(window as Window).__BP_CONTENT__) {
+  (window as Window).__BP_CONTENT__ = true;
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     const kind = (msg as { kind?: string })?.kind;
@@ -81,7 +81,7 @@ function readTextFromPage(opts: { selector?: string; ref?: string }): string {
   }
   if (opts.ref) {
     const idx = String(opts.ref).replace(/^@/, "");
-    const el = document.querySelector('[data-ego-id="egl-' + idx + '"]');
+    const el = document.querySelector('[data-bp-id="bp-' + idx + '"]');
     if (!el) throw new Error("ref 未命中: " + opts.ref);
     return textOf(el);
   }

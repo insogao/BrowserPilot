@@ -41,7 +41,7 @@
     {
       "name": "fill",
       "args": {
-        "selector": "[data-ego-focus]",
+        "selector": "[data-bp-focus]",
         "value": "$query"
       },
       "note": "填入关键词"

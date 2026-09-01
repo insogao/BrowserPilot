@@ -1,6 +1,6 @@
-// L0 观测的可交互元素启发式（对齐 Manus ClickableHelper / ego-lite）。
-// 只在 content script 的 isolated world 里运行，生成 Markdown 树 + data-ego-id。
-// 返回的 ref 形如 "@1"；对应 data-ego-id="egl-1"，供动作/后续 CDP 定位使用。
+// L0 观测的可交互元素启发式（对齐 Manus ClickableHelper / BrowserPilot 定位）。
+// 只在 content script 的 isolated world 里运行，生成 Markdown 树 + data-bp-id。
+// 返回的 ref 形如 "@1"；对应 data-bp-id="bp-1"，供动作/后续 CDP 定位使用。
 
 export type L0Type = "link" | "click" | "edit" | "select" | "check";
 
@@ -46,7 +46,7 @@ function visible(el: Element): boolean {
 }
 
 function labelOf(el: Element): string {
-  const attr = ["aria-label", "title", "placeholder", "name", "alt", "value", "data-ego-label"];
+  const attr = ["aria-label", "title", "placeholder", "name", "alt", "value", "data-bp-label"];
   for (const a of attr) {
     const v = el.getAttribute(a);
     if (v && v.trim()) return v.trim().replace(/\s+/g, " ").slice(0, 60);
@@ -77,8 +77,8 @@ function classify(el: Element): L0Type {
   return "click";
 }
 
-/** 遍历页面，返回可交互节点列表 + 给它们贴上 data-ego-id。 */
-export function collectClickable(max = 120): L0Node[] {
+/** 遍历页面，返回可交互节点列表 + 给它们贴上 data-bp-id。 */
+export function collectClickable(max = 120, snapshotId = ""): L0Node[] {
   const seen = new Set<Element>();
   const nodes: L0Node[] = [];
   const candidates = document.querySelectorAll(INTERACTIVE_SELECTORS);
@@ -87,11 +87,12 @@ export function collectClickable(max = 120): L0Node[] {
     if (seen.has(el)) continue;
     seen.add(el);
     if (!visible(el)) continue;
-    if (el.closest("#ego-action-mask-host")) continue; // 排除自家遮罩（防 L0 污染）
+    if (el.closest("#bp-action-mask-host")) continue; // 排除自家遮罩（防 L0 污染）
     if (nodes.length >= max) break;
 
     const idx = nodes.length + 1;
-    el.setAttribute("data-ego-id", "egl-" + idx);
+    el.setAttribute("data-bp-id", "bp-" + idx);
+    if (snapshotId) el.setAttribute("data-bp-snapshot", snapshotId);
     nodes.push({
       ref: "@" + idx,
       type: classify(el),

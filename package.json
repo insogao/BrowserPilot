@@ -1,9 +1,9 @@
 {
-  "name": "egolite-browser-agent-plugin",
+  "name": "browserpilot-browseragent-plugin",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "ego-lite Browser Agent Chrome MV3 extension (v1 CLI-first)",
+  "description": "BrowserPilot Chrome MV3 extension (v1 CLI-first)",
   "scripts": {
     "build": "node scripts/build.js",
     "watch": "node scripts/build.js --watch",
@@ -11,10 +11,13 @@
     "dev:no-reload": "node scripts/dev.mjs --no-reload",
     "build:host": "node scripts/build-host.mjs",
     "host": "node native-host/host.js",
+    "client": "node native-host/client.mjs",
     "register-host": "powershell -NoProfile -ExecutionPolicy Bypass -File native-host/register.ps1",
     "test:host": "node native-host/test-host.mjs",
     "test:host:exe": "node native-host/test-host-exe.mjs",
     "test:profile": "node native-host/test-profile.mjs",
+    "test:core": "node scripts/test-core.mjs",
+    "test:live": "node native-host/test-live.mjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {

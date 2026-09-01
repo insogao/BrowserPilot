@@ -1,6 +1,6 @@
-# ego-lite Browser Agent（第一版插件）
+# BrowserPilot（第一版插件）
 
-把 ego-lite 的能力搬进你自己的 Chrome，做成「安装时一次授权、运行中不再请求权限」的 MV3 插件；外部 AI/CLI 经 native messaging 驱动网页（共用 cookie/登录态）；感知当前 profile 并一键导出使用文档。
+把浏览器交给 AI/CLI：安装时一次授权、运行中不再请求权限；外部 AI/CLI 经 native messaging 驱动网页（共用 cookie/登录态）；感知当前 profile 并一键导出使用文档。
 
 当前进度：**M1/M2/M3/M5/M7/M9/M11 已落地**（含内置操作模版 search / gemini-ask / chatgpt-ask，真机验证通过）；M4/M6/M8/M10 见下方。
 
@@ -27,7 +27,7 @@ plugin-v1/
 │   ├── profile.js             # 读 Chrome 父进程命令行探测 profile
 │   ├── host.manifest.json     # host manifest（allowed_origins 用固定扩展 ID）
 │   ├── register.ps1           # 写 HKCU 注册表（Chrome + Edge）
-│   ├── dist/egolite-host.exe  # 打包产物（node scripts/build-host.mjs 生成）
+│   ├── dist/browserpilot-host.exe  # 打包产物（node scripts/build-host.mjs 生成）
 │   └── test-*.mjs             # host / profile 自测
 ├── assets/icons/
 └── dist/                      # 构建输出（Chrome 「加载已解压」指向此目录）
@@ -41,8 +41,8 @@ plugin-v1/
 cd plugin-v1
 npm install                 # esbuild / typescript / @types/chrome / postject
 npm run build               # 构建扩展 → dist/
-npm run build:host          # 构建 native host → native-host/dist/egolite-host.exe
-npm run register-host       # 注册 com.egolite.browseragent（HKCU Chrome+Edge）
+npm run build:host          # 构建 native host → native-host/dist/browserpilot-host.exe
+npm run register-host       # 注册 com.browserpilot.browseragent（HKCU Chrome+Edge）
 ```
 
 > 项目内 npm 可能需要走 Node 直调（本机 npm 是 shell shim，被 WSL 转译干扰）：
@@ -95,7 +95,24 @@ host 监听 `127.0.0.1:<port>`（默认 47001，被占向后扫描），TCP **�
 - 出：`{"type":"result","requestId":"1","ok":true,"data":{...}}`
 - 事件：`{"type":"event","name":"...","args":{...},"sequence":N}`
 
-`host.js` 同时在 `stdout` 用 native messaging 4 字节长度前缀与扩展通信；`ready` 上报 `{port, profile}`。
+`host.js` 同时在 `stdout` 用 native messaging 4 字节长度前缀与扩展通信；`ready` 上报 `{port, authToken, profile}`。
+
+推荐直接使用项目自带客户端，它会自动扫描动态端口并读取当前构建的 capability token：
+
+```bash
+npm run client -- list_tabs '{}'
+npm run client -- snapshot '{"level":"L0","tabId":123}'
+```
+
+L0 快照返回 `snapshotId`。后续以 `ref:"@N"` 操作时必须同时传该 `snapshotId`；页面 DOM 变化后旧快照会返回 `page_updated`，避免误点。普通结果只回原请求连接，不再广播给其他本地客户端。
+
+### Template Registry v1
+
+扩展 options 页现提供模板看板，可安装、查阅、启停、检查更新、升级、回滚和卸载模板。支持粘贴 JSON/Markdown，也支持公开 GitHub 仓库的 `owner/repo + path + ref` 来源；仓库可提供 `registry/catalog.json` 供看板读取目录。
+
+命令接口：`install_template` / `list_templates` / `export_template` / `set_template_enabled` / `check_template_update` / `list_template_catalog` / `update_template` / `rollback_template` / `uninstall_template`。旧 `import_template` 保持兼容。
+
+Registry 使用 `browserpilot.templates.v2`，首次读取会自动迁移 v1 本地模板。每条记录包含版本、SHA-256、来源、启用状态、安装/更新时间和一个可回滚 revision。远端模板最大 1MB，且模板步骤不能调用 reload、stop 或模板管理命令。
 
 ---
 
@@ -110,7 +127,7 @@ host 监听 `127.0.0.1:<port>`（默认 47001，被占向后扫描），TCP **�
 | M5 动作全集 + js()/waitFor + 导航版本 | ✅ |
 | M6 sandbox 内核（run_script 脚本型） | ⬜（骨架已留） |
 | M7 Task Space 浏览器级接管（list_tabs + tabId 跨标签 + 缺省当前激活标签） | ✅ |
-| M8 profile 使用文档导出 + onboarding 文案 | ⬜ |
-| M9 插件化操作模版（import/run + failback，省 token 驱动，内置 search/gemini-ask/chatgpt-ask） | ✅ |
+| M8 profile 使用文档导出 + onboarding 文案 | ✅（含 host capability token） |
+| M9 插件化操作模版（import/run + failback，省 token 驱动，内置 search/gemini-ask/chatgpt-ask；含追问 URL 锚定 `@verifyConv` + 图片 `@chatCollect` 多图全收〔Gemini Choice A/B〕+ `download_resource`〔通道 B：blob canvas 全尺寸 / 登录态 http 页面 fetch / `urls[]` 一次下多张自动编号，文件名可控〕，均已实现并真机闭环测试） | ✅ |
 | M10 模拟人工防限流（set_humanize + botCheck） | ⬜ |
 | M11 人工接管遮罩（start_mask / stop_mask / mask_takeover） | ✅ |

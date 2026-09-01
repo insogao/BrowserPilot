@@ -4,11 +4,22 @@
 //   - 与扩展：native messaging，4 字节 LE 长度前缀 + JSON（stdin/stdout，Chrome 协议硬性）。
 //   - 与外部 AI：TCP loopback，换行分隔 JSON（一行一条，便于 CLI/Agent 直接收发）。
 import net from "node:net";
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
 import { detectProfile } from "./profile.js";
 
 const DEFAULT_PORT = 47001;
 let activePort = 0;
 const clients = new Set();
+const authToken = typeof __BP_BUILD_TOKEN__ !== "undefined"
+  ? __BP_BUILD_TOKEN__
+  : crypto.randomBytes(24).toString("hex");
+const pending = new Map();
+let clientSeq = 0;
+let requestSeq = 0;
+let sessionFile = "";
 
 // ---------- native messaging 分帧（与扩展） ----------
 let inBuf = Buffer.alloc(0);
@@ -38,9 +49,18 @@ function onExtensionData(chunk) {
 function handleFromExtension(msg) {
   if (!msg || typeof msg !== "object") return;
   if (msg.type === "result" || msg.type === "event") {
-    // SW 的响应/事件 → 转发给外部 AI（单客户端；多个则广播）
+    if (msg.type === "result") {
+      const route = pending.get(msg.requestId);
+      if (!route) return;
+      pending.delete(msg.requestId);
+      if (!route.socket.destroyed) {
+        route.socket.write(JSON.stringify({ ...msg, requestId: route.requestId }) + "\n");
+      }
+      return;
+    }
+    // 事件只广播给已认证客户端；普通 result 绝不跨客户端泄漏。
     for (const s of clients) {
-      s.write(JSON.stringify(msg) + "\n");
+      if (s.bpAuthenticated) s.write(JSON.stringify(msg) + "\n");
     }
   } else if (msg.type === "command") {
     // 扩展主动问 host（如 get_profile 由扩展侧触发时不常见；此处兜底回 profile）
@@ -53,6 +73,8 @@ function handleFromExtension(msg) {
 // ---------- 外部 AI TCP 接入 ----------
 function startServer(port) {
   const server = net.createServer((socket) => {
+    socket.bpClientId = ++clientSeq;
+    socket.bpAuthenticated = false;
     clients.add(socket);
     let b = "";
     socket.on("data", (chunk) => {
@@ -70,8 +92,12 @@ function startServer(port) {
         }
       }
     });
-    socket.on("close", () => clients.delete(socket));
-    socket.on("error", () => clients.delete(socket));
+    const cleanup = () => {
+      clients.delete(socket);
+      for (const [id, route] of pending) if (route.socket === socket) pending.delete(id);
+    };
+    socket.on("close", cleanup);
+    socket.on("error", cleanup);
   });
 
   server.on("error", (err) => {
@@ -84,9 +110,10 @@ function startServer(port) {
 
   server.listen(port, "127.0.0.1", () => {
     activePort = port;
+    writeSessionFile(port);
     console.error("[host] listening on 127.0.0.1:" + port);
     // ready 上报：port + profile 一并给扩展
-    sendToExtension({ type: "event", name: "ready", args: { port, profile: detectProfile() } });
+    sendToExtension({ type: "event", name: "ready", args: { port, authToken, profile: detectProfile() } });
   });
 }
 
@@ -96,15 +123,47 @@ function handleFromClient(msg, socket) {
     socket.write(JSON.stringify({ type: "result", requestId: msg.requestId, ok: false, error: "only command messages accepted" }) + "\n");
     return;
   }
+  // ping/reload 仅用于本机发现与开发热更新；所有浏览器数据/操作命令必须持有 capability token。
+  const publicCommand = msg.name === "ping" || msg.name === "reload";
+  const supplied = typeof msg.authToken === "string" ? msg.authToken : "";
+  if (!publicCommand && !socket.bpAuthenticated && supplied !== authToken) {
+    socket.write(JSON.stringify({ type: "result", requestId: msg.requestId, ok: false, error: "authentication_required" }) + "\n");
+    return;
+  }
+  if (supplied === authToken) socket.bpAuthenticated = true;
   // 转发给扩展执行
-  sendToExtension(msg);
+  const externalRequestId = String(msg.requestId ?? "");
+  const internalRequestId = "bp:" + socket.bpClientId + ":" + (++requestSeq);
+  pending.set(internalRequestId, { socket, requestId: externalRequestId });
+  const { authToken: _ignored, ...forward } = msg;
+  sendToExtension({ ...forward, requestId: internalRequestId });
+}
+
+function writeSessionFile(port) {
+  try {
+    const dir = path.join(process.env.LOCALAPPDATA || os.tmpdir(), "BrowserPilot", "sessions");
+    fs.mkdirSync(dir, { recursive: true });
+    sessionFile = path.join(dir, String(port) + ".json");
+    fs.writeFileSync(sessionFile, JSON.stringify({ port, authToken, pid: process.pid, updatedAt: Date.now() }), { mode: 0o600 });
+  } catch (e) {
+    console.error("[host] session file error:", e.message);
+  }
+}
+
+function cleanupSessionFile() {
+  if (!sessionFile) return;
+  try { fs.unlinkSync(sessionFile); } catch {}
 }
 
 // ---------- 启动 ----------
 function main() {
   process.stdin.on("data", onExtensionData);
   startServer(DEFAULT_PORT);
-  console.error("[host] com.egolite.browseragent up, pid=" + process.pid);
+  console.error("[host] com.browserpilot.browseragent up, pid=" + process.pid);
 }
+
+process.on("exit", cleanupSessionFile);
+process.on("SIGTERM", () => { cleanupSessionFile(); process.exit(0); });
+process.on("SIGINT", () => { cleanupSessionFile(); process.exit(0); });
 
 main();

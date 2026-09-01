@@ -64,10 +64,10 @@ export async function maskOn(tabId: number): Promise<boolean> {
 }
 
 /** 关闭遮罩 / 清除接管态（人类解决验证码后 AI 继续）。 */
-export async function maskOff(tabId: number): Promise<void> {
+export async function maskOff(tabId: number, clearTakeoverState = true): Promise<void> {
   clearIdle(tabId);
   activeMasks.delete(tabId);
-  takeover.delete(tabId);
+  if (clearTakeoverState) takeover.delete(tabId);
   try {
     await sendToTab(tabId, { kind: "mask_off" }, 0);
   } catch {
@@ -92,7 +92,9 @@ export function requestTakeover(tabId: number): void {
   if (tabId === undefined || takeover.has(tabId)) return;
   takeover.add(tabId);
   pushEvent("mask_takeover", { tabId });
-  void maskOff(tabId); // 释放遮罩，让人类接管
+  // 只释放视觉遮罩，保留 takeover 锁；必须显式 stop_mask/resume 才允许 Agent 继续。
+  void maskOff(tabId, false);
+  void import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId));
 }
 
 export function isHumanTakeover(tabId: number): boolean {
@@ -101,6 +103,16 @@ export function isHumanTakeover(tabId: number): boolean {
 
 export function hasTakeover(): boolean {
   return takeover.size > 0;
+}
+
+export function isMaskActive(tabId: number): boolean {
+  return activeMasks.has(tabId);
+}
+
+export async function resetAllMasks(): Promise<number[]> {
+  const tabs = [...new Set([...activeMasks, ...takeover])];
+  await Promise.all(tabs.map((tabId) => maskOff(tabId, true)));
+  return tabs;
 }
 
 /** 注册 content → SW 的「人工接管」上报 + 页面导航后清理遮罩状态。 */

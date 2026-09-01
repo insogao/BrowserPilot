@@ -15,11 +15,12 @@ export interface GlobalState {
   spaces: Record<string, SpaceState>;
   activeSpaceId?: string;
   hostPort?: number;
+  hostToken?: string;
   profile?: ProfileInfo;
   startTime: number;
 }
 
-const KEY = "egolite.state.v1";
+const KEY = "browserpilot.state.v1";
 
 export function defaultState(): GlobalState {
   return { spaces: {}, startTime: Date.now() };
@@ -65,5 +66,13 @@ export async function clearStateSpace(id: string): Promise<void> {
   const s = await loadState();
   delete s.spaces[id];
   if (s.activeSpaceId === id) delete s.activeSpaceId;
+  await saveState(s);
+}
+
+/** 清理全部标签会话，但保留 host 端口/profile 等全局连接信息。 */
+export async function clearAllSpaces(): Promise<void> {
+  const s = await loadState();
+  s.spaces = {};
+  delete s.activeSpaceId;
   await saveState(s);
 }

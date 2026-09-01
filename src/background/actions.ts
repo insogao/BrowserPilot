@@ -8,6 +8,8 @@ type Args = Record<string, unknown>;
 const send = (tabId: number, method: string, params: Record<string, unknown>) =>
   sendCommand(tabId, method, params);
 
+const snapshotOpts = (a: Args) => ({ snapshotId: typeof a.snapshotId === "string" ? a.snapshotId : undefined });
+
 function pickTarget(a: Args): { x?: number; y?: number } | string | undefined {
   if (typeof a.ref === "string") return a.ref;
   if (typeof a.selector === "string") return a.selector;
@@ -31,7 +33,7 @@ export async function click(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
     const target = pickTarget(a);
-    const coord = await resolveCoord(tabId, target);
+    const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("click 无法定位目标（需 ref/selector/x,y）");
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mousePressed", coord.x, coord.y, button, 1);
@@ -45,7 +47,7 @@ export async function dblclick(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
     const target = pickTarget(a);
-    const coord = await resolveCoord(tabId, target);
+    const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("dblclick 无法定位目标");
     const button = (a.button as string) ?? "left";
     for (let i = 1; i <= 2; i++) {
@@ -62,7 +64,7 @@ export async function hover(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
     const target = pickTarget(a);
-    const coord = await resolveCoord(tabId, target);
+    const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("hover 无法定位目标");
     await mouseEvent(tabId, "mouseMoved", coord.x, coord.y, "none", 0);
     return { hovered: true, x: coord.x, y: coord.y };
@@ -73,7 +75,7 @@ export async function wheel(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
     const target = pickTarget(a) ?? { x: 100, y: 100 };
-    const coord = await resolveCoord(tabId, target, { scroll: false });
+    const coord = await resolveCoord(tabId, target, { scroll: false, ...snapshotOpts(a) });
     const x = coord?.x ?? 100;
     const y = coord?.y ?? 100;
     const deltaY = Number(a.deltaY ?? a.amount ?? -300);
@@ -87,7 +89,7 @@ export async function down(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
     const target = pickTarget(a);
-    const coord = await resolveCoord(tabId, target);
+    const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("down 无法定位目标");
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mousePressed", coord.x, coord.y, button, 1);
@@ -99,7 +101,7 @@ export async function up(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
     const target = pickTarget(a);
-    const coord = await resolveCoord(tabId, target);
+    const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("up 无法定位目标");
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mouseReleased", coord.x, coord.y, button, 1);
@@ -112,8 +114,8 @@ export async function drag(tabId: number, a: Args): Promise<unknown> {
     await ensureAttach(tabId);
     const from = (a.from as { x?: number; y?: number } | string | undefined) ?? pickTarget(a);
     const to = (a.to as { x?: number; y?: number } | string | undefined) ?? undefined;
-    const fromC = await resolveCoord(tabId, from);
-    const toC = await resolveCoord(tabId, to);
+    const fromC = await resolveCoord(tabId, from, snapshotOpts(a));
+    const toC = await resolveCoord(tabId, to, snapshotOpts(a));
     if (!fromC || !toC) throw new Error("drag 需要 from/to 或 ref/x,y");
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mousePressed", fromC.x, fromC.y, button, 1);
@@ -180,8 +182,11 @@ export async function fill(tabId: number, a: Args): Promise<unknown> {
     await ensureAttach(tabId);
     const target = pickTarget(a);
     if (typeof target !== "string") throw new Error("fill 需要 ref 或 selector");
-    const sel = selFrom(target);
-    const ok = await evalPage(tabId, "(()=>{const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return false;el.focus();if(typeof el.select==='function')el.select();return true;})()");
+    if (target.startsWith("@") && typeof a.snapshotId !== "string") throw new Error("snapshot_id_required");
+    const sel = selFrom(target, a.snapshotId as string | undefined);
+    const guard = target.startsWith("@") ? "if(document.documentElement.getAttribute('data-bp-current-snapshot')!==" + JSON.stringify(a.snapshotId) + ")return '__BP_STALE__';" : "";
+    const ok = await evalPage(tabId, "(()=>{" + guard + "const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return false;el.focus();if(typeof el.select==='function')el.select();else if(el.isContentEditable){const r=document.createRange();r.selectNodeContents(el);const s=getSelection();s.removeAllRanges();s.addRange(r);}return true;})()");
+    if (ok === "__BP_STALE__") throw new Error("page_updated");
     if (!ok) throw new Error("fill 目标未命中: " + target);
     await send(tabId, "Input.insertText", { text: String(a.value ?? "") });
     return { filled: true, target };
@@ -193,9 +198,12 @@ export async function selectOption(tabId: number, a: Args): Promise<unknown> {
     await ensureAttach(tabId);
     const target = pickTarget(a);
     if (typeof target !== "string") throw new Error("selectOption 需要 ref 或 selector");
-    const sel = selFrom(target);
+    if (target.startsWith("@") && typeof a.snapshotId !== "string") throw new Error("snapshot_id_required");
+    const sel = selFrom(target, a.snapshotId as string | undefined);
     const value = a.value ?? a.label;
-    const ok = await evalPage(tabId, "(()=>{const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return false;const v=" + JSON.stringify(String(value)) + ";el.value=v;el.dispatchEvent(new Event('change',{bubbles:true}));return el.value===v;})()");
+    const guard = target.startsWith("@") ? "if(document.documentElement.getAttribute('data-bp-current-snapshot')!==" + JSON.stringify(a.snapshotId) + ")return '__BP_STALE__';" : "";
+    const ok = await evalPage(tabId, "(()=>{" + guard + "const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return false;const v=" + JSON.stringify(String(value)) + ";el.value=v;el.dispatchEvent(new Event('change',{bubbles:true}));return el.value===v;})()");
+    if (ok === "__BP_STALE__") throw new Error("page_updated");
     if (!ok) throw new Error("selectOption 未命中或选项无效: " + target);
     return { selected: value };
   });
@@ -206,8 +214,11 @@ export async function setChecked(tabId: number, a: Args, want: boolean): Promise
     await ensureAttach(tabId);
     const target = pickTarget(a);
     if (typeof target !== "string") throw new Error("check/uncheck 需要 ref 或 selector");
-    const sel = selFrom(target);
-    const ok = await evalPage(tabId, "(()=>{const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return false;el.checked=" + want + ";el.dispatchEvent(new Event('change',{bubbles:true}));return el.checked===" + want + ";})()");
+    if (target.startsWith("@") && typeof a.snapshotId !== "string") throw new Error("snapshot_id_required");
+    const sel = selFrom(target, a.snapshotId as string | undefined);
+    const guard = target.startsWith("@") ? "if(document.documentElement.getAttribute('data-bp-current-snapshot')!==" + JSON.stringify(a.snapshotId) + ")return '__BP_STALE__';" : "";
+    const ok = await evalPage(tabId, "(()=>{" + guard + "const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return false;el.checked=" + want + ";el.dispatchEvent(new Event('change',{bubbles:true}));return el.checked===" + want + ";})()");
+    if (ok === "__BP_STALE__") throw new Error("page_updated");
     if (!ok) throw new Error("check/uncheck 未命中: " + target);
     return { checked: want };
   });

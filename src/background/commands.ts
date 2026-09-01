@@ -1,7 +1,7 @@
 // 命令分派表 + 参数校验。参考技术路径 §4.4（ChatGPT zod 命令协议）。
 // M1/M2 落地：ping / version / get_profile / export_guide / stop；观测与动作先在 M3~M5 填充。
 import type { Command, CommandName, ProfileInfo } from "../shared/types";
-import { loadState, clearStateSpace } from "./state";
+import { loadState, clearAllSpaces } from "./state";
 import { drainEvents } from "./events";
 import * as sp from "./spaces";
 import { resolveTargetTab } from "./tab-resolver";
@@ -10,8 +10,10 @@ import { captureScreenshot, scrollCaptureScreenshot, ensureAttach } from "./cdp"
 import { sendCommand } from "./debugger-bridge";
 import * as act from "./actions";
 import * as ev from "./eval";
-import { maskOn, maskOff, isHumanTakeover, hasTakeover, touchMaskActivity, endMaskActivity } from "./mask";
+import { maskOn, maskOff, isHumanTakeover, hasTakeover, touchMaskActivity, endMaskActivity, resetAllMasks } from "./mask";
+import { detachAll, listAttachedTabs } from "./debugger-bridge";
 import * as tpl from "./templates";
+import { downloadResource } from "./download-resource";
 
 function getManifestVersion(): string {
   try {
@@ -24,7 +26,7 @@ function getManifestVersion(): string {
 const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   ping: () => Promise.resolve({ pong: true, at: Date.now() }),
   version: () =>
-    Promise.resolve({ name: "ego-lite Browser Agent", version: getManifestVersion() }),
+    Promise.resolve({ name: "BrowserPilot", version: getManifestVersion() }),
 
   get_profile: async () => {
     const s = await loadState();
@@ -33,7 +35,7 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
 
   export_guide: async () => {
     const s = await loadState();
-    return buildGuideFromCmd(s.profile, s.hostPort);
+    return buildGuideFromCmd(s.profile, s.hostPort, s.hostToken);
   },
 
   snapshot: async (cmd) => {
@@ -64,6 +66,16 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     const result = await sendCommand(tabId, method, params ?? {});
     return { tabId, method, result };
   },
+  download_image: async (cmd) => {
+    const { url, filename } = (cmd.args ?? {}) as { url?: string; filename?: string; tabId?: number };
+    if (!url) throw new Error("download_image 需要 args.url");
+    if (/^blob:/i.test(url)) throw new Error("download_image 暂不支持 blob: URL，请在页面上下文 fetch 后转 data:/http: 再下载");
+    const options: chrome.downloads.DownloadOptions = { url };
+    if (typeof filename === "string" && filename.trim()) options.filename = filename.trim();
+    const downloadId = await chrome.downloads.download(options);
+    return { downloaded: true, downloadId, url, filename: options.filename };
+  },
+  download_resource: (cmd) => downloadResource(cmd),
   getElementInfo: () => Promise.reject("getElementInfo 在 M4 实现（L1）"),
 
   click: async (cmd) => act.click(await resolveTargetTab(cmd), cmd.args ?? {}),
@@ -101,9 +113,16 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   list_spaces: () => sp.list_spaces(),
 
   import_template: (cmd) => tpl.importTemplate(cmd),
+  install_template: (cmd) => tpl.installTemplate(cmd),
   list_templates: () => tpl.listTemplates(),
   export_template: (cmd) => tpl.exportTemplate(cmd),
   run_template: (cmd) => tpl.runTemplate(cmd),
+  uninstall_template: (cmd) => tpl.uninstallTemplate(cmd),
+  set_template_enabled: (cmd) => tpl.setTemplateEnabled(cmd),
+  check_template_update: (cmd) => tpl.checkTemplateUpdate(cmd),
+  list_template_catalog: (cmd) => tpl.listTemplateCatalog(cmd),
+  update_template: (cmd) => tpl.updateTemplate(cmd),
+  rollback_template: (cmd) => tpl.rollbackTemplate(cmd),
 
   set_humanize: () => Promise.reject("set_humanize 在 M10 实现（模拟人工操作防限流，默认 off）"),
 
@@ -131,16 +150,19 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   },
 
   stop: async () => {
-    const s = await loadState();
-    await clearStateSpace(s.activeSpaceId ?? "");
-    return { stopped: true };
+    tpl.cancelTemplateRuns();
+    const attachedTabs = listAttachedTabs();
+    await Promise.all(attachedTabs.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
+    const [maskedTabs, detachedTabs] = await Promise.all([resetAllMasks(), detachAll()]);
+    await clearAllSpaces();
+    return { stopped: true, detachedTabs, maskedTabs };
   },
 };
 
 // 会被用户「人工接管」中断的操作命令（CDP 输入 + 页面求值）。一旦处于接管态则拒绝，防止 AI 在人类操作时乱动。
 const ACTION_NAMES = new Set<CommandName>([
   "click", "dblclick", "hover", "drag", "wheel", "down", "up",
-  "press", "type", "fill", "selectOption", "check", "uncheck", "setChecked", "js", "tab_cdp_call",
+  "press", "type", "fill", "selectOption", "check", "uncheck", "setChecked", "js", "tab_cdp_call", "download_image", "download_resource",
 ]);
 
 export async function dispatch(cmd: Command): Promise<unknown> {
@@ -162,13 +184,14 @@ export async function dispatch(cmd: Command): Promise<unknown> {
   }
 }
 
-export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: number | undefined): string {
+export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: number | undefined, hostToken?: string): string {
   const u = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
   const p = profile ?? ({} as ProfileInfo);
   const profileDir = p.profileDir ?? "Default";
   const exe = p.chromeExe ?? u;
   const port = hostPort ?? 47001;
   const extId = chrome.runtime.id;
+  const auth = hostToken ?? "<从 BrowserPilot popup 重新复制使用文档>";
 
   return [
     "# 浏览器驱动说明（Chrome Agent）",
@@ -202,13 +225,14 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "- 事件：`{\"type\":\"event\",\"name\":\"...\",\"args\":{...},\"sequence\":N}`（无 requestId，订阅用 `drainEvents`）",
     "",
     "`requestId` 每次自己编一个（如递增数字），用于把返回对回你的请求。",
+    "除 `ping`/开发用 `reload` 外，命令还须带 `authToken`：`" + auth + "`。同一 TCP 长连接首次认证后可省略。",
     "",
     "## 3. 三步上手（第一次必做）",
     "",
     "### 第 1 步：看浏览器里有哪些标签页",
     "",
     "```",
-    '{"type":"command","name":"list_tabs","args":{},"requestId":"1"}',
+    '{"type":"command","name":"list_tabs","args":{},"requestId":"1","authToken":"' + auth + '"}',
     "→ data:[{\"tabId\":123,\"windowId\":5,\"title\":\"...\",\"url\":\"...\",\"active\":true}, ...]",
     "```",
     "",
@@ -217,17 +241,17 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "### 第 2 步：看单个页面长什么样（不用 attach，最省 token）",
     "",
     "```",
-    '{"type":"command","name":"snapshot","args":{level:"L0", tabId:123},"requestId":"2"}',
+    '{"type":"command","name":"snapshot","args":{"level":"L0","tabId":123},"requestId":"2"}',
     "→ data:{\"content\":\"## 页面标题\\n- [Click] 链接A @1\\n- [Edit] 输入框 @2 ...\",\"refs\":{...}}",
     "```",
     "",
-    "`level:\"L0\"` 给出**Markdown 可点击树**（纯文本，最省 token）。需要精确坐标/交互时用 `level:\"L1\"`（attach + AX 语义快照，代价稍高）。",
+    "`level:\"L0\"` 给出 Markdown 可点击树和 `snapshotId`（纯文本，最省 token）。L1/AX 尚未实现。",
     "",
     "### 第 3 步：照着上面的 ref 动作",
     "",
     "```",
-    '{"type":"command","name":"click","args":{"ref":"@1", tabId:123},"requestId":"3"}',
-    '{"type":"command","name":"fill","args":{"ref":"@2","value":"hello", tabId:123},"requestId":"4"}',
+    '{"type":"command","name":"click","args":{"ref":"@1","snapshotId":"<上一步返回值>","tabId":123},"requestId":"3"}',
+    '{"type":"command","name":"fill","args":{"ref":"@2","snapshotId":"<上一步返回值>","value":"hello","tabId":123},"requestId":"4"}',
     '{"type":"command","name":"press","args":{"key":"Enter", tabId:123},"requestId":"5"}',
     '{"type":"command","name":"waitForURL","args":{"pattern":"*result*", tabId:123},"requestId":"6"}',
     '{"type":"command","name":"drainEvents","args":{"after_sequence":0,"limit":50},"requestId":"7"}',
@@ -263,9 +287,9 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `open_tab` | `{url, newWindow?}` | 开新标签（默认）或新窗口并聚焦，返回 `{tabId}` |",
     "| `close_tab` | `{tabId}` | 关标签 |",
     "| `switch_tab` | `{tabId}` | 聚焦到某标签 |",
-    "| `snapshot` | `{level:\"L0\"\\|\\\"L1\\\", tabId?}` | L0=Markdown 可点击树; L1=AX 语义快照+`@N` |",
-    "| `click` | `{ref\\|selector\\|x,y, tabId?}` | 点击; 命中元素或坐标 |",
-    "| `fill` | `{ref, value, tabId?}` | 填输入框并触发输入 |",
+    "| `snapshot` | `{level:\"L0\", tabId?}` | Markdown 可点击树 + `snapshotId`；L1 尚未实现 |",
+    "| `click` | `{ref,snapshotId\\|selector\\|x,y, tabId?}` | ref 动作必须带快照 ID，过期返回 `page_updated` |",
+    "| `fill` | `{ref, snapshotId, value, tabId?}` | 填输入框并触发输入 |",
     "| `press` | `{key, tabId?}` | 按单个键（Enter/Escape/...） |",
     "| `type` | `{text, tabId?}` | 逐字敲入 |",
     "| `js` | `{expression, tabId?}` | Run JS 求值, 返回结果 |",
@@ -274,8 +298,9 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `screenshot` | `{format?}` | 视口截图(返回 base64) |",
     "| `scroll_screenshot` | `{pages?, gap?, format?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量 |",
     "| `tab_cdp_call` | `{tabId?, method, params?}` | 任意底层 CDP 透传(如 Network.enable/Network.getResponseBody/Runtime.evaluate), 全权交给 AI/CLI |",
-    "| `run_template` | `{id, params?}` | 一键跑流程模版(省 token); 失灵返回结构化失败上下文 |",
-    "| `set_humanize` | `{enabled, ...}` | 模拟人工防限流(默认 off) |",
+    "| `download_image` | `{url, filename?}` | 下载 URL 到本地(支持 data:/http:), 配合模版回收的 images[] 落盘; blob: 明确拒绝 |",
+    "| `download_resource` | `{url?\|urls?...[], selector?, filename?, tabId?}` | 页面上下文取字节后落盘：blob 图用 canvas 全尺寸提取(PNG)、登录态 http 用页面内 fetch 带 cookie；文件名可控；`urls[]` 传多张自动编号（AI 一次出多图 / Gemini Choice A/B 全收） |",
+    "| `run_template` | `{id, params?}` | 一键跑流程模版(省 token); 聊天模版续问传 conversationUrl(上次返回的 url) 校验仍指向同一会话; 失灵返回结构化失败上下文 |",
     "| `start_mask` | `{tabId?}` | 开「人工接管遮罩」：蓝色半透明 + 拦截用户 + 底部「人工接管」按钮 |",
     "| `stop_mask` | `{tabId?}` | 关遮罩 / 清除接管态（人解完验证码后让 AI 继续） |",
     "| 事件`mask_takeover` | `{tabId}` | 用户点了遮罩上的「人工接管」→ 暂停 AI，等 `stop_mask` 续跑 |",
@@ -286,12 +311,12 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "",
     "- **默认用 L0 观测**（纯文本树），需要精确才升级 L1；别一上来就截图。",
     "- **模版**（`run_template`）：把「搜索→取结果→人机/反馈」这类固定流程封装成一条命令，复用最省 token；跑不通时返回失败上下文，你据此现场写新模版。",
-    "- **防限流**（`set_humanize`）：遇到人机校验/限流时开启，节奏变真人，减少被抓。",
+    "- `set_humanize`、L1/AX、脚本型模板当前尚未实现，不应调用。",
     "- **页面已变**：任何动作前若快照过期，返回 `page_updated`，重拍再动，避免盲操作。",
     "",
     "## 7. 本机信息",
     "",
-    "- 扩展 ID: `" + extId + "`  host: `com.egolite.browseragent`",
+    "- 扩展 ID: `" + extId + "`  host: `com.browserpilot.browseragent`",
     "- profile 目录: `" + profileDir + "`  user-data-dir: `" + (p.userDataDir ?? "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data") + "`",
     "- Chrome: `" + exe + "`",
     '- 启动命令: `"' + exe + '" --profile-directory="' + profileDir + '"`',

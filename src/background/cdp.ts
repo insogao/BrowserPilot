@@ -7,10 +7,10 @@ export async function ensureAttach(tabId: number): Promise<void> {
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** "@N" -> '[data-ego-id="egl-N"]'；否则原样（当作 CSS selector）。 */
-export function selFrom(refOrSelector: string): string {
+/** "@N" -> '[data-bp-id="bp-N"]'；否则原样（当作 CSS selector）。 */
+export function selFrom(refOrSelector: string, snapshotId?: string): string {
   return refOrSelector.startsWith("@")
-    ? '[data-ego-id="egl-' + refOrSelector.slice(1) + '"]'
+    ? '[data-bp-id="bp-' + refOrSelector.slice(1) + '"]' + (snapshotId ? '[data-bp-snapshot="' + snapshotId + '"]' : "")
     : refOrSelector;
 }
 
@@ -47,7 +47,7 @@ export async function evalPage(tabId: number, expression: string): Promise<unkno
 export async function resolveCoord(
   tabId: number,
   target: { x?: number; y?: number } | string | undefined,
-  opts: { scroll?: boolean } = {}
+  opts: { scroll?: boolean; snapshotId?: string } = {}
 ): Promise<{ x: number; y: number } | null> {
   if (typeof target === "object" && target) {
     const x = Number(target.x);
@@ -56,13 +56,16 @@ export async function resolveCoord(
     throw new Error("坐标参数无效");
   }
   if (typeof target !== "string") return null;
-  const sel = selFrom(target);
+  if (target.startsWith("@") && !opts.snapshotId) throw new Error("snapshot_id_required");
+  const sel = selFrom(target, opts.snapshotId);
   const scroll = opts.scroll !== false;
   const expr =
-    "(()=>{const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return null;" +
+    "(()=>{if(" + JSON.stringify(opts.snapshotId ?? "") + "&&document.documentElement.getAttribute('data-bp-current-snapshot')!==" + JSON.stringify(opts.snapshotId ?? "") + ")return {__bp_stale:true};const el=document.querySelector(" + JSON.stringify(sel) + ");if(!el)return null;" +
     (scroll ? 'el.scrollIntoView({block:"center",inline:"center"});' : "") +
     "const r=el.getBoundingClientRect();return {x:Math.round(r.left+r.width/2),y:Math.round(r.top+r.height/2)};})()";
-  return (await evalPage(tabId, expr)) as { x: number; y: number } | null;
+  const out = (await evalPage(tabId, expr)) as { x?: number; y?: number; __bp_stale?: boolean } | null;
+  if (out?.__bp_stale) throw new Error("page_updated");
+  return out && typeof out.x === "number" && typeof out.y === "number" ? { x: out.x, y: out.y } : null;
 }
 
 /** Page.captureScreenshot：视口截图，返回 base64（PNG）。 */

@@ -42,6 +42,8 @@ export interface TemplateScope {
 export interface Template {
   id: string;
   name: string;
+  /** 模板自身语义版本；缺省视为 0.0.0。 */
+  version?: string;
   description: string;
   category: "search" | "ai-chat" | "generic" | string;
   inputs: TemplateInput[];
@@ -53,11 +55,27 @@ export interface Template {
   scope?: TemplateScope;
 }
 
+/** 远端/本地模板步骤可调用的运行能力；明确排除 reload/stop/模板管理命令与未实现能力。 */
+export const TEMPLATE_STEP_COMMANDS = new Set<CommandName>([
+  "ping", "version", "get_profile", "export_guide",
+  "snapshot", "readText", "screenshot", "scroll_screenshot", "pageInfo",
+  "click", "dblclick", "hover", "drag", "wheel", "down", "up", "press", "type", "fill",
+  "selectOption", "check", "uncheck", "setChecked",
+  "js", "waitForURL", "waitForSelector", "waitForTimeout", "drainEvents", "tab_cdp_call",
+  "list_tabs", "open_tab", "close_tab", "switch_tab", "list_spaces",
+  "download_image", "download_resource", "start_mask", "stop_mask",
+]);
+
 /** 校验并规整一个模版对象；不合法则抛错（带可读原因）。 */
 export function validateTemplate(raw: unknown): Template {
   if (!raw || typeof raw !== "object") throw new Error("模版必须是对象");
   const t = raw as Template;
-  if (!t.id || typeof t.id !== "string") throw new Error("模版缺少合法 id");
+  if (!t.id || typeof t.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(t.id)) throw new Error("模版缺少合法 id");
+  if (!t.name || typeof t.name !== "string") throw new Error("模版缺少合法 name");
+  if (typeof t.description !== "string") throw new Error("模版缺少 description");
+  if (t.version !== undefined && (typeof t.version !== "string" || !/^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(t.version))) {
+    throw new Error("模版 version 必须是 semver（如 1.2.0）");
+  }
   if (typeof t.steps !== "string" || !["commands", "script", "prompt"].includes(t.steps)) {
     throw new Error("modify steps 必须是 commands/script/prompt");
   }
@@ -65,6 +83,7 @@ export function validateTemplate(raw: unknown): Template {
     if (!Array.isArray(t.body)) throw new Error("commands 模版的 body 必须是步骤数组");
     for (const s of t.body) {
       if (!s || typeof s.name !== "string") throw new Error("commands 步骤缺少 name");
+      if (!TEMPLATE_STEP_COMMANDS.has(s.name)) throw new Error("模板步骤不允许调用命令: " + s.name);
     }
   } else if (typeof t.body !== "string") {
     throw new Error(t.steps + " 模版的 body 必须是字符串");

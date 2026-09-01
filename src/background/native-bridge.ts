@@ -1,4 +1,4 @@
-// native messaging 桥：SW ↔ host（`com.egolite.browseragent`）。
+// native messaging 桥：SW ↔ host（`com.browserpilot.browseragent`）。
 // 参考技术路径 §4.1（ChatGPT/Codex 实路）+ 本机实测 host manifest。
 // 关键拓扑：native messaging 只能由扩展侧发起 → SW 调 connectNative，Chrome 拉起 host；
 //          host 同时监听 127.0.0.1:<port> 供外部 AI 连入并转发。此文件只负责「扩展这一侧」的端口。
@@ -7,7 +7,7 @@ import { patchState } from "./state";
 import { dispatch } from "./commands";
 import { broadcastEvent } from "./events";
 
-const HOST_NAME = "com.egolite.browseragent";
+const HOST_NAME = "com.browserpilot.browseragent";
 
 let port: chrome.runtime.Port | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -52,9 +52,9 @@ async function onPortMessage(msg: NativeMessage): Promise<void> {
     const res = await handleCommand(msg);
     send(res);
   } else if (msg.type === "event" && msg.name === "ready") {
-    const args = (msg as { args?: { port?: number; profile?: ProfileInfo } }).args;
+    const args = (msg as { args?: { port?: number; authToken?: string; profile?: ProfileInfo } }).args;
     if (args) {
-      await patchState({ hostPort: args.port, profile: args.profile });
+      await patchState({ hostPort: args.port, hostToken: args.authToken, profile: args.profile });
       console.log("[native-bridge] host ready: port=" + args.port, "profile=" + JSON.stringify(args.profile));
     }
   }

@@ -4,6 +4,7 @@ import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -11,8 +12,13 @@ const root = path.resolve(__dirname, "..");
 const outDir = path.join(root, "native-host", "dist");
 const cjs = path.join(outDir, "host.cjs");
 const blob = path.join(outDir, "sea-prep.blob");
-const exe = path.join(outDir, "egolite-host.exe");
+// Windows 会锁定正在运行的 native host exe。每次输出版本化文件并原子切换 manifest，
+// Chrome 下次自动重连时直接启动新版，无需关闭 Chrome 或人工点击。
+const exe = path.join(outDir, "browserpilot-host-" + Date.now() + ".exe");
 const seaConfig = path.join(outDir, "sea-config.json");
+const hostManifest = path.join(root, "native-host", "host.manifest.json");
+const authFile = path.join(root, "native-host", "auth.json");
+const buildToken = crypto.randomBytes(24).toString("hex");
 
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -24,6 +30,7 @@ await build({
   platform: "node",
   format: "cjs",
   target: "node20",
+  define: { __BP_BUILD_TOKEN__: JSON.stringify(buildToken) },
   logLevel: "info",
 });
 
@@ -60,4 +67,18 @@ try {
   });
 }
 
+const manifest = fs.existsSync(hostManifest)
+  ? JSON.parse(fs.readFileSync(hostManifest, "utf8"))
+  : {
+      name: "com.browserpilot.browseragent",
+      description: "BrowserPilot native messaging host",
+      type: "stdio",
+      allowed_origins: ["chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/"],
+    };
+manifest.path = exe;
+const tmpManifest = hostManifest + ".tmp";
+fs.writeFileSync(tmpManifest, JSON.stringify(manifest, null, 2), "utf8");
+fs.renameSync(tmpManifest, hostManifest);
+fs.writeFileSync(authFile, JSON.stringify({ authToken: buildToken, builtAt: Date.now() }, null, 2), { mode: 0o600 });
 console.log("[build:host] done -> " + exe);
+console.log("[build:host] manifest switched -> " + hostManifest);

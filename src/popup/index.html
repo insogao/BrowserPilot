@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ego-lite Browser Agent</title>
+    <title>BrowserPilot</title>
     <style>
       :root {
         --blue: #3b82f6;
@@ -57,7 +57,7 @@
     </style>
   </head>
   <body>
-    <h1><span class="dot" id="dot"></span> ego-lite Browser Agent</h1>
+    <h1><span class="dot" id="dot"></span> BrowserPilot</h1>
 
     <div class="card">
       <div class="row"><span class="k">接管状态</span><span class="v" id="attached">未接管</span></div>
@@ -67,9 +67,11 @@
     </div>
 
     <div class="buttons">
-      <button class="primary" id="takeover">接管当前标签页</button>
+      <button class="primary" id="use-current">允许 Agent 操作本页</button>
+      <button id="takeover">人工接管（暂停 AI）</button>
       <button id="guide">复制使用文档</button>
-      <button class="danger" id="stop">Stop</button>
+      <button id="manage">管理操作模板</button>
+      <button class="danger" id="stop">停止全部操作</button>
     </div>
 
     <div class="toast" id="toast"></div>

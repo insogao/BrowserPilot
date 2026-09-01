@@ -1,12 +1,14 @@
-// 验证打包后的 egolite-host.exe 能启动、监听、正确分帧。
+// 验证打包后的 browserpilot-host.exe 能启动、监听、正确分帧。
 // 运行：node native-host/test-host-exe.mjs
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import fs from "node:fs";
 import net from "node:net";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const exe = path.join(here, "dist", "egolite-host.exe");
+const manifest = JSON.parse(fs.readFileSync(path.join(here, "host.manifest.json"), "utf8"));
+const exe = manifest.path;
 const port = 47099;
 
 const child = spawn(exe, { cwd: path.dirname(here) });

@@ -1,42 +1,88 @@
-// 独立自测 host.js：验证 native 分帧 + TCP 命令转发 + ready 上报。
-// 运行：node native-host/test-host.mjs  [hostPort]
+// Native host integration test: dynamic port, auth, request routing and no cross-client result leak.
+import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import net from "node:net";
 
-const port = Number(process.argv[2] || 47001);
 const child = spawn(process.execPath, ["native-host/host.js"], { cwd: process.cwd() });
+let nativeBuf = Buffer.alloc(0);
+let ready;
+const forwarded = [];
 
-let stderrBuf = "";
-child.stderr.on("data", (d) => {
-  stderrBuf += d.toString();
-});
+function sendNative(obj) {
+  const json = Buffer.from(JSON.stringify(obj));
+  const len = Buffer.alloc(4);
+  len.writeUInt32LE(json.length);
+  child.stdin.write(Buffer.concat([len, json]));
+}
+
 child.stdout.on("data", (chunk) => {
-  // 解码 native messaging 帧
-  let buf = Buffer.from(chunk);
-  while (buf.length >= 4) {
-    const len = buf.readUInt32LE(0);
-    if (buf.length < 4 + len) break;
-    const json = buf.slice(4, 4 + len).toString("utf8");
-    buf = buf.slice(4 + len);
-    console.log("[HOST->EXT frame]", json);
+  nativeBuf = Buffer.concat([nativeBuf, chunk]);
+  while (nativeBuf.length >= 4) {
+    const len = nativeBuf.readUInt32LE(0);
+    if (nativeBuf.length < 4 + len) break;
+    const msg = JSON.parse(nativeBuf.subarray(4, 4 + len).toString("utf8"));
+    nativeBuf = nativeBuf.subarray(4 + len);
+    if (msg.type === "event" && msg.name === "ready") ready = msg.args;
+    if (msg.type === "command") forwarded.push(msg);
   }
 });
 
-// 等 host 监听后连 TCP
-setTimeout(() => {
-  const sock = net.createConnection({ host: "127.0.0.1", port }, () => {
-    console.log("\n[TCP] connected to", port);
-    sock.write(JSON.stringify({ type: "command", name: "ping", requestId: "req1" }) + "\n");
-    console.log("[TCP] sent {command:ping}");
-  });
-  sock.on("data", (d) => console.log("[TCP<-STDOUT]", d.toString().trim()));
-  sock.on("error", (e) => console.error("[TCP error]", e.message));
+const waitFor = async (fn, timeout = 5000) => {
+  const start = Date.now();
+  while (Date.now() - start < timeout) {
+    const value = fn();
+    if (value) return value;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error("timeout");
+};
 
-  // 3 秒后结束
-  setTimeout(() => {
-    sock.end();
-    console.log("\n[host stderr]\n" + stderrBuf.trim());
-    child.kill();
-    process.exit(0);
-  }, 3000);
-}, 1500);
+function connect(port) {
+  return new Promise((resolve, reject) => {
+    const socket = net.createConnection({ host: "127.0.0.1", port }, () => resolve(socket));
+    socket.once("error", reject);
+  });
+}
+
+function messages(socket) {
+  const out = [];
+  let buf = "";
+  socket.on("data", (d) => {
+    buf += d.toString("utf8");
+    let nl;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl).trim();
+      buf = buf.slice(nl + 1);
+      if (line) out.push(JSON.parse(line));
+    }
+  });
+  return out;
+}
+
+try {
+  await waitFor(() => ready);
+  const a = await connect(ready.port);
+  const b = await connect(ready.port);
+  const am = messages(a);
+  const bm = messages(b);
+
+  b.write(JSON.stringify({ type: "command", name: "version", requestId: "denied" }) + "\n");
+  await waitFor(() => bm[0]);
+  assert.equal(bm[0].error, "authentication_required");
+
+  a.write(JSON.stringify({ type: "command", name: "version", requestId: "client-a", authToken: ready.authToken }) + "\n");
+  const command = await waitFor(() => forwarded[0]);
+  assert.notEqual(command.requestId, "client-a");
+  assert.equal(command.authToken, undefined);
+  sendNative({ type: "result", requestId: command.requestId, ok: true, data: { version: "test" } });
+  await waitFor(() => am[0]);
+  assert.equal(am[0].requestId, "client-a");
+  assert.deepEqual(am[0].data, { version: "test" });
+  assert.equal(bm.length, 1, "result leaked to another client");
+
+  a.end();
+  b.end();
+  console.log("PASS host: auth + dynamic port + per-client response routing");
+} finally {
+  child.kill();
+}

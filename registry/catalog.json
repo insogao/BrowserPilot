@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "templates": [
+    {
+      "id": "browserpilot-example-prompt",
+      "name": "示例 Prompt 模板",
+      "version": "1.0.0",
+      "path": "registry/templates/example-prompt.json",
+      "description": "用于验证 BrowserPilot Registry 安装、更新与卸载链路。"
+    }
+  ]
+}

@@ -38,7 +38,7 @@ export function browserFromCmd(cmd) {
 }
 
 export function detectProfile() {
-  const override = process.env.EGOLITE_PROFILE_OVERRIDE;
+  const override = process.env.BROWSERPILOT_PROFILE_OVERRIDE;
   if (override) {
     // 测试注入：JSON {browser,userDataDir,profileDir,chromeExe}
     try {

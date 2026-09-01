@@ -1,6 +1,7 @@
 node_modules/
 dist/
 native-host/dist/
+native-host/auth.json
 *.log
 .DS_Store
 Thumbs.db

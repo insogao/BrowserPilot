@@ -18,7 +18,7 @@ import { sleep } from "./cdp";
 // 模版载体之「命令序列」的求值表达式构建（内联进 js 步骤，esbuild 会原样打包）。
 // ---------------------------------------------------------------------------
 
-/** 等待页面出现一个「可见的文本输入区」，聚焦并打上 data-ego-focus 标（供 fill 命中）。 */
+/** 等待页面出现一个「可见的文本输入区」，聚焦并打上 data-bp-focus 标（供 fill 命中）。 */
 function focusBestExpr(cands: string[]): string {
   const list = JSON.stringify(cands);
   return (
@@ -27,7 +27,7 @@ function focusBestExpr(cands: string[]): string {
     "let el=null;for(const s of cands){const c=document.querySelector(s);if(c&&c.offsetParent!==null){el=c;break;}}" +
     "if(!el){const all=document.querySelectorAll('input[type=text],input[type=search],textarea,[contenteditable=true]');" +
     "for(const c of all){if(c.offsetParent!==null){el=c;break;}}}" +
-    "if(el){el.focus();el.setAttribute('data-ego-focus','1');return true;}" +
+    "if(el){el.focus();el.setAttribute('data-bp-focus','1');return true;}" +
     "await new Promise(r=>setTimeout(r,400));}return false;})()"
   );
 }
@@ -54,15 +54,17 @@ function googleResultsExpr(): string {
 }
 
 /** AI 聊天模版的写步骤：先把 prompt 写进富文本编辑器（Gemini=Quill API、ChatGPT=ProseMirror 经 execCommand），
- *  同时**记录回复基线**（发送前已存在的 AI 回复容器数）到 window.__egoAiBase，供 @chatCollect 判断「真正新增的回复」，
- *  避免复用长会话时把上一条旧回复当成本次回复。 */
+ *  同时把「发送前最后一条消息容器的消息 ID」记到 window.__bpPrevMsg（锚点），
+ *  供 @chatCollect 用「文档顺序在锚点之后」判定真正属于本轮的内容——复用长会话时，锚点之前的旧回复（含旧图）一律排除。
+ *  ChatGPT 每条消息容器带 data-message-id；Gemini 每轮对话容器是 div.conversation-container（id 属性=该轮消息 ID）。 */
 function aiWriteExpr(mode: string, prompt: string): string {
   const p = JSON.stringify(prompt);
-  // 回复容器基线：gemini 用 .markdown（实测=每条助手回复，`.model-response` 类时有时无、不可靠），chatgpt 用 [data-message-author-role=assistant]
-  const baseSel = mode === "gemini" ? ".markdown" : "div[data-message-author-role='assistant']";
-  const b = JSON.stringify(baseSel);
   const core = mode === "gemini" ? geminiQuillCore() : chatgptProseCore();
-  return "(async()=>{const text=" + p + ";window.__egoAiBase=document.querySelectorAll(" + b + ").length;" + core + "})()";
+  // 锚点 = 发送前最后一个「消息/轮次」容器的消息 ID
+  const anchorExpr = mode === "gemini"
+    ? "(()=>{const c=[...document.querySelectorAll('div.conversation-container')];return c.length?(c[c.length-1].getAttribute('id')||''):'';})()"
+    : "(()=>{const c=[...document.querySelectorAll('[data-message-author-role]')];return c.length?(c[c.length-1].getAttribute('data-message-id')||''):'';})()";
+  return "(async()=>{const text=" + p + ";window.__bpPrevMsg=" + anchorExpr + ";" + core + "})()";
 }
 
 /** Gemini 的 Quill 写入主体（引用变量 text）。关键：Input.insertText 只改 DOM、不进 Delta 模型，
@@ -76,12 +78,12 @@ function geminiQuillCore(): string {
     "if(!q&&rt){let e=rt;for(let i=0;i<4&&e&&!q;i++){e=e.parentElement;if(e&&e.__quill)q=e.__quill;}}" +
     "if(q&&typeof q.setText==='function'){const ed=document.querySelector('.ql-editor')||rt;if(ed)ed.focus();q.setText(text,'user');" +
     "let ok=false;for(let i=0;i<30;i++){const b=document.querySelector(\"button[aria-label='Send message']\");if(b&&!b.disabled){ok=true;break;}await new Promise(r=>setTimeout(r,250));}" +
-    "return {ok:true,method:'quill',base:window.__egoAiBase,len:q.getLength(),sendReady:ok};}" +
+    "return {ok:true,method:'quill',prev:window.__bpPrevMsg,len:q.getLength(),sendReady:ok};}" +
     "if(rt){rt.focus();const sel=window.getSelection();const r=document.createRange();r.selectNodeContents(rt);sel.removeAllRanges();sel.addRange(r);document.execCommand('delete');" +
     "try{document.execCommand('insertText',false,text);}catch{}" +
     "let ok=false;for(let i=0;i<30;i++){const b=document.querySelector(\"button[aria-label='Send message']\");if(b&&!b.disabled){ok=true;break;}await new Promise(r=>setTimeout(r,250));}" +
-    "return {ok:true,method:'dom',base:window.__egoAiBase,sendReady:ok};}" +
-    "return {ok:false,base:window.__egoAiBase};"
+    "return {ok:true,method:'dom',prev:window.__bpPrevMsg,sendReady:ok};}" +
+    "return {ok:false,prev:window.__bpPrevMsg};"
   );
 }
 
@@ -91,44 +93,85 @@ function geminiQuillCore(): string {
 function chatgptProseCore(): string {
   return (
     "const pm=document.querySelector('.ProseMirror[contenteditable=\"true\"]')||document.querySelector('#prompt-textarea .ProseMirror')||document.querySelector('[contenteditable=\"true\"]');" +
-    "if(!pm)return {ok:false,base:window.__egoAiBase};" +
+    "if(!pm)return {ok:false,prev:window.__bpPrevMsg};" +
     "pm.focus();const sel=window.getSelection();const r=document.createRange();r.selectNodeContents(pm);sel.removeAllRanges();sel.addRange(r);document.execCommand('delete');" +
     "let ins=false;try{ins=document.execCommand('insertText',false,text);}catch(e){}" +
     "let ok=false;for(let i=0;i<30;i++){const b=document.querySelector(\"button[data-testid='send-button']\");if(b&&!b.disabled){ok=true;break;}await new Promise(r=>setTimeout(r,250));}" +
-    "return {ok:ins,method:'prosemirror',base:window.__egoAiBase,sendReady:ok};"
+    "return {ok:ins,method:'prosemirror',prev:window.__bpPrevMsg,sendReady:ok};"
   );
 }
 
-/** AI 聊天模版的回复回收：只回收「基线之后新增」的最后一条 AI 回复，**等它完全说完/生成完**才返回。
- *  「完整」判定 = 文本长度 + 图片集合都不再变化并稳定约 5s（避免中途截断，也能覆盖「出图/生成中」）。
- *  gemini：直接取最后一个 .markdown（实测=每条助手回复，天然去掉「Gemini said」/Flash/免责宣传）。
- *  chatgpt：容器 [data-message-author-role=assistant] 内取 .markdown（去掉「ChatGPT 也可能会犯错」等尾部）。
- *  返回：text + images（回复容器里出现的图片 src，data:/http:，去重）。 */
+/** AI 聊天模版的回复回收：只回收**我发出的那条 user 消息之后**产生的内容，**等它完全说完/生成完**才返回
+ *  （文本长度 + 图片集合稳定约 5s，覆盖「出图/生成中」）。
+ *  锚点 = **我新发的那条 user 消息**。@write 已把发送前最后一条消息容器的 DOM id 写入 window.__bpPrevMsg（Gemini=
+ *  div.conversation-container 的 id、ChatGPT=[data-message-id]）；@chatCollect 先把该 id 解析成元素，再**等待并取它之后
+ *  出现的最后一条 user 消息**（Gemini=[...user-query]，ChatGPT=[data-message-author-role='user']）作为锚点。
+ *  之所以不用「__bpPrevMsg 元素本身 / 运行时最后一个 user」当锚点：① 生成期间新 user 可能尚未插入，取运行时最后一个
+ *  user 会把「最后一条旧回复（含旧图）」误判为本轮；② 上一轮回复的图（Gemini 在上一容器内 = 后代、ChatGPT 在上一
+ *  user 之后的兄弟 imagegen 节点）都比「我这条消息」早，须以「我这条消息」为界才能一并排除。等待最多 60s，超时回退到
+ *  最后一个 user。只有文档顺序在锚点**之后**的 assistant 文本与大图才被收集。
+ *  after 判定为「严格在锚点之后且**不是锚点的后代**」：documentPosition 对锚点容器（user-query 之后的响应容器）里的
+ *  元素也会同时置位 FOLLOWING，若不排除 CONTAINED_BY，会把锚点容器内的旧图误判为本轮。
+ *  这正对应「我发消息后才产生的回复」语义，靠消息容器/ID 定位，不再用「容器个数」或「图片 src 差集」
+ *  这种会被懒加载/复用索引误导的启发式。
+ *  图片：文档顺序在锚点之后（且非其后代）的全页大图（naturalWidth>=512 且 naturalHeight>=256，排除头像/图标）。
+ *  返回：text + images（data:/http:/blob: src 列表）。 */
 function aiCollectExpr(mode: string): string {
-  const baseSel = mode === "gemini" ? ".markdown" : "div[data-message-author-role='assistant']";
-  const b = JSON.stringify(baseSel);
+  const roleSel = mode === "gemini" ? ".markdown" : "div[data-message-author-role='assistant']";
+  const b = JSON.stringify(roleSel);
+  const userSel = mode === "gemini" ? "user-query" : "[data-message-author-role='user']";
+  const mineSel = mode === "gemini"
+    ? "[...document.querySelectorAll('user-query')].pop()||null"
+    : "[...document.querySelectorAll(\"[data-message-author-role='user']\")].pop()||null";
   const strip = mode === "gemini"
     ? ["Flash", "Gemini is AI", "Dictate", "Copy", "Listen", "Retry", "Show drafts"]
     : ["ChatGPT 也可能会犯错", "ChatGPT can make mistakes", "思考"];
   const S = JSON.stringify(strip);
   const PFX = JSON.stringify(["Gemini said", "ChatGPT said", "You said"]);
   return (
-    "(async()=>{const base=window.__egoAiBase||0;const baseSel=" + b + ";const ST=" + S + ";const PFX=" + PFX + ";" +
-    "const start=Date.now();const timeout=90000;let last='';let lastImgs=[];let prevSig='';let stable=0;" +
+    "(async()=>{const roleSel=" + b + ";const ST=" + S + ";const PFX=" + PFX + ";" +
+    "const mine=await (async()=>{const prev=window.__bpPrevMsg;let prevEl=null;" +
+    (mode === "gemini"
+      ? "if(prev)prevEl=document.getElementById(prev);"
+      : "if(prev)prevEl=document.querySelector('[data-message-id=\"'+prev+'\"]');") +
+    "const us=()=>[...document.querySelectorAll(\"" + userSel + "\")];" +
+    "const ws=Date.now();while(Date.now()-ws<60000){const users=us();" +
+    "if(prevEl){const aU=users.filter(u=>((prevEl.compareDocumentPosition(u)&Node.DOCUMENT_POSITION_FOLLOWING)!==0)&&((prevEl.compareDocumentPosition(u)&Node.DOCUMENT_POSITION_CONTAINED_BY)===0));if(aU.length)return aU[aU.length-1];}" +
+    "else if(users.length){return users[users.length-1];}" +
+    "await new Promise(r=>setTimeout(r,400));}" +
+    "return " + mineSel + ";})();" +
+    "const after=(el)=>el&&mine?(((mine.compareDocumentPosition(el)&Node.DOCUMENT_POSITION_FOLLOWING)!==0)&&((mine.compareDocumentPosition(el)&Node.DOCUMENT_POSITION_CONTAINED_BY)===0)):false;" +
+    "const start=Date.now();const timeout=120000;let last='';let lastImgs=[];let prevSig='';let stable=0;" +
+    "const bigImgs=()=>{const out=[];const seen=new Set();" +
+    "for(const i of document.querySelectorAll('img')){const s=i.currentSrc||i.src||'';if(!s)continue;" +
+    "const w=i.naturalWidth||0;const h=i.naturalHeight||0;if(w>=512&&h>=256&&after(i)){if(!seen.has(s)){seen.add(s);out.push(s);}}}" +
+    "return out;};" +
     "while(Date.now()-start<timeout){" +
-    "const els=document.querySelectorAll(baseSel);" +
-    "if(els.length>base){const el=els[els.length-1];const md=el.querySelector('.markdown')||el;" +
-    "let rep=(md.innerText||'');" +
-    "for(const pf of PFX){if(rep.startsWith(pf))rep=rep.slice(pf.length);}" +
-    "for(const s of ST){const i=rep.indexOf(s);if(i>=0)rep=rep.slice(0,i);}" +
-    "rep=rep.trim();" +
-    "const imgs=[];const seen=new Set();const im=md.querySelectorAll('img');" +
-    "for(let k=0;k<im.length;k++){let src=(im[k].currentSrc||im[k].src||'');if(!src)continue;if(!seen.has(src)){seen.add(src);imgs.push(src);}}" +
+    "const added=[...document.querySelectorAll(roleSel)].filter(after);" +
+    "let rep='';for(let j=0;j<added.length;j++){const md=added[j].querySelector('.markdown')||added[j];" +
+    "let t=(md.innerText||'');" +
+    "for(const pf of PFX){if(t.startsWith(pf))t=t.slice(pf.length);}" +
+    "for(const s of ST){const i=t.indexOf(s);if(i>=0)t=t.slice(0,i);}" +
+    "t=t.trim();if(t)rep=rep?(rep+'\\n'+t):t;}" +
+    "const imgs=bigImgs();" +
     "if(rep.length>2||imgs.length>0){last=rep;lastImgs=imgs;" +
     "const sig=rep.length+':'+imgs.join('|');" +
-    "if(sig===prevSig){stable+=700;}else{prevSig=sig;stable=0;}if(stable>=5000)break;}}" +
+    "if(sig===prevSig){stable+=700;}else{prevSig=sig;stable=0;}if(stable>=5000)break;}" +
     "await new Promise(r=>setTimeout(r,700));}" +
     "return {text:last.slice(0,8000),images:lastImgs,url:location.href,title:document.title};})()"
+  );
+}
+
+/** 续问前置校验：确认当前标签 URL 仍指向目标会话。
+ *  传入 expectedUrl（会话 URL）时 strict 比对 location.href 是否以它开头（同会话=是）；
+ *  expectedUrl 为空则跳过校验（走基线机制兜底，适合首次提问）。
+ *  返回 "__BP_CONV_OK__"+href（通过）或 "__BP_CONV_BAD__"+href（不通过），配 expect:"__BP_CONV_OK__"。 */
+function verifyConversationExpr(expectedUrl: string): string {
+  const exp = JSON.stringify(expectedUrl || "");
+  return (
+    "(async()=>{const exp=" + exp + ";const href=location.href;" +
+    "if(exp){const ok=href.indexOf(exp)===0;return ok?'__BP_CONV_OK__'+href:'__BP_CONV_BAD__'+href;}" +
+    "return '__BP_CONV_OK__'+href;})()"
   );
 }
 
@@ -167,7 +210,7 @@ function builtinTemplates(): Template[] {
       body: [
         { name: "open_tab", args: { url: "https://www.google.com" }, note: "打开 Google 首页" },
         { name: "js", args: { expression: "@focus" }, expect: "true", note: "等待并聚焦搜索框" },
-        { name: "fill", args: { selector: "[data-ego-focus]", value: "$query" }, note: "填入关键词" },
+        { name: "fill", args: { selector: "[data-bp-focus]", value: "$query" }, note: "填入关键词" },
         { name: "press", args: { key: "Enter" }, note: "提交搜索" },
         { name: "waitForURL", args: { pattern: "google.com/search", partial: true, timeoutMs: 20000 }, note: "等待结果页加载" },
         { name: "js", args: { expression: "@results" }, note: "抓取搜索结果" },
@@ -183,11 +226,13 @@ function builtinTemplates(): Template[] {
         { name: "prompt", type: "string", required: true, description: "要问的问题" },
         { name: "tabId", type: "number", required: false, description: "已打开的 Gemini 标签；提供则复用，不再新开" },
         { name: "responseSelector", type: "string", required: false, default: "", description: "回复容器 CSS 选择器；留空则取整页文本" },
+        { name: "conversationUrl", type: "url", required: false, description: "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话" },
       ],
       steps: "commands",
       body: [
         { name: "open_tab", args: { url: "https://gemini.google.com/app" }, skipWhenParam: "tabId", note: "打开 Gemini" },
         { name: "switch_tab", args: {}, note: "激活 Gemini 标签（后台标签不渲染回复，需前台）" },
+        { name: "js", args: { expression: "@verifyConv", expected: "$conversationUrl" }, expect: "__BP_CONV_OK__", note: "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）" },
         { name: "js", args: { expression: "@write", mode: "gemini" }, note: "写入问题并记录回复基线（Quill API）" },
         { name: "click", args: { selector: "button[aria-label='Send message']" }, note: "点击发送按钮" },
         { name: "js", args: { expression: "@chatCollect", mode: "gemini" }, note: "回收回复文本（取基线后新增的最后一条回复）" },
@@ -203,11 +248,13 @@ function builtinTemplates(): Template[] {
         { name: "prompt", type: "string", required: true, description: "要问的问题" },
         { name: "tabId", type: "number", required: false, description: "已打开的 ChatGPT 标签；提供则复用，不再新开" },
         { name: "responseSelector", type: "string", required: false, default: "", description: "回复容器 CSS 选择器；留空则取整页文本" },
+        { name: "conversationUrl", type: "url", required: false, description: "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话" },
       ],
       steps: "commands",
       body: [
         { name: "open_tab", args: { url: "https://chatgpt.com/" }, skipWhenParam: "tabId", note: "打开 ChatGPT" },
         { name: "switch_tab", args: {}, note: "激活 ChatGPT 标签（后台标签不渲染回复，需前台）" },
+        { name: "js", args: { expression: "@verifyConv", expected: "$conversationUrl" }, expect: "__BP_CONV_OK__", note: "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）" },
         { name: "js", args: { expression: "@write", mode: "chatgpt" }, note: "写入问题并记录回复基线（ProseMirror）" },
         { name: "click", args: { selector: "button[data-testid='send-button']" }, note: "点击发送按钮" },
         { name: "js", args: { expression: "@chatCollect", mode: "chatgpt" }, note: "回收回复文本" },
@@ -224,32 +271,117 @@ const BUILTINS: Record<string, Template> = Object.fromEntries(builtinTemplates()
 // 导入 / 导出 / 清单
 // ---------------------------------------------------------------------------
 
-const STORE_KEY = "egolite.templates.v1";
+const STORE_KEY = "browserpilot.templates.v2";
+const LEGACY_STORE_KEY = "browserpilot.templates.v1";
 
-async function loadImported(): Promise<Record<string, Template>> {
-  const raw = await chrome.storage.local.get(STORE_KEY);
-  return (raw[STORE_KEY] as Record<string, Template>) ?? {};
+interface TemplateSource {
+  type: "local" | "url" | "github";
+  url?: string;
+  repo?: string;
+  path?: string;
+  ref?: string;
 }
 
-async function saveImported(map: Record<string, Template>): Promise<void> {
+interface TemplateRevision {
+  template: Template;
+  contentHash: string;
+  updatedAt: number;
+}
+
+interface InstalledTemplateRecord {
+  template: Template;
+  enabled: boolean;
+  source: TemplateSource;
+  installedAt: number;
+  updatedAt: number;
+  contentHash: string;
+  previous?: TemplateRevision;
+}
+
+async function hashTemplate(template: Template): Promise<string> {
+  const bytes = new TextEncoder().encode(JSON.stringify(template));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return "sha256:" + [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function loadInstalled(): Promise<Record<string, InstalledTemplateRecord>> {
+  const raw = await chrome.storage.local.get([STORE_KEY, LEGACY_STORE_KEY]);
+  const current = (raw[STORE_KEY] as Record<string, InstalledTemplateRecord> | undefined) ?? {};
+  if (Object.keys(current).length) return current;
+  const legacy = (raw[LEGACY_STORE_KEY] as Record<string, Template> | undefined) ?? {};
+  if (!Object.keys(legacy).length) return current;
+  const now = Date.now();
+  const migrated: Record<string, InstalledTemplateRecord> = {};
+  for (const [id, template] of Object.entries(legacy)) {
+    migrated[id] = {
+      template,
+      enabled: true,
+      source: { type: "local" },
+      installedAt: now,
+      updatedAt: now,
+      contentHash: await hashTemplate(template),
+    };
+  }
+  await saveInstalled(migrated);
+  return migrated;
+}
+
+async function saveInstalled(map: Record<string, InstalledTemplateRecord>): Promise<void> {
   await chrome.storage.local.set({ [STORE_KEY]: map });
 }
 
-export function resolveTemplateById(id: string): Template | undefined {
-  return BUILTINS[id] ?? undefined;
+async function resolveInstalledRecord(id: string): Promise<InstalledTemplateRecord | undefined> {
+  const records = await loadInstalled();
+  return records[id];
+}
+
+export async function resolveTemplateById(id: string, includeDisabled = false): Promise<Template | undefined> {
+  if (BUILTINS[id]) return BUILTINS[id];
+  const record = await resolveInstalledRecord(id);
+  return record && (includeDisabled || record.enabled) ? record.template : undefined;
+}
+
+function templateCapabilities(template: Template): string[] {
+  if (template.steps !== "commands") return [template.steps];
+  return [...new Set((template.body as TemplateStep[]).map((step) => step.name))];
 }
 
 export async function listTemplates(): Promise<unknown[]> {
-  const map = { ...BUILTINS, ...(await loadImported()) };
-  return Object.values(map).map((t) => ({
+  const installed = await loadInstalled();
+  const builtins = Object.values(BUILTINS).map((t) => ({
     id: t.id,
     name: t.name,
+    version: t.version ?? "0.0.0",
     description: t.description,
     category: t.category,
     inputs: t.inputs,
     steps: t.steps,
     scope: t.scope,
+    builtin: true,
+    enabled: true,
+    source: { type: "builtin" },
+    updateAvailable: false,
+    capabilities: templateCapabilities(t),
   }));
+  const records = Object.values(installed).map((r) => ({
+    id: r.template.id,
+    name: r.template.name,
+    version: r.template.version ?? "0.0.0",
+    description: r.template.description,
+    category: r.template.category,
+    inputs: r.template.inputs,
+    steps: r.template.steps,
+    scope: r.template.scope,
+    builtin: false,
+    enabled: r.enabled,
+    source: r.source,
+    installedAt: r.installedAt,
+    updatedAt: r.updatedAt,
+    contentHash: r.contentHash,
+    canRollback: !!r.previous,
+    capabilities: templateCapabilities(r.template),
+  }));
+  return [...builtins, ...records];
 }
 
 function toMarkdown(t: Template): string {
@@ -273,21 +405,172 @@ function toMarkdown(t: Template): string {
   return lines.join("\n");
 }
 
+async function fetchSource(source: TemplateSource): Promise<string> {
+  let url = source.url;
+  if (source.type === "github") {
+    const repo = String(source.repo ?? "");
+    const filePath = String(source.path ?? "").replace(/^\/+/, "");
+    const ref = String(source.ref ?? "main");
+    if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo)) throw new Error("GitHub repo 必须是 owner/repo");
+    if (!filePath || filePath.split("/").includes("..")) throw new Error("GitHub template path 无效");
+    if (!/^[A-Za-z0-9_./-]+$/.test(ref)) throw new Error("GitHub ref 无效");
+    url = "https://raw.githubusercontent.com/" + repo + "/" + ref + "/" + filePath;
+  }
+  if (!url || !/^https:\/\//i.test(url)) throw new Error("模板来源需要 HTTPS URL");
+  const response = await fetch(url, { cache: "no-store" });
+  if (!response.ok) throw new Error("获取模板失败: HTTP " + response.status);
+  const declaredSize = Number(response.headers.get("content-length") ?? 0);
+  if (declaredSize > 1_000_000) throw new Error("模板文件超过 1MB 限制");
+  const text = await response.text();
+  if (text.length > 1_000_000) throw new Error("模板文件超过 1MB 限制");
+  return text;
+}
+
+function sourceFromArgs(args: Record<string, unknown>): TemplateSource {
+  const raw = (args.source ?? {}) as Partial<TemplateSource>;
+  if (raw.type === "github") return { type: "github", repo: raw.repo, path: raw.path, ref: raw.ref ?? "main" };
+  if (raw.type === "url" || typeof args.url === "string") return { type: "url", url: String(raw.url ?? args.url ?? "") };
+  return { type: "local" };
+}
+
+export async function installTemplate(cmd: Command): Promise<unknown> {
+  const args = (cmd.args ?? {}) as Record<string, unknown>;
+  const source = sourceFromArgs(args);
+  const content = typeof args.content === "string" && args.content.trim()
+    ? args.content
+    : source.type !== "local"
+      ? await fetchSource(source)
+      : "";
+  if (!content) throw new Error("install_template 需要 content、url 或 GitHub source");
+  const template = parseTemplateContent(content);
+  if (BUILTINS[template.id]) throw new Error("不能覆盖内置模板: " + template.id);
+  const records = await loadInstalled();
+  const existing = records[template.id];
+  const now = Date.now();
+  const contentHash = await hashTemplate(template);
+  records[template.id] = {
+    template,
+    enabled: existing?.enabled ?? true,
+    source,
+    installedAt: existing?.installedAt ?? now,
+    updatedAt: now,
+    contentHash,
+    previous: existing
+      ? { template: existing.template, contentHash: existing.contentHash, updatedAt: existing.updatedAt }
+      : undefined,
+  };
+  await saveInstalled(records);
+  return { installed: true, id: template.id, name: template.name, version: template.version ?? "0.0.0", source, contentHash, updated: !!existing };
+}
+
 export async function importTemplate(cmd: Command): Promise<unknown> {
   const args = (cmd.args ?? {}) as { id?: string; content?: string };
   if (args.id) {
-    const t = resolveTemplateById(args.id);
+    const t = await resolveTemplateById(args.id);
     if (!t) throw new Error("未找到要导入的模版: " + args.id);
-    return { imported: true, id: t.id, builtin: true, name: t.name };
+    return { imported: true, id: t.id, builtin: !!BUILTINS[t.id], name: t.name };
   }
   if (typeof args.content === "string" && args.content.trim()) {
-    const t = parseTemplateContent(args.content);
-    const imported = await loadImported();
-    imported[t.id] = t;
-    await saveImported(imported);
-    return { imported: true, id: t.id, builtin: false, name: t.name };
+    const installed = await installTemplate(cmd) as { id: string; name: string };
+    return { imported: true, id: installed.id, builtin: false, name: installed.name };
   }
   throw new Error("import_template 需要 id 或 content");
+}
+
+export async function uninstallTemplate(cmd: Command): Promise<unknown> {
+  const id = String(cmd.args?.id ?? "");
+  if (!id) throw new Error("uninstall_template 需要 id");
+  if (BUILTINS[id]) throw new Error("内置模板不能卸载");
+  const records = await loadInstalled();
+  if (!records[id]) throw new Error("未安装模板: " + id);
+  delete records[id];
+  await saveInstalled(records);
+  return { uninstalled: true, id };
+}
+
+export async function setTemplateEnabled(cmd: Command): Promise<unknown> {
+  const id = String(cmd.args?.id ?? "");
+  const enabled = cmd.args?.enabled;
+  if (!id || typeof enabled !== "boolean") throw new Error("set_template_enabled 需要 id 和 enabled:boolean");
+  if (BUILTINS[id]) throw new Error("内置模板暂不支持禁用");
+  const records = await loadInstalled();
+  if (!records[id]) throw new Error("未安装模板: " + id);
+  records[id].enabled = enabled;
+  records[id].updatedAt = Date.now();
+  await saveInstalled(records);
+  return { id, enabled };
+}
+
+export async function checkTemplateUpdate(cmd: Command): Promise<unknown> {
+  const id = String(cmd.args?.id ?? "");
+  const record = await resolveInstalledRecord(id);
+  if (!record) throw new Error("未安装模板: " + id);
+  if (record.source.type === "local") return { id, updateAvailable: false, reason: "local_source" };
+  const content = await fetchSource(record.source);
+  const candidate = parseTemplateContent(content);
+  if (candidate.id !== id) throw new Error("远端模板 id 不匹配: " + candidate.id);
+  const remoteHash = await hashTemplate(candidate);
+  return {
+    id,
+    updateAvailable: remoteHash !== record.contentHash,
+    currentVersion: record.template.version ?? "0.0.0",
+    remoteVersion: candidate.version ?? "0.0.0",
+    currentHash: record.contentHash,
+    remoteHash,
+  };
+}
+
+export async function listTemplateCatalog(cmd: Command): Promise<unknown> {
+  const repo = String(cmd.args?.repo ?? "");
+  const ref = String(cmd.args?.ref ?? "main");
+  const catalogPath = String(cmd.args?.path ?? "registry/catalog.json");
+  const text = await fetchSource({ type: "github", repo, ref, path: catalogPath });
+  const parsed = JSON.parse(text) as { schemaVersion?: unknown; templates?: unknown };
+  if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.templates)) throw new Error("不支持的模板目录格式");
+  if (parsed.templates.length > 500) throw new Error("模板目录超过 500 项限制");
+  const templates = parsed.templates.map((raw) => {
+    if (!raw || typeof raw !== "object") throw new Error("模板目录包含无效条目");
+    const item = raw as Record<string, unknown>;
+    const id = String(item.id ?? "");
+    const itemPath = String(item.path ?? "");
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(id) || !itemPath || itemPath.split("/").includes("..")) {
+      throw new Error("模板目录条目 id/path 无效");
+    }
+    return {
+      id,
+      name: String(item.name ?? id),
+      version: String(item.version ?? "0.0.0"),
+      path: itemPath,
+      description: String(item.description ?? ""),
+    };
+  });
+  return { repo, ref, path: catalogPath, templates };
+}
+
+export async function updateTemplate(cmd: Command): Promise<unknown> {
+  const id = String(cmd.args?.id ?? "");
+  const record = await resolveInstalledRecord(id);
+  if (!record) throw new Error("未安装模板: " + id);
+  if (record.source.type === "local") throw new Error("本地模板没有可更新来源");
+  const content = await fetchSource(record.source);
+  const candidate = parseTemplateContent(content);
+  if (candidate.id !== id) throw new Error("远端模板 id 不匹配: " + candidate.id);
+  return installTemplate({ ...cmd, args: { content, source: record.source } });
+}
+
+export async function rollbackTemplate(cmd: Command): Promise<unknown> {
+  const id = String(cmd.args?.id ?? "");
+  const records = await loadInstalled();
+  const record = records[id];
+  if (!record) throw new Error("未安装模板: " + id);
+  if (!record.previous) throw new Error("模板没有可回滚版本");
+  const current: TemplateRevision = { template: record.template, contentHash: record.contentHash, updatedAt: record.updatedAt };
+  record.template = record.previous.template;
+  record.contentHash = record.previous.contentHash;
+  record.updatedAt = Date.now();
+  record.previous = current;
+  await saveInstalled(records);
+  return { rolledBack: true, id, version: record.template.version ?? "0.0.0", contentHash: record.contentHash };
 }
 
 function parseTemplateContent(content: string): Template {
@@ -309,10 +592,12 @@ function parseTemplateContent(content: string): Template {
 export async function exportTemplate(cmd: Command): Promise<unknown> {
   const args = (cmd.args ?? {}) as { id?: string; as?: string };
   const id = String(args.id ?? "");
-  const t = resolveTemplateById(id);
+  const t = await resolveTemplateById(id, true);
   if (!t) throw new Error("未找到要导出的模版: " + id);
   const asMd = String(args.as ?? "md") === "md";
-  return { id: t.id, name: t.name, template: t, markdown: toMarkdown(t) };
+  return asMd
+    ? { id: t.id, name: t.name, markdown: toMarkdown(t) }
+    : { id: t.id, name: t.name, template: t };
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +605,10 @@ export async function exportTemplate(cmd: Command): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 let runner: ((cmd: Command) => Promise<unknown>) | null = null;
+let runGeneration = 0;
+export function cancelTemplateRuns(): void {
+  runGeneration++;
+}
 /** 由 commands.ts 在模块加载时注入 dispatch，避免循环依赖（templates.ts 不 import commands.ts）。 */
 export function setCommandRunner(fn: (cmd: Command) => Promise<unknown>): void {
   runner = fn;
@@ -410,11 +699,12 @@ async function buildFailback(
 }
 
 export async function runTemplate(cmd: Command): Promise<unknown> {
+  const generation = runGeneration;
   const args = (cmd.args ?? {}) as { id?: string; params?: Record<string, unknown>; tabId?: number };
   const id = String(args.id ?? "");
   const given = (args.params ?? {}) as Record<string, unknown>;
   const baseTab = typeof args.tabId === "number" ? Number(args.tabId) : undefined;
-  const tpl = resolveTemplateById(id);
+  const tpl = await resolveTemplateById(id);
   if (!tpl) throw new Error("未找到模版: " + id);
 
   if (tpl.steps === "prompt") {
@@ -438,6 +728,7 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
 
   let lastResult: unknown = undefined;
   for (let i = 0; i < steps.length; i++) {
+    if (generation !== runGeneration) throw new Error("template_cancelled");
     const step = steps[i];
     if (step.skipWhenParam && params[step.skipWhenParam]) continue;
 
@@ -462,6 +753,10 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     if (typeof stepArgs.expression === "string" && stepArgs.expression === "@chatCollect") {
       stepArgs.expression = aiCollectExpr(String(stepArgs.mode ?? params.mode ?? "gemini"));
     }
+    // @verifyConv：续问前置校验（确认当前标签仍指向目标会话 URL；conversationUrl 空则跳过）
+    if (typeof stepArgs.expression === "string" && stepArgs.expression === "@verifyConv") {
+      stepArgs.expression = verifyConversationExpr(String(params.conversationUrl ?? ""));
+    }
     if (TAB_SCOPED.has(step.name) && currentTab !== undefined && stepArgs.tabId === undefined) {
       stepArgs.tabId = currentTab;
     }
@@ -474,6 +769,7 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     };
     try {
       lastResult = await runStepWithRetry(step, stepCmd);
+      if (generation !== runGeneration) throw new Error("template_cancelled");
     } catch (e) {
       const fbTab = currentTab ?? baseTab ?? (typeof params.tabId === "number" ? Number(params.tabId) : undefined);
       throw await buildFailback(tpl, step, e, fbTab);

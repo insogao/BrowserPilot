@@ -32,10 +32,10 @@ export async function ensureInjected(tabId: number): Promise<void> {
 export async function getL0Snapshot(tabId: number): Promise<L0Snapshot> {
   let res: ContentReply<L0Snapshot>;
   try {
-    res = await sendToTab(tabId, { kind: "snapshot_l0" });
+    res = await sendToTab(tabId, { kind: "snapshot_l0" }, 0);
   } catch {
     await ensureInjected(tabId);
-    res = await sendToTab(tabId, { kind: "snapshot_l0" });
+    res = await sendToTab(tabId, { kind: "snapshot_l0" }, 0);
   }
   if (!res || res.ok !== true) throw new Error(res?.error ?? "L0 snapshot 失败");
   return res.data as L0Snapshot;
@@ -47,10 +47,10 @@ export async function readTextFromTab(
 ): Promise<string> {
   let res: ContentReply<string>;
   try {
-    res = await sendToTab(tabId, { kind: "read_text", ...opts });
+    res = await sendToTab(tabId, { kind: "read_text", ...opts }, 0);
   } catch {
     await ensureInjected(tabId);
-    res = await sendToTab(tabId, { kind: "read_text", ...opts });
+    res = await sendToTab(tabId, { kind: "read_text", ...opts }, 0);
   }
   if (!res || res.ok !== true) throw new Error(res?.error ?? "readText 失败");
   return res.data as string;

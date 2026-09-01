@@ -1,4 +1,4 @@
-# Register native messaging host: com.egolite.browseragent (Chrome + Edge, HKCU)
+# Register native messaging host: com.browserpilot.browseragent (Chrome + Edge, HKCU)
 # Usage: powershell -NoProfile -ExecutionPolicy Bypass -File native-host/register.ps1
 # Optional: -HostPath <abs path> -ExtensionId <id> -ManifestPath <abs path>
 param(
@@ -8,11 +8,16 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-$HostName = "com.egolite.browseragent"
+$HostName = "com.browserpilot.browseragent"
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 if (-not $ManifestPath) { $ManifestPath = Join-Path $scriptDir "host.manifest.json" }
-if (-not $HostPath)   { $HostPath = Join-Path $scriptDir "dist\egolite-host.exe" }
+if (-not $HostPath) {
+    if (Test-Path $ManifestPath) {
+        try { $HostPath = (Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json).path } catch {}
+    }
+    if (-not $HostPath) { $HostPath = Join-Path $scriptDir "dist\browserpilot-host.exe" }
+}
 
 if (-not (Test-Path $HostPath)) {
     Write-Host "WARNING: host not found at $HostPath (run: node scripts/build-host.mjs)"
@@ -20,7 +25,7 @@ if (-not (Test-Path $HostPath)) {
 
 $manifest = @{
     name             = $HostName
-    description      = "ego-lite Browser Agent native messaging host"
+    description      = "BrowserPilot native messaging host"
     path             = $HostPath
     type             = "stdio"
     allowed_origins  = @("chrome-extension://$ExtensionId/")
