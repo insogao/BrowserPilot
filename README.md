@@ -112,7 +112,9 @@ L0 快照返回 `snapshotId`。后续以 `ref:"@N"` 操作时必须同时传该 
 
 命令接口：`install_template` / `list_templates` / `export_template` / `set_template_enabled` / `check_template_update` / `list_template_catalog` / `update_template` / `rollback_template` / `uninstall_template`。旧 `import_template` 保持兼容。
 
-Registry 使用 `browserpilot.templates.v2`，首次读取会自动迁移 v1 本地模板。每条记录包含版本、SHA-256、来源、启用状态、安装/更新时间和一个可回滚 revision。远端模板最大 1MB，且模板步骤不能调用 reload、stop 或模板管理命令。
+Registry 使用 `browserpilot.templates.v2`，首次读取会自动迁移 v1 本地模板。每条记录包含版本、SHA-256、来源、启用状态、安装/更新时间和一个可回滚 revision。仅模板 JSON/Markdown **定义文件**限制为 1MB；模板引用或任务下载的图片、音频、视频不受此限制，媒体不应以内嵌 base64 塞进模板。模板步骤不能调用 reload、stop 或模板管理命令。
+
+现有 `download_resource` 会在页面上下文取得登录态图片/blob 字节，并在扩展内部交给 downloads API，不把大 base64 塞进 CLI→native messaging 命令，因此保留了原有的大图绕行路径。超大视频建议后续走专门的 CDP `IO.read`/ReadableStream 分块通道，避免整段 data URL 常驻内存。
 
 ---
 

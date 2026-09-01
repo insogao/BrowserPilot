@@ -273,6 +273,8 @@ const BUILTINS: Record<string, Template> = Object.fromEntries(builtinTemplates()
 
 const STORE_KEY = "browserpilot.templates.v2";
 const LEGACY_STORE_KEY = "browserpilot.templates.v1";
+// 仅约束 Registry 的 JSON/Markdown 定义，绝不约束模板引用或任务下载的图片/音视频资源。
+const MAX_TEMPLATE_DEFINITION_BYTES = 1_000_000;
 
 interface TemplateSource {
   type: "local" | "url" | "github";
@@ -420,9 +422,9 @@ async function fetchSource(source: TemplateSource): Promise<string> {
   const response = await fetch(url, { cache: "no-store" });
   if (!response.ok) throw new Error("获取模板失败: HTTP " + response.status);
   const declaredSize = Number(response.headers.get("content-length") ?? 0);
-  if (declaredSize > 1_000_000) throw new Error("模板文件超过 1MB 限制");
+  if (declaredSize > MAX_TEMPLATE_DEFINITION_BYTES) throw new Error("模板定义文件超过 1MB 限制（媒体资源请使用外部 URL/下载通道）");
   const text = await response.text();
-  if (text.length > 1_000_000) throw new Error("模板文件超过 1MB 限制");
+  if (text.length > MAX_TEMPLATE_DEFINITION_BYTES) throw new Error("模板定义文件超过 1MB 限制（媒体资源请使用外部 URL/下载通道）");
   return text;
 }
 

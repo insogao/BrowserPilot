@@ -172,7 +172,7 @@
 
 ## 8. Registry 与命令参考
 
-模板看板位于扩展 options 页。安装记录保存在 `browserpilot.templates.v2`，旧 v1 数据自动迁移；GitHub 来源保存 `repo/path/ref`，用于后续检查更新。远端模板最大 1MB，commands 模板使用明确 allowlist，不能调用 reload/stop/Registry 管理命令。
+模板看板位于扩展 options 页。安装记录保存在 `browserpilot.templates.v2`，旧 v1 数据自动迁移；GitHub 来源保存 `repo/path/ref`，用于后续检查更新。只有模板 JSON/Markdown **定义文件**最大 1MB，外部图片/音视频资源与 `download_resource` 不受此 Registry 限制。commands 模板使用明确 allowlist，不能调用 reload/stop/Registry 管理命令。
 
 | 命令 | args | 返回 |
 |---|---|---|
