@@ -310,7 +310,8 @@ async function hashTemplate(template: Template): Promise<string> {
 async function loadInstalled(): Promise<Record<string, InstalledTemplateRecord>> {
   const raw = await chrome.storage.local.get([STORE_KEY, LEGACY_STORE_KEY]);
   const current = (raw[STORE_KEY] as Record<string, InstalledTemplateRecord> | undefined) ?? {};
-  if (Object.keys(current).length) return current;
+  // v2 key 即使是空对象也代表迁移已完成；不能因“全部卸载”而再次从 v1 复活旧模板。
+  if (raw[STORE_KEY] !== undefined) return current;
   const legacy = (raw[LEGACY_STORE_KEY] as Record<string, Template> | undefined) ?? {};
   if (!Object.keys(legacy).length) return current;
   const now = Date.now();
@@ -326,6 +327,7 @@ async function loadInstalled(): Promise<Record<string, InstalledTemplateRecord>>
     };
   }
   await saveInstalled(migrated);
+  await chrome.storage.local.remove(LEGACY_STORE_KEY);
   return migrated;
 }
 
@@ -660,7 +662,16 @@ function jaccard(a: Set<string>, b: Set<string>): number {
 
 function catalogShape(item: Record<string, unknown>): Record<string, unknown> {
   const template = item.template as Template | undefined;
-  if (!template) return item;
+  if (!template) {
+    const normalizeIo = (value: unknown) => (Array.isArray(value) ? value : []).map((x) => {
+      if (x && typeof x === "object") {
+        const io = x as Record<string, unknown>;
+        return String(io.name ?? "") + ":" + String(io.type ?? "");
+      }
+      return String(x);
+    });
+    return { ...item, inputs: normalizeIo(item.inputs), outputs: normalizeIo(item.outputs) };
+  }
   return {
     id: template.id,
     intents: template.discovery?.intents ?? [],

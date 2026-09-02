@@ -72,6 +72,11 @@ try {
   assert.equal(tabsResult.ok, true);
   const page = tabsResult.data.tabs.find((t) => /^https?:/i.test(t.url || ""));
   assert.ok(page, "no http(s) tab available for non-destructive snapshot test");
+  await command("uninstall_template", { id: "_bp-live-prompt-test" });
+  const cleanupCheck1 = await command("list_templates");
+  const cleanupCheck2 = await command("list_templates");
+  assert.equal(cleanupCheck1.data.some((item) => item.id === "_bp-live-prompt-test"), false);
+  assert.equal(cleanupCheck2.data.some((item) => item.id === "_bp-live-prompt-test"), false, "legacy template resurrected after v2 became empty");
 
   const template = {
     id: "bp-live-prompt-test",
@@ -106,6 +111,13 @@ try {
   assert.ok(search.data.templates.some((item) => item.id === "browserpilot-example-prompt"));
   const remoteDetail = await command("get_template_detail", { id: "browserpilot-example-prompt", repo: "insogao/BrowserPilot", ref: "main" });
   assert.equal(remoteDetail.ok, true);
+  const remoteCompare = await command("compare_templates", {
+    ids: ["browserpilot-example-prompt"],
+    candidate: { ...remoteDetail.data.template, id: "browserpilot-example-prompt-copy" },
+    repo: "insogao/BrowserPilot",
+    ref: "main",
+  });
+  assert.equal(remoteCompare.data.comparisons[0].likelyDuplicate, true);
   assert.equal((await command("set_template_enabled", { id: template.id, enabled: false })).ok, true);
   assert.equal((await command("run_template", { id: template.id, params: { value: "blocked" } })).ok, false);
   assert.equal((await command("set_template_enabled", { id: template.id, enabled: true })).ok, true);
