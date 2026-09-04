@@ -1,7 +1,7 @@
 // chrome.debugger 封装：attach/detach/sendCommand/onEvent/onDetach。
 // 参考技术路径 §4.7（BrowserPilot browser-runtime.ts）。事件在此进入 events 缓冲。
 import { recordEvent } from "./events";
-import { patchSpace, patchState } from "./state";
+import { syncSpaceForTab } from "./spaces";
 
 const VERSION = "1.3";
 const attached = new Set<number>();
@@ -31,7 +31,19 @@ export function isAttached(tabId: number): boolean {
 
 export async function attach(tabId: number): Promise<void> {
   if (attached.has(tabId)) return;
-  await chrome.debugger.attach({ tabId }, VERSION);
+  try {
+    await chrome.debugger.attach({ tabId }, VERSION);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!/already attached/i.test(msg)) throw e;
+    // SW 被回收重启后内存 Set 丢失，但 Chrome 侧 attach 仍在——此时是我们自己的遗留。
+    // 发探针命令区分：可控 → 收编回 Set；不可控 → 真的是其他调试器，维持原错误。
+    try {
+      await chrome.debugger.sendCommand({ tabId }, "Runtime.evaluate", { expression: "1", returnByValue: true });
+    } catch {
+      throw e;
+    }
+  }
   attached.add(tabId);
   await syncAttachedState(tabId, true);
   recordEvent("debugger.attach", { tabId });
@@ -65,11 +77,7 @@ export async function interruptTab(tabId: number): Promise<void> {
 }
 
 async function syncAttachedState(tabId: number, value: boolean): Promise<void> {
-  const tab = await chrome.tabs.get(tabId).catch(() => undefined);
-  if (!tab) return;
-  const id = String(tab.windowId);
-  await patchSpace(id, { tabId, attached: value, layer: value ? "L1" : "L0" });
-  if (value) await patchState({ activeSpaceId: id });
+  await syncSpaceForTab(tabId, { attached: value, layer: value ? "L1" : "L0" });
 }
 
 export async function sendCommand(

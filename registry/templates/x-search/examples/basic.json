@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "x-search",
+    "params": {
+      "query": "AI"
+    }
+  },
+  "expect": {
+    "minTweets": 1
+  }
+}

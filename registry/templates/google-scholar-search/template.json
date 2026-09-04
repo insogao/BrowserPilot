@@ -1,0 +1,136 @@
+{
+  "id": "google-scholar-search",
+  "name": "Google Scholar Search",
+  "version": "1.2.0",
+  "description": "Search Google Scholar for academic papers and return top results with title, URL, and visible text summary.",
+  "category": "search",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "Academic search query (paper title, keywords, author, etc.)"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://scholar.google.com"
+      },
+      "note": "Open Google Scholar home page."
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@focus",
+        "selectors": [
+          "#gs_hdr_tsi",
+          "input[name=q]",
+          "input[type=text]"
+        ]
+      },
+      "expect": "true",
+      "note": "Focus the search input and mark it as [data-bp-focus]."
+    },
+    {
+      "name": "fill",
+      "args": {
+        "selector": "[data-bp-focus]",
+        "value": "$query"
+      },
+      "note": "Fill the academic search query."
+    },
+    {
+      "name": "press",
+      "args": {
+        "key": "Enter"
+      },
+      "note": "Submit the search."
+    },
+    {
+      "name": "waitForURL",
+      "args": {
+        "pattern": "scholar.google.com/scholar",
+        "partial": true,
+        "timeoutMs": 20000
+      },
+      "note": "Wait for the result page URL."
+    },
+    {
+      "name": "screenshot",
+      "args": {
+        "format": "jpeg"
+      },
+      "note": "Visual verification of results page state."
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@results",
+        "rootSelectors": [
+          "#gs_res_ccl",
+          "#gs_res_ccl_mid"
+        ],
+        "linkSelector": ".gs_rt a",
+        "minResults": 3,
+        "limit": 10,
+        "textLimit": 6000
+      },
+      "note": "Collect academic result links and page text."
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "scholar.google.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "search.academic",
+      "search.scholar",
+      "search.web"
+    ],
+    "keywords": [
+      "google scholar",
+      "academic",
+      "paper",
+      "research",
+      "scholar",
+      "citation",
+      "journal",
+      "search"
+    ],
+    "outputs": [
+      {
+        "name": "count",
+        "type": "number",
+        "description": "Number of results returned."
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "Search results with title and url."
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "Visible text from the results container, including snippets."
+      }
+    ],
+    "risk": "read",
+    "replaces": [
+      "search-demo"
+    ],
+    "aliases": [
+      "scholar",
+      "gs-search",
+      "academic-search"
+    ],
+    "browserpilot": ">=0.1.0"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "google-scholar-search",
+    "params": {
+      "query": "BrowserPilot smoke test"
+    }
+  },
+  "expect": {
+    "minLinks": 1
+  }
+}

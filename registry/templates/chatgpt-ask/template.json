@@ -1,0 +1,103 @@
+{
+  "id": "chatgpt-ask",
+  "name": "ChatGPT 提问",
+  "version": "1.0.0",
+  "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
+  "category": "ai-chat",
+  "inputs": [
+    {
+      "name": "prompt",
+      "type": "string",
+      "required": true,
+      "description": "要问的问题"
+    },
+    {
+      "name": "tabId",
+      "type": "number",
+      "required": false,
+      "description": "已打开的 ChatGPT 标签；提供则复用，不再新开"
+    },
+    {
+      "name": "responseSelector",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "回复容器 CSS 选择器；留空则取整页文本"
+    },
+    {
+      "name": "conversationUrl",
+      "type": "url",
+      "required": false,
+      "description": "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": { "url": "https://chatgpt.com/" },
+      "skipWhenParam": "tabId",
+      "note": "打开 ChatGPT"
+    },
+    {
+      "name": "switch_tab",
+      "args": {},
+      "note": "激活 ChatGPT 标签（后台标签不渲染回复，需前台）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{for(let i=0;i<40;i++){const pm=document.querySelector('.ProseMirror[contenteditable=\"true\"]')||document.querySelector('#prompt-textarea .ProseMirror');if(pm&&pm.offsetParent){return {ok:true,ready:true};}await new Promise(r=>setTimeout(r,500));}return {ok:false,reason:'editor_not_found'};})()"
+      },
+      "note": "等待 ProseMirror 编辑器就绪（最多 20s）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@verifyConv",
+        "expected": "$conversationUrl"
+      },
+      "note": "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@write",
+        "mode": "chatgpt"
+      },
+      "note": "写入问题并记录回复基线（ProseMirror）"
+    },
+    {
+      "name": "click",
+      "args": {
+        "selector": "button[data-testid='send-button']"
+      },
+      "note": "点击发送按钮"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@chatCollect",
+        "mode": "chatgpt"
+      },
+      "note": "回收回复文本"
+    }
+  ],
+  "tokenStrategy": { "defaultL0": true },
+  "scope": {
+    "sites": ["chatgpt.com"]
+  },
+  "discovery": {
+    "intents": ["ai.chat", "ask", "question"],
+    "keywords": ["ChatGPT", "AI", "聊天", "提问", "chat", "ask", "GPT"],
+    "outputs": [
+      { "name": "text", "type": "string", "description": "ChatGPT 回复文本" },
+      { "name": "images", "type": "array", "description": "回复中的图片 URL 列表" },
+      { "name": "url", "type": "string", "description": "当前会话 URL（可用于续问）" },
+      { "name": "title", "type": "string", "description": "页面标题" }
+    ],
+    "risk": "write",
+    "aliases": ["chatgpt-ask", "chatgpt-chat"],
+    "browserpilot": ">=0.1.0"
+  }
+}

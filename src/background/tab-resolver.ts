@@ -1,21 +1,22 @@
-// 目标标签解析：命令的 tabId 缺省规则（v1.2 定案：Space=整台浏览器，缺省当前激活标签）。
-// 优先级：args.tabId > space 绑定标签（若仍有效）> 当前窗口激活标签。
+// 目标标签解析：所有 tabId 必须属于调用 Agent 当前 Task Space 的窗口。
+// 优先级：args.tabId > space 绑定标签（若仍有效）> space 窗口内的活动标签。
 import type { Command } from "../shared/types";
-import { loadState } from "./state";
+import { assertTabInCommandSpace, ensureCommandSpace } from "./spaces";
 
 export async function resolveTargetTab(cmd: Command): Promise<number> {
+  const space = await ensureCommandSpace(cmd);
   const explicit = (cmd.args?.tabId as number | undefined) ?? undefined;
-  if (explicit !== undefined && Number.isFinite(explicit)) return explicit;
-
-  const s = await loadState();
-  const spaceId = cmd.space ?? s.activeSpaceId;
-  const sp = spaceId ? s.spaces[spaceId] : undefined;
-  if (sp?.tabId !== undefined) {
-    const t = await chrome.tabs.get(sp.tabId).catch(() => undefined);
-    if (t) return sp.tabId;
+  if (explicit !== undefined && Number.isFinite(explicit)) {
+    await assertTabInCommandSpace(cmd, explicit);
+    return explicit;
   }
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (space.tabId !== undefined) {
+    const tab = await chrome.tabs.get(space.tabId).catch(() => undefined);
+    if (tab && tab.windowId === space.windowId) return space.tabId;
+  }
+
+  const [tab] = await chrome.tabs.query({ active: true, windowId: space.windowId });
   if (tab?.id === undefined) throw new Error("没有可操作的活动标签（no active tab）");
   return tab.id;
 }

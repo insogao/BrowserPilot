@@ -40,14 +40,13 @@
     <h2>权限逐条解释</h2>
     <table>
       <tr><th>权限</th><th>用途</th></tr>
-      <tr><td><code>debugger</code></td><td>只在 AI 执行需要 CDP 的命令后附加，用于操作目标标签页（受信点击/填表/求值）；Stop 会立即解除。</td></tr>
+      <tr><td><code>debugger</code></td><td>只在 AI 执行需要 CDP 的命令后附加，用于操作目标标签页（受信点击/填表/求值）；人工接管或后台 stop 命令会解除。</td></tr>
       <tr><td><code>nativeMessaging</code></td><td>用于<strong>你本机的外部 AI/CLI</strong>（如 Codex / 其它 Agent）连接本插件，数据不出本机。</td></tr>
       <tr><td><code>scripting</code></td><td>向页面注入观测/轻增强脚本（浏览档 L0）。</td></tr>
       <tr><td><code>tabs</code></td><td>标签导航、查询、监听激活/关闭。</td></tr>
       <tr><td><code>storage</code></td><td>本地保存会话状态（仅本机）。</td></tr>
       <tr><td><code>downloads</code></td><td>下载媒体/文件（如需）。</td></tr>
       <tr><td><code>alarms</code></td><td>周期唤醒 service worker，维持本机 host 连接。</td></tr>
-      <tr><td><code>contextMenus</code></td><td>提供“允许 Agent 操作本页”的右键入口。</td></tr>
       <tr><td>站点权限 <code>&lt;all_urls&gt;</code></td><td>仅在任务涉及标签页时使用，不做后台收集。</td></tr>
     </table>
 
@@ -56,10 +55,10 @@
     </div>
 
     <h2>多 profile 使用</h2>
-    <p>浏览器按 <code>--profile-directory="Profile N"</code> 启动多个 profile。<strong>每个用到的 profile 需单独安装本插件</strong>，各自安装后通过「复制使用文档」导出对应说明，拷贝给对应的 AI 对话即可。</p>
+    <p>浏览器按 <code>--profile-directory="Profile N"</code> 启动多个 profile。<strong>每个用到的 profile 需单独安装本插件</strong>，各自安装后通过「Copy Skill」导出对应说明，拷贝给对应的 AI 对话即可。首次启动后插件会缓存 profile 信息，官方 client 后续可自动拉起该 profile。</p>
 
     <h2>常用命令（外部 AI 对接）</h2>
-    <p>连接本机 <code>com.browserpilot.browseragent</code> host 后，先从 popup 复制带会话令牌的使用文档。当前可用：<code>ping</code> / <code>version</code> / <code>get_profile</code> / <code>export_guide</code> / <code>snapshot(level=L0)</code> / <code>click</code> / <code>fill</code> / <code>js</code> / <code>drainEvents</code> / <code>screenshot</code> / <code>list_tabs</code> / <code>run_template</code>。</p>
+    <p>连接本机 <code>com.browserpilot.browseragent</code> host 后，先从 popup 复制 Copy Skill 文档。当前可用：<code>ping</code> / <code>version</code> / <code>get_profile</code> / <code>export_guide</code> / <code>snapshot(level=L0)</code> / <code>click</code> / <code>fill</code> / <code>js</code> / <code>drainEvents</code> / <code>screenshot</code> / <code>list_tabs</code> / <code>run_template</code>。</p>
 
     <h2>操作模板</h2>
     <p>安装、查阅、启停、更新、回滚或卸载模板。内置模板随扩展发布，不可卸载；GitHub 来源当前支持公开仓库。</p>

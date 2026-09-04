@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import net from "node:net";
 
-const child = spawn(process.execPath, ["native-host/host.js"], { cwd: process.cwd() });
+const child = spawn(process.execPath, ["native-host/host.js"], {
+  cwd: process.cwd(),
+  env: { ...process.env, BROWSERPILOT_HOST_BASE_PORT: "48001" },
+});
 let nativeBuf = Buffer.alloc(0);
 let ready;
 const forwarded = [];

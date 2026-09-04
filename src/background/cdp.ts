@@ -1,5 +1,6 @@
 // CDP 辅助：页面求值 / ref->坐标 / glob 匹配 / 睡眠 / 受信输入的重用片段（M5）。
 import { attach, isAttached, sendCommand } from "./debugger-bridge";
+import { ensureTabVisible } from "./spaces";
 
 export async function ensureAttach(tabId: number): Promise<void> {
   if (!isAttached(tabId)) await attach(tabId);
@@ -71,6 +72,7 @@ export async function resolveCoord(
 /** Page.captureScreenshot：视口截图，返回 base64（PNG）。 */
 export async function captureScreenshot(tabId: number, format = "png"): Promise<string> {
   await ensureAttach(tabId);
+  await ensureTabVisible(tabId).catch(() => {});
   const res = (await sendCommand(tabId, "Page.captureScreenshot", { format })) as { data?: string };
   return res.data ?? "";
 }
@@ -87,13 +89,8 @@ export async function scrollCaptureScreenshot(
   opts: { pages?: number; gap?: number; format?: string } = {}
 ): Promise<{ base64: string; width: number; height: number; pageCount: number; viewH: number; docH: number }> {
   await ensureAttach(tabId);
-  // 聚焦窗口，避免 captureScreenshot 在未聚焦时挂起。
-  try {
-    const tab = await chrome.tabs.get(tabId);
-    if (tab.windowId !== undefined) await chrome.windows.update(tab.windowId, { focused: true });
-  } catch {
-    /* 焦点失败不致命 */
-  }
+  // 恢复并聚焦窗口，避免最小化/后台窗口导致截图和懒加载被节流。
+  await ensureTabVisible(tabId).catch(() => {});
   const format = opts.format ?? "png";
   const gap = typeof opts.gap === "number" && opts.gap > 0 ? opts.gap : 400;
   const m = (await evalPage(

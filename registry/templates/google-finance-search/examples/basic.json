@@ -1,0 +1,14 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "google-finance-search",
+    "params": {
+      "query": "AAPL"
+    }
+  },
+  "expect": {
+    "minResults": 1,
+    "requiredResultFields": ["ticker", "company", "price", "change", "url"],
+    "resultUrlIncludes": "finance/beta/quote"
+  }
+}

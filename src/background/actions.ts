@@ -155,11 +155,18 @@ export async function press(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
     const key = (a.key as string) ?? "Enter";
+    const target = pickTarget(a);
+    if (typeof target === "string") {
+      if (target.startsWith("@") && typeof a.snapshotId !== "string") throw new Error("snapshot_id_required");
+      const selector = selFrom(target, a.snapshotId as string | undefined);
+      const focused = await evalPage(tabId, "(()=>{const el=document.querySelector(" + JSON.stringify(selector) + ");if(!el)return false;el.focus();return document.activeElement===el||el.contains(document.activeElement);})()");
+      if (!focused) throw new Error("press 目标未命中或无法聚焦: " + target);
+    }
     const p = keyParamsFor(key);
     await send(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: p.key, code: p.code, windowsVirtualKeyCode: p.windowsVirtualKeyCode, ...(p.text ? { text: p.text } : {}) });
     await sleep(20);
     await send(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: p.key, code: p.code, windowsVirtualKeyCode: p.windowsVirtualKeyCode });
-    return { pressed: key };
+    return { pressed: key, ...(typeof target === "string" ? { target } : {}) };
   });
 }
 

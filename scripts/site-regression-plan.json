@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "productSites": [
+    { "site": "Google Search", "templateId": "search", "kind": "runtime", "fallback": "builtin" },
+    { "site": "Baidu", "templateId": "baidu-search", "kind": "runtime" },
+    { "site": "Bing", "templateId": "bing-search", "kind": "runtime" },
+    { "site": "X/Twitter", "templateId": "x-search", "kind": "runtime" },
+    { "site": "Google Scholar", "templateId": "google-scholar-search", "kind": "runtime" },
+    { "site": "Google Finance", "templateId": "google-finance-search", "kind": "runtime" },
+    { "site": "ChatGPT", "templateId": "chatgpt-ask", "kind": "runtime", "fallback": "builtin" },
+    { "site": "Gemini", "templateId": "gemini-ask", "kind": "runtime", "fallback": "builtin" }
+  ],
+  "runtimeOrder": [
+    "google-finance-search",
+    "search-demo",
+    "baidu-search",
+    "bing-search",
+    "x-search",
+    "google-scholar-search",
+    "search",
+    "chatgpt-ask",
+    "gemini-ask"
+  ],
+  "builtinOrder": [],
+  "builtinMigrationOrder": [
+    "search",
+    "chatgpt-ask",
+    "gemini-ask"
+  ],
+  "agentFeedback": {
+    "google-finance-search": "Owner review rejected the first 1.1.0 pass despite one successful MSFT smoke. Keep the maximized real-page flow and inspect screenshots/DOM yourself. Fix all three issues: (1) waitForURL must prove navigation to a quote-result route and must not already match the Finance homepage before Enter; (2) company extraction must be generic and must not contain a hardcoded list of known company names; (3) tests/smoke.json must use minResults and require ticker, company, price, change, and url via requiredResultFields, plus resultUrlIncludes for the quote route. Run at least two real queries, including one company-name query rather than only a ticker. Preserve query-specific Finance lookup and the declared count/results/text output contract; do not substitute trending data or a Google Search workaround. Do not declare passed until the strengthened smoke contract passes.",
+    "google-scholar-search": "A previous real smoke reached Google's Sorry/automated-queries page. Treat that as blocked, do not bypass anti-abuse controls, and ensure documentation does not claim a clear custom error unless the runtime actually returns one.",
+    "bing-search": "The 2026-09-04 regression was flaky: the first smoke stayed on the Bing homepage and waitForURL timed out; an immediate second smoke returned 10 links. Do not accept retry success as stable. Inspect initial-load readiness, fix the timing race inside this package, then require two consecutive clean npm run smoke:template -- bing-search runs before reporting passed. Keep Enter refocused on [data-bp-focus].",
+    "search-demo": "This is the runtime Google search adaptation example, not a ninth product site. Check compatibility with the current press selector and result-DOM contract.",
+    "search": "The compiled-in Google Search smoke reaches a real results page but returns count=0 and links=[]. Create a dynamic runtime package for the product template id search. Use the live Google DOM and regional google.com.hk route as evidence; do not copy search-demo blindly. The final smoke must return at least one real result link.",
+    "chatgpt-ask": "The compiled-in fallback fills the prompt but fails to locate button[data-testid=send-button] on the current ChatGPT page. Create a dynamic runtime package for chatgpt-ask, inspect the signed-in live page in a maximized Task Space, submit one harmless exact-reply smoke prompt, and verify the response contains the marker. Do not modify core source.",
+    "gemini-ask": "The compiled-in fallback fills the prompt but fails to locate button[aria-label='Send message'] on the current Gemini page. Create a dynamic runtime package for gemini-ask, inspect the signed-in live page in a maximized Task Space, submit one harmless exact-reply smoke prompt, and verify the response contains the marker. Do not modify core source."
+  },
+  "nonSiteStaticOnly": [
+    "browserpilot-example-prompt"
+  ]
+}

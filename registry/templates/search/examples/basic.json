@@ -1,0 +1,14 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "search",
+    "params": {
+      "query": "BrowserPilot"
+    }
+  },
+  "expect": {
+    "minResults": 1,
+    "requiredResultFields": ["title", "url"],
+    "resultUrlIncludes": "google.com"
+  }
+}

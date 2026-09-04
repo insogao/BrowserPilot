@@ -1,17 +1,19 @@
 // 命令分派表 + 参数校验。参考技术路径 §4.4（ChatGPT zod 命令协议）。
 // M1/M2 落地：ping / version / get_profile / export_guide / stop；观测与动作先在 M3~M5 填充。
 import type { Command, CommandName, ProfileInfo } from "../shared/types";
-import { loadState, clearAllSpaces } from "./state";
+import { loadState, clearAllSpaces, mutateState, patchSpace } from "./state";
 import { drainEvents } from "./events";
 import * as sp from "./spaces";
+import { commandClientId } from "./spaces";
+import { acquireForegroundLease } from "./foreground-lease";
 import { resolveTargetTab } from "./tab-resolver";
 import { getL0Snapshot, readTextFromTab } from "./content-bridge";
 import { captureScreenshot, scrollCaptureScreenshot, ensureAttach } from "./cdp";
 import { sendCommand } from "./debugger-bridge";
 import * as act from "./actions";
 import * as ev from "./eval";
-import { maskOn, maskOff, isHumanTakeover, hasTakeover, touchMaskActivity, endMaskActivity, resetAllMasks } from "./mask";
-import { detachAll, listAttachedTabs } from "./debugger-bridge";
+import { maskOn, maskOff, isHumanTakeover, hasTakeover, touchMaskActivity, endMaskActivity, resetAllMasks, resetMasksForTabs } from "./mask";
+import { detach, detachAll, listAttachedTabs } from "./debugger-bridge";
 import * as tpl from "./templates";
 import { downloadResource } from "./download-resource";
 
@@ -104,13 +106,18 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     return drainEvents(args);
   },
 
-  open_space: () => Promise.reject("open_space 在 v2 实现（chrome.windows.create 专属窗口空间，用完即关）"),
-  close_space: () => Promise.reject("close_space 在 v2 实现"),
+  open_space: (cmd) => sp.open_space(cmd),
+  use_space: (cmd) => sp.use_space(cmd),
+  claim_space: (cmd) => sp.claim_space(cmd),
+  handoff_space: (cmd) => sp.handoff_space(cmd),
+  complete_space: (cmd) => sp.complete_space(cmd),
+  close_space: (cmd) => sp.close_space(cmd),
   list_tabs: (cmd) => sp.list_tabs(cmd),
   open_tab: (cmd) => sp.open_tab(cmd),
   close_tab: (cmd) => sp.close_tab(cmd),
   switch_tab: (cmd) => sp.switch_tab(cmd),
-  list_spaces: () => sp.list_spaces(),
+  ensure_visible: (cmd) => sp.ensure_visible(cmd),
+  list_spaces: (cmd) => sp.list_spaces(cmd),
 
   import_template: (cmd) => tpl.importTemplate(cmd),
   install_template: (cmd) => tpl.installTemplate(cmd),
@@ -153,13 +160,46 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     return { reloading: true, afterMs: 300 };
   },
 
-  stop: async () => {
-    tpl.cancelTemplateRuns();
-    const attachedTabs = listAttachedTabs();
-    await Promise.all(attachedTabs.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
-    const [maskedTabs, detachedTabs] = await Promise.all([resetAllMasks(), detachAll()]);
-    await clearAllSpaces();
-    return { stopped: true, detachedTabs, maskedTabs };
+  stop: async (cmd) => {
+    // 作用域语义：popup/options（无 Agent 身份 → browserpilot-internal）= 用户全局停止；
+    // 带 Agent 身份的 stop 只清理该 Agent 自己的空间/租约/遮罩，不影响其他 Agent 与用户。
+    const clientId = commandClientId(cmd);
+    if (clientId === "browserpilot-internal") {
+      tpl.cancelTemplateRuns();
+      const attachedTabs = listAttachedTabs();
+      await Promise.all(attachedTabs.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
+      const [maskedTabs, detachedTabs] = await Promise.all([resetAllMasks(), detachAll()]);
+      await clearAllSpaces();
+      return { stopped: true, scoped: false, detachedTabs, maskedTabs };
+    }
+
+    const state = await loadState();
+    const ownSpaces = Object.values(state.spaces).filter(
+      (space) => space.ownerClientId === clientId && space.ownership !== "inactive",
+    );
+    const ownSpaceIds = new Set(ownSpaces.map((space) => space.spaceId));
+    const ownWindowIds = new Set(ownSpaces.map((space) => space.windowId).filter((w) => w !== undefined));
+
+    // 自己窗口里的 attach/遮罩先清理，再关窗口（关掉后 tabs 不复存在）。
+    const ownAttached: number[] = [];
+    for (const tabId of listAttachedTabs()) {
+      const tab = await chrome.tabs.get(tabId).catch(() => undefined);
+      if (tab?.windowId !== undefined && ownWindowIds.has(tab.windowId)) ownAttached.push(tabId);
+    }
+    await Promise.all(ownAttached.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
+    const [maskedTabs] = await Promise.all([resetMasksForTabs(ownAttached), Promise.all(ownAttached.map((tabId) => detach(tabId).catch(() => undefined)))]);
+    for (const space of ownSpaces) {
+      if (space.windowId !== undefined) await chrome.windows.remove(space.windowId).catch(() => {});
+      await patchSpace(space.spaceId, { ownership: "inactive", windowId: undefined, tabId: undefined, attached: false });
+    }
+    // 模板运行权=前台租约：只有自己持有时取消运行代际，才不会误伤正在跑模板的其他 Agent。
+    if (state.foregroundLease?.ownerClientId === clientId) tpl.cancelTemplateRuns();
+    await mutateState((s) => {
+      if (s.foregroundLease?.ownerClientId === clientId) delete s.foregroundLease;
+      if (s.activeSpaceIds?.[clientId]) delete s.activeSpaceIds[clientId];
+      if (s.activeSpaceId && ownSpaceIds.has(s.activeSpaceId)) delete s.activeSpaceId;
+    });
+    return { stopped: true, scoped: true, closedSpaces: [...ownSpaceIds], detachedTabs: ownAttached, maskedTabs };
   },
 };
 
@@ -172,43 +212,59 @@ const ACTION_NAMES = new Set<CommandName>([
 export async function dispatch(cmd: Command): Promise<unknown> {
   const name = cmd.name;
   if (!KNOWN[name]) throw new Error(`unknown command: ${String(name)}`);
-  // 人工接管保护：对动作命令，若目标 tab 处于接管态则拒绝（平时从无接管，零开销）。
-  if (ACTION_NAMES.has(name) && hasTakeover()) {
-    const tabId = await resolveTargetTab(cmd).catch(() => undefined);
-    if (tabId !== undefined && isHumanTakeover(tabId)) {
-      throw new Error("human_takeover_in_progress");
-    }
-  }
-  // 命名空间归属（F6）：operation 记录在对应 space 状态里（M7 完善）。
+  // 模板是复合浏览器命令：入口先绑定并验证 space，内部步骤继承相同身份、space 和前台租约。
+  if (name === "run_template") await sp.ensureCommandSpace(cmd);
+  const foreground = await acquireForegroundLease(cmd);
   touchMaskActivity();
   try {
+    // 人工接管保护：对动作命令，若目标 tab 处于接管态则拒绝。
+    if (ACTION_NAMES.has(name) && hasTakeover()) {
+      const tabId = await resolveTargetTab(cmd).catch(() => undefined);
+      if (tabId !== undefined && isHumanTakeover(tabId)) throw new Error("human_takeover_in_progress");
+    }
     return await KNOWN[name](cmd);
   } finally {
     endMaskActivity();
+    await foreground?.release();
   }
 }
 
 export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: number | undefined, hostToken?: string): string {
-  const u = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+  // 平台相关的展示兜底（profile 未上报时才显示）。
+  const defaultUdd =
+    navigator.platform.startsWith("Win")
+      ? "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data"
+      : navigator.platform.startsWith("Mac")
+        ? "~/Library/Application Support/Google/Chrome"
+        : "~/.config/google-chrome";
+  const defaultExe =
+    navigator.platform.startsWith("Win")
+      ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+      : navigator.platform.startsWith("Mac")
+        ? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        : "/usr/bin/google-chrome";
   const p = profile ?? ({} as ProfileInfo);
   const profileDir = p.profileDir ?? "Default";
-  const exe = p.chromeExe ?? u;
+  const exe = p.chromeExe ?? defaultExe;
+  const udd = p.userDataDir ?? defaultUdd;
   const port = hostPort ?? 47001;
   const extId = chrome.runtime.id;
-  const auth = hostToken ?? "<从 BrowserPilot popup 重新复制使用文档>";
+  const auth = hostToken ?? "<从 BrowserPilot popup 重新 Copy Skill>";
 
   return [
-    "# 浏览器驱动说明（Chrome Agent）",
+    "# BrowserPilot Skill Bootstrap",
     "",
-    "> 本文档给你（外部 AI / CLI）看，读完就能连上并驱动这台浏览器。",
+    "> 本文档给外部 AI / CLI 使用：读完即可连上并驱动这台浏览器。",
     "> profile: " + (p.profileDir ?? profileDir) + "  | 浏览器: " + (p.browser ?? "Google Chrome"),
     "",
     "---",
     "",
     "## 0. 一句话",
-    "这台浏览器（当前 profile）就是你的操作空间（Space = 整台浏览器，天然共用 cookie/登录态）。你通过一个**本地 TCP 端口**连入，发一行行 JSON 命令，它就去操作真实的标签页。",
+    "你通过本地 Host 连接 BrowserPilot。每个 Agent 拥有自己的 Task Space（一个独立窗口和其中的标签页），同一 profile 继续共享 cookie/登录态；插件在统一命令入口强制检查所有权。",
     "",
     "## 1. 怎么连",
+    "",
+    "推荐优先使用项目官方 client：`npm run client -- <command> '<args-json>'`。为每个长期 Agent 设置稳定的环境变量 `BROWSERPILOT_AGENT_ID`；同一个 Agent 的后续命令必须复用同一个值。client 只用 ping 扫描动态端口，找到后真实命令只投递一次。",
     "",
     "- 地址：`127.0.0.1:" + port + "`（TCP 长连接）。",
     "- 协议：**换行分隔的 JSON**（每行一条消息，以 `\\n` 结尾）。",
@@ -223,12 +279,13 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "",
     "## 2. 消息格式",
     "",
-    "- 进（你 → 扩展）：`{\"type\":\"command\",\"name\":\"<命令>\",\"args\":{...},\"requestId\":\"<任意串，用来对号入座>\"}`",
+    "- 进（你 → 扩展）：`{\"type\":\"command\",\"name\":\"<命令>\",\"args\":{...},\"requestId\":\"<任意串>\",\"agentId\":\"<稳定 Agent 名>\"}`",
     "- 出（扩展 → 你）成功：`{\"type\":\"result\",\"requestId\":\"<同上>\",\"ok\":true,\"data\":{...}}`",
     "- 出（扩展 → 你）失败：`{\"type\":\"result\",\"requestId\":\"<同上>\",\"ok\":false,\"error\":\"<原因>\"}`",
     "- 事件：`{\"type\":\"event\",\"name\":\"...\",\"args\":{...},\"sequence\":N}`（无 requestId，订阅用 `drainEvents`）",
     "",
     "`requestId` 每次自己编一个（如递增数字），用于把返回对回你的请求。",
+    "`agentId` 标识长期 Agent，用于 Task Space 所有权；只能使用字母、数字、点、下划线、冒号和短横线。官方 client 默认是 `browserpilot-cli`。多个 Agent 并行时必须分别设置。",
     "除 `ping`/开发用 `reload` 外，命令还须带 `authToken`：`" + auth + "`。同一 TCP 长连接首次认证后可省略。",
     "",
     "## 3. 三步上手（第一次必做）",
@@ -237,10 +294,10 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "",
     "```",
     '{"type":"command","name":"list_tabs","args":{},"requestId":"1","authToken":"' + auth + '"}',
-    "→ data:[{\"tabId\":123,\"windowId\":5,\"title\":\"...\",\"url\":\"...\",\"active\":true}, ...]",
+    "→ data:{\"spaceId\":\"space-...\",\"tabs\":[{\"tabId\":123,\"windowId\":5,\"title\":\"...\",\"url\":\"...\"}],\"windows\":1}",
     "```",
     "",
-    "**Space 就是整台浏览器**——这份清单就是全部操作空间。接下来所有操作都要指定 `tabId`（或 `space?`，或干脆不传 = 当前激活标签）。",
+    "第一次调用会把当前前台窗口绑定为这个 Agent 的默认 Space。之后 `list_tabs` 只返回该 Space 的标签；传入其他窗口的 `tabId` 会返回 `TAB_OUTSIDE_SPACE`。需要新空间时调用 `open_space`。",
     "",
     "### 第 2 步：看单个页面长什么样（不用 attach，最省 token）",
     "",
@@ -287,10 +344,17 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| 命令 | args | 作用 / 返回 |",
     "|---|---|---|",
     "| `ping` | `{}` | 连通性，返回 `{pong:true}` |",
-    "| `list_tabs` | `{}` | 列出所有窗口/标签 `[{tabId,windowId,title,url,active}]`（Space=整台浏览器） |",
-    "| `open_tab` | `{url, newWindow?}` | 开新标签（默认）或新窗口并聚焦，返回 `{tabId}` |",
+    "| `list_spaces` | `{}` | 只列出当前 Agent 拥有的 Task Spaces |",
+    "| `open_space` | `{name?,url?}` | 创建并选中当前 Agent 独占的窗口空间 |",
+    "| `use_space` | `{spaceId\|name}` | 切换到当前 Agent 已拥有的空间 |",
+    "| `handoff_space` | `{spaceId\|name?}` | 把空间交给用户，后续 Agent 页面命令被硬拦截 |",
+    "| `claim_space` | `{spaceId\|name?}` | 用户明确允许后恢复当前 Agent 对空间的控制 |",
+    "| `complete_space` | `{spaceId\|name?,keep?}` | `keep:true` 留给用户；否则关闭窗口并结束空间 |",
+    "| `list_tabs` | `{}` | 只列出当前 Task Space 的窗口/标签 |",
+    "| `open_tab` | `{url}` | 在当前 Task Space 内开新标签并聚焦，返回 `{tabId,spaceId}` |",
     "| `close_tab` | `{tabId}` | 关标签 |",
     "| `switch_tab` | `{tabId}` | 聚焦到某标签 |",
+    "| `ensure_visible` | `{tabId?}` | 恢复目标窗口为 normal 并聚焦，降低最小化/后台渲染节流 |",
     "| `snapshot` | `{level:\"L0\", tabId?}` | Markdown 可点击树 + `snapshotId`；L1 尚未实现 |",
     "| `click` | `{ref,snapshotId\\|selector\\|x,y, tabId?}` | ref 动作必须带快照 ID，过期返回 `page_updated` |",
     "| `fill` | `{ref, snapshotId, value, tabId?}` | 填输入框并触发输入 |",
@@ -309,7 +373,7 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `stop_mask` | `{tabId?}` | 关遮罩 / 清除接管态（人解完验证码后让 AI 继续） |",
     "| 事件`mask_takeover` | `{tabId}` | 用户点了遮罩上的「人工接管」→ 暂停 AI，等 `stop_mask` 续跑 |",
     "| `export_guide` | `{}` | 导出本说明 |",
-    "| `stop` | `{}` | 断开/清理会话 |",
+    "| `stop` | `{}` | 清理会话：Agent 身份调用=只清自己的空间/租约/遮罩；popup 全局停止=清全部 |",
     "",
     "## 6. 省 token 与稳定性",
     "",
@@ -317,23 +381,27 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "- **模版**（`run_template`）：把「搜索→取结果→人机/反馈」这类固定流程封装成一条命令，复用最省 token；跑不通时返回失败上下文，你据此现场写新模版。",
     "- `set_humanize`、L1/AX、脚本型模板当前尚未实现，不应调用。",
     "- **页面已变**：任何动作前若快照过期，返回 `page_updated`，重拍再动，避免盲操作。",
+    "- **并发保护**：需要前台、截图或输入的命令由插件侧全局前台租约串行化；模板的全部子步骤继承同一租约。异常中断后租约会自动过期。",
     "",
     "## 7. 本机信息",
     "",
     "- 扩展 ID: `" + extId + "`  host: `com.browserpilot.browseragent`",
-    "- profile 目录: `" + profileDir + "`  user-data-dir: `" + (p.userDataDir ?? "C:\\Users\\me\\AppData\\Local\\Google\\Chrome\\User Data") + "`",
+    "- profile 目录: `" + profileDir + "`  user-data-dir: `" + udd + "`",
     "- Chrome: `" + exe + "`",
     '- 启动命令: `"' + exe + '" --profile-directory="' + profileDir + '"`',
     "- 端口: `" + port + "`（若连不上, 说明 host 没起或换了端口, 重新 export_guide 获取最新端口）",
     "",
     "## 8. 常见问题",
     "",
-    "- **连接被拒 / ECONNREFUSED**：host 没在跑。让本机的扩展 SW 重连（点一次扩展图标或 `ping` 触发）；再用本说明里的最新端口。",
+    "- **连接被拒 / ECONNREFUSED**：host 没在跑。优先用官方 client 重试，它会尝试启动上次缓存的 profile；若是首次使用，先手动启动一次安装了 BrowserPilot 的浏览器 profile，让插件写入缓存。",
     "- **返回 `unknown command`**：扩展 SW 版本旧, 需在 `chrome://extensions` 重新加载 `dist/`（或发一条 `{\"type\":\"command\",\"name\":\"reload\"}` 自动重载）。",
     "- **热更新**：本插件支持发 `reload` 命令自动重载 SW（开发期免手动）。重载后 native 连接断、host 重启、端口可能变, 重新 `export_guide` 拿最新端口。",
     "- **操作报 `page_updated`**：页面已导航, 重新 `snapshot` 再动。",
     "- **`ref` 失效**：页面刷新后 `@N` 会变, 重新 snapshot 拿新 ref。",
     "- **权限 / 调试横幅**: 只有用 `L1` 动作时标签页才出现「正在调试此浏览器」横幅, 这是 debugger API 固有, 纯 `L0` 观测无横幅。",
+    "- **`SPACE_NOT_OWNED` / `TAB_OUTSIDE_SPACE`**：不要绕过；选择自己已有的 Space，或用 `open_space` 创建新空间。",
+    "- **`SPACE_USER_IN_CONTROL`**：用户已经人工接管，必须等待用户明确允许后再调用 `claim_space`。",
+    "- **`FOREGROUND_BUSY`**：另一 Agent 正在进行可见浏览器操作，稍后重试，不要并发开页。",
   ].join("\n");
 }
 

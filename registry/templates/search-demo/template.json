@@ -1,0 +1,117 @@
+{
+  "id": "search-demo",
+  "name": "Search Demo Template",
+  "version": "1.0.0",
+  "description": "A copyable demo for adapting a search engine with runtime template selectors.",
+  "category": "search",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "Search keyword"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://www.google.com"
+      },
+      "note": "Open the target search engine home page."
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@focus",
+        "selectors": [
+          "textarea[name='q']",
+          "input[name='q']",
+          "input[type='search']",
+          "input[type='text']"
+        ]
+      },
+      "expect": "true",
+      "note": "Focus the search input and mark it as [data-bp-focus]."
+    },
+    {
+      "name": "fill",
+      "args": {
+        "selector": "[data-bp-focus]",
+        "value": "$query"
+      },
+      "note": "Fill the query."
+    },
+    {
+      "name": "press",
+      "args": {
+        "key": "Enter",
+        "selector": "[data-bp-focus]"
+      },
+      "note": "Submit the query."
+    },
+    {
+      "name": "waitForSelector",
+      "args": {
+        "selector": "#search,#rso,#center_col",
+        "visible": true,
+        "timeoutMs": 20000
+      },
+      "note": "Wait for the result DOM instead of assuming a regional Google hostname."
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@results",
+        "rootSelectors": [
+          "#search",
+          "#rso",
+          "#center_col"
+        ],
+        "linkSelector": "a",
+        "minResults": 3,
+        "limit": 10,
+        "textLimit": 6000
+      },
+      "note": "Collect result links and page text."
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "google.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "search.web",
+      "search.demo"
+    ],
+    "keywords": [
+      "search",
+      "demo",
+      "selectors",
+      "google"
+    ],
+    "outputs": [
+      {
+        "name": "links",
+        "type": "array",
+        "description": "Top result links with title and url."
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "Visible text from the result container."
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "google-selector-demo"
+    ],
+    "browserpilot": ">=0.1.0"
+  }
+}

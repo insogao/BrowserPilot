@@ -41,9 +41,14 @@ export type CommandName =
   | "open_tab" // {url, newWindow?} 开新标签/窗口并聚焦
   | "close_tab" // {tabId} 关标签
   | "switch_tab" // {tabId} 聚焦到某标签
+  | "ensure_visible" // {tabId?} 恢复窗口为 normal 并聚焦，降低后台/最小化渲染节流
   | "list_spaces" // 兼容旧名，返回全部 space 状态
-  | "open_space" // v2 保留：专属窗口空间（chrome.windows.create，用完即关）
-  | "close_space" // v2 保留
+  | "open_space" // {name?,url?} 创建并选中当前 Agent 独占的窗口空间
+  | "use_space" // {spaceId|name} 选择当前 Agent 已拥有的空间
+  | "claim_space" // {spaceId|name} 从人工接管状态恢复 Agent 控制
+  | "handoff_space" // {spaceId|name?} 把空间交给用户，暂停 Agent 命令
+  | "complete_space" // {spaceId|name?,keep?} 保留给用户或关闭空间
+  | "close_space" // {spaceId|name?} 关闭当前 Agent 空间
   // 插件化操作模版（新需求，M9）
   | "import_template"
   | "install_template"
@@ -82,6 +87,10 @@ export interface Command {
   requestId: string;
   /** Task Space 命名空间：对应 windowId 字符串。缺省 = 当前/主 space。 */
   space?: string;
+  /** Host 注入的可信逻辑客户端身份；外部消息中的同名字段会被覆盖。 */
+  _clientId?: string;
+  /** 模板子命令继承的插件内部前台租约 token。 */
+  _foregroundLeaseToken?: string;
 }
 
 export interface ResultOk {
@@ -96,6 +105,7 @@ export interface ResultErr {
   requestId: string;
   ok: false;
   error: string;
+  errorCode?: string;
 }
 
 export type Result = ResultOk | ResultErr;
@@ -123,8 +133,8 @@ export interface ProfileInfo {
 export interface PopupRequest {
   kind:
     | "get_status"
-    | "use_current_tab" // 把当前标签设为 Agent 默认操作目标
     | "take_over" // 用户人工接管当前标签，暂停 Agent
+    | "resume_agent" // 恢复 Agent 操作
     | "get_guide" // 返回使用文档 markdown（popup 负责写剪贴板）
     | "template_command" // options 模板看板调用受限模板管理命令
     | "stop";
@@ -133,7 +143,10 @@ export interface PopupRequest {
 }
 export interface PopupStatus {
   attached: boolean;
-  mode?: "idle" | "ready" | "agent" | "human";
+  hostReady?: boolean;
+  connected?: boolean;
+  clientCount?: number;
+  mode?: "idle" | "agent" | "human";
   tabId?: number;
   layer?: string;
   profile?: ProfileInfo;

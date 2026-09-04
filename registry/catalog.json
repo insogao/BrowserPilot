@@ -3,6 +3,130 @@
   "generatorVersion": 1,
   "templates": [
     {
+      "id": "baidu-search",
+      "name": "百度搜索",
+      "version": "1.2.0",
+      "path": "registry/templates/baidu-search/template.json",
+      "detailsPath": "registry/details/baidu-search.md",
+      "description": "在百度搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。",
+      "category": "search",
+      "sites": [
+        "baidu.com"
+      ],
+      "intents": [
+        "search",
+        "web.search"
+      ],
+      "keywords": [
+        "百度",
+        "baidu",
+        "搜索",
+        "search"
+      ],
+      "capabilities": [
+        "fill",
+        "js",
+        "open_tab",
+        "waitForURL"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number",
+          "description": "返回结果条数"
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "搜索结果列表，每项含title和url"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "结果页纯文本摘要"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "baidu",
+        "bd-search"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:c0dbeb07a0f8f02c3d8acc430b640ae95f2c5ae5e556c4a6a67358afc7d21b42"
+    },
+    {
+      "id": "bing-search",
+      "name": "必应搜索",
+      "version": "1.2.2",
+      "path": "registry/templates/bing-search/template.json",
+      "detailsPath": "registry/details/bing-search.md",
+      "description": "在必应搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。",
+      "category": "search",
+      "sites": [
+        "bing.com"
+      ],
+      "intents": [
+        "search",
+        "web.search"
+      ],
+      "keywords": [
+        "必应",
+        "bing",
+        "搜索",
+        "search",
+        "microsoft"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "press",
+        "type",
+        "waitForSelector",
+        "waitForTimeout",
+        "waitForURL"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number",
+          "description": "返回结果条数"
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "搜索结果列表，每项含title和url"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "结果页纯文本摘要"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "bing",
+        "ms-search"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:603b7af0a5f2f77a387b3a8fa11c8cfb02be46db932a358bd687b92a83ac800e"
+    },
+    {
       "id": "browserpilot-example-prompt",
       "name": "示例 Prompt 模板",
       "version": "1.1.0",
@@ -45,6 +169,493 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:2e28f76249bdb2063d674f7d818e8a66c59edbe27da005fd9782baf4ef6d53d1"
+    },
+    {
+      "id": "chatgpt-ask",
+      "name": "ChatGPT 提问",
+      "version": "1.0.0",
+      "path": "registry/templates/chatgpt-ask/template.json",
+      "detailsPath": "registry/details/chatgpt-ask.md",
+      "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
+      "category": "ai-chat",
+      "sites": [
+        "chatgpt.com"
+      ],
+      "intents": [
+        "ai.chat",
+        "ask",
+        "question"
+      ],
+      "keywords": [
+        "ChatGPT",
+        "AI",
+        "聊天",
+        "提问",
+        "chat",
+        "ask",
+        "GPT"
+      ],
+      "capabilities": [
+        "click",
+        "js",
+        "open_tab",
+        "switch_tab"
+      ],
+      "inputs": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true,
+          "description": "要问的问题"
+        },
+        {
+          "name": "tabId",
+          "type": "number",
+          "required": false,
+          "description": "已打开的 ChatGPT 标签；提供则复用，不再新开"
+        },
+        {
+          "name": "responseSelector",
+          "type": "string",
+          "required": false,
+          "description": "回复容器 CSS 选择器；留空则取整页文本"
+        },
+        {
+          "name": "conversationUrl",
+          "type": "url",
+          "required": false,
+          "description": "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "string",
+          "description": "ChatGPT 回复文本"
+        },
+        {
+          "name": "images",
+          "type": "array",
+          "description": "回复中的图片 URL 列表"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "description": "当前会话 URL（可用于续问）"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "description": "页面标题"
+        }
+      ],
+      "risk": "write",
+      "aliases": [
+        "chatgpt-ask",
+        "chatgpt-chat"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:563b4c985037c8982951e6e979228f999d8a2b9093318952348884509067e807"
+    },
+    {
+      "id": "gemini-ask",
+      "name": "Gemini 提问",
+      "version": "1.0.0",
+      "path": "registry/templates/gemini-ask/template.json",
+      "detailsPath": "registry/details/gemini-ask.md",
+      "description": "向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。",
+      "category": "ai-chat",
+      "sites": [
+        "gemini.google.com"
+      ],
+      "intents": [
+        "ai.chat",
+        "ask",
+        "question"
+      ],
+      "keywords": [
+        "Gemini",
+        "AI",
+        "聊天",
+        "提问",
+        "chat",
+        "ask",
+        "Google"
+      ],
+      "capabilities": [
+        "click",
+        "js",
+        "open_tab",
+        "switch_tab"
+      ],
+      "inputs": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true,
+          "description": "要问的问题"
+        },
+        {
+          "name": "tabId",
+          "type": "number",
+          "required": false,
+          "description": "已打开的 Gemini 标签；提供则复用，不再新开"
+        },
+        {
+          "name": "responseSelector",
+          "type": "string",
+          "required": false,
+          "description": "回复容器 CSS 选择器；留空则取整页文本"
+        },
+        {
+          "name": "conversationUrl",
+          "type": "url",
+          "required": false,
+          "description": "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "string",
+          "description": "Gemini 回复文本"
+        },
+        {
+          "name": "images",
+          "type": "array",
+          "description": "回复中的图片 URL 列表"
+        },
+        {
+          "name": "url",
+          "type": "string",
+          "description": "当前会话 URL（可用于续问）"
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "description": "页面标题"
+        }
+      ],
+      "risk": "write",
+      "aliases": [
+        "gemini-ask",
+        "gemini-chat"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:76c50b067e43e10b76be8e0add4b9664ad510a9f87f005bd97e1c213c56805fc"
+    },
+    {
+      "id": "google-finance-search",
+      "name": "Google Finance Search",
+      "version": "1.1.0",
+      "path": "registry/templates/google-finance-search/template.json",
+      "detailsPath": "registry/details/google-finance-search.md",
+      "description": "Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.",
+      "category": "finance",
+      "sites": [
+        "google.com"
+      ],
+      "intents": [
+        "finance.search",
+        "finance.quote",
+        "finance.lookup"
+      ],
+      "keywords": [
+        "google finance",
+        "stock",
+        "ticker",
+        "quote",
+        "finance",
+        "investing"
+      ],
+      "capabilities": [
+        "click",
+        "fill",
+        "js",
+        "open_tab",
+        "press",
+        "waitForSelector",
+        "waitForTimeout",
+        "waitForURL"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Ticker symbol (e.g. AAPL) or company name (e.g. Apple)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number",
+          "description": "Number of quote results returned."
+        },
+        {
+          "name": "results",
+          "type": "array",
+          "description": "Quote results, each with ticker, company, price, change, and url."
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "Visible text from the results page (max 6000 chars)."
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "gfinance",
+        "google-finance",
+        "stock-search"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:f2e102ec94288f0346d959a72f6216333fca3bb2ffb122c54f199854f0927c11"
+    },
+    {
+      "id": "google-scholar-search",
+      "name": "Google Scholar Search",
+      "version": "1.2.0",
+      "path": "registry/templates/google-scholar-search/template.json",
+      "detailsPath": "registry/details/google-scholar-search.md",
+      "description": "Search Google Scholar for academic papers and return top results with title, URL, and visible text summary.",
+      "category": "search",
+      "sites": [
+        "scholar.google.com"
+      ],
+      "intents": [
+        "search.academic",
+        "search.scholar",
+        "search.web"
+      ],
+      "keywords": [
+        "google scholar",
+        "academic",
+        "paper",
+        "research",
+        "scholar",
+        "citation",
+        "journal",
+        "search"
+      ],
+      "capabilities": [
+        "fill",
+        "js",
+        "open_tab",
+        "press",
+        "screenshot",
+        "waitForURL"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Academic search query (paper title, keywords, author, etc.)"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number",
+          "description": "Number of results returned."
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "Search results with title and url."
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "Visible text from the results container, including snippets."
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "scholar",
+        "gs-search",
+        "academic-search"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:9fa51c12e99fd3086d7af638e547ef872f58a1cfe7bda25af5b8bb5d2f6a96bd"
+    },
+    {
+      "id": "search-demo",
+      "name": "Search Demo Template",
+      "version": "1.0.0",
+      "path": "registry/templates/search-demo/template.json",
+      "detailsPath": "registry/details/search-demo.md",
+      "description": "A copyable demo for adapting a search engine with runtime template selectors.",
+      "category": "search",
+      "sites": [
+        "google.com"
+      ],
+      "intents": [
+        "search.web",
+        "search.demo"
+      ],
+      "keywords": [
+        "search",
+        "demo",
+        "selectors",
+        "google"
+      ],
+      "capabilities": [
+        "fill",
+        "js",
+        "open_tab",
+        "press",
+        "waitForSelector"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Search keyword"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "links",
+          "type": "array",
+          "description": "Top result links with title and url."
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "Visible text from the result container."
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "google-selector-demo"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:ffc7fb6858bb2d2dfca7646b86f493cd5604a9996e5d274e7e0aacfb7fc9d7a7"
+    },
+    {
+      "id": "search",
+      "name": "Google Search",
+      "version": "1.0.0",
+      "path": "registry/templates/search/template.json",
+      "detailsPath": "registry/details/search.md",
+      "description": "Search Google and return the top 10 results with title, URL, and snippet.",
+      "category": "search",
+      "sites": [
+        "google.com",
+        "google.com.hk",
+        "google.co.jp",
+        "google.co.uk"
+      ],
+      "intents": [
+        "search",
+        "web.search"
+      ],
+      "keywords": [
+        "google",
+        "search",
+        "web search"
+      ],
+      "capabilities": [
+        "fill",
+        "js",
+        "open_tab",
+        "press",
+        "waitForSelector"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Search query"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number",
+          "description": "Number of results returned"
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "Result list, each with title and url"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "Visible text from the result container"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "google",
+        "google-search"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:7292e2457a6434fd9a511b4d485d4164a0c960ac643bef0c7b6879848dac3531"
+    },
+    {
+      "id": "x-search",
+      "name": "X/Twitter 搜索",
+      "version": "1.1.0",
+      "path": "registry/templates/x-search/template.json",
+      "detailsPath": "registry/details/x-search.md",
+      "description": "在 X (x.com) 搜索关键词，返回前10条推文（作者+文本+图片URL+时间）。需要登录 X 账号。",
+      "category": "search",
+      "sites": [
+        "x.com",
+        "twitter.com"
+      ],
+      "intents": [
+        "search",
+        "social.search"
+      ],
+      "keywords": [
+        "X",
+        "Twitter",
+        "推特",
+        "搜索",
+        "search",
+        "tweet"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "screenshot",
+        "waitForSelector",
+        "waitForURL"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number",
+          "description": "返回推文条数"
+        },
+        {
+          "name": "tweets",
+          "type": "array",
+          "description": "推文列表，每项含user、text、time、imgs（图片URL列表，需登录才能查看）"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "x-search",
+        "twitter-search"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:8253732a51e0c8fc11cb5d551fecb26c29a4524f84574e7b818a8565a9434f24"
     }
   ]
 }

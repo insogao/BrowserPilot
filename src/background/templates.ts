@@ -8,6 +8,7 @@ import {
   Template,
   TemplateStep,
   validateTemplate,
+  checkStepExpect,
   TAB_SCOPED,
 } from "../shared/template-schema";
 import { pushEvent } from "./native-bridge";
@@ -32,22 +33,69 @@ function focusBestExpr(cands: string[]): string {
   );
 }
 
-/** 抓取 Google 搜索结果：等待结果容器内出现 ≥3 条真实结果链接后，取前 10 条（标题 + 链接 + 正文摘要）。 */
+function stringList(value: unknown, fallback: string[]): string[] {
+  return Array.isArray(value)
+    ? value.map((x) => String(x)).filter(Boolean).slice(0, 30)
+    : fallback;
+}
+
+function numberOption(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback;
+}
+
+/** 通用搜索结果抓取：站点差异由模板 args 声明，新增搜索引擎不需要改代码/重编译。
+ *  excludeUrlPrefixes：模板声明的前缀排除（Google 搜索包用它剔除“翻译此页”等 UI 链接；
+ *  不做全局内置——finance 等模板本来就要抓 /finance/quote 前缀的链接）。 */
+function searchResultsExpr(options: {
+  rootSelectors: string[];
+  linkSelector?: string;
+  minResults?: number;
+  limit?: number;
+  textLimit?: number;
+  excludeUrlPrefixes?: string[];
+}): string {
+  const roots = JSON.stringify(options.rootSelectors);
+  const linkSelector = JSON.stringify(options.linkSelector || "a");
+  const minResults = numberOption(options.minResults, 3, 1, 20);
+  const limit = numberOption(options.limit, 10, 1, 50);
+  const textLimit = numberOption(options.textLimit, 6000, 500, 50000);
+  const excluded = JSON.stringify((options.excludeUrlPrefixes ?? []).filter(Boolean));
+  return (
+    "(async()=>{const roots=" + roots + ";const linkSel=" + linkSelector + ";const min=" + minResults + ";const limit=" + limit + ";const textLimit=" + textLimit + ";const excluded=" + excluded + ";" +
+    "const skip=(u)=>excluded.some(p=>u.indexOf(p)===0);" +
+    "const pickRoot=()=>{for(const s of roots){const el=document.querySelector(s);if(el)return el;}return document.body||document.documentElement;};" +
+    "const normalize=(href)=>{let u=href||'';if(u.startsWith('/url?q=')){try{u=decodeURIComponent(u.split('/url?q=')[1].split('&')[0]);}catch{}}" +
+    "try{if(u.startsWith('/'))u=new URL(u,location.href).href;}catch{}return u;};" +
+    "const collect=()=>{const root=pickRoot();const links=[];const seen=new Set();" +
+    "for(const a of root.querySelectorAll(linkSel)){const href=a.getAttribute('href')||'';const url=normalize(href);const title=(a.innerText||a.textContent||'').trim();" +
+    "if(url&&title&&title.length>2&&(url.startsWith('http')||href.startsWith('/url'))){if(skip(url))continue;const key=url;if(!seen.has(key)){seen.add(key);links.push({title:title.slice(0,150),url});}}" +
+    "if(links.length>=limit)break;}" +
+    "return {root,links};};" +
+    "const start=Date.now();let result={links:[]};try{result=collect();}catch{}while(Date.now()-start<12000&&result.links.length<min){await new Promise(r=>setTimeout(r,400));try{result=collect();}catch{}}" +
+    "return {count:result.links.length,links:result.links,text:((result.root.innerText||'').slice(0,textLimit).trim())};})()"
+  );
+}
+
+/** 抓取 Google 搜索结果：等待结果容器内出现 ≥3 条真实结果链接后，取前 10 条（标题 + 链接 + 正文摘要）。
+ *  内置排除 Google 自家 UI 链接（翻译此页/图片/地图/账户等）——仅此处内置，通用 searchResultsExpr 由模板声明。 */
 function googleResultsExpr(): string {
   return (
     "(async()=>{const start=Date.now();" +
+    "const BAD=['/search?','/imgres','/preferences','/advanced_search','/intl/','/settings','/webhp','/maps','/shopping','/finance','/news','/videos','/books','/scholar','/translate','/travel','/support','/policies','/accounts'];" +
+    "const skip=(u)=>u.indexOf('google.')>=0&&BAD.some(b=>u.indexOf(b)>=0);" +
     "const hasResults=()=>{const s=document.querySelector('#search')||document.querySelector('#rso')||document.querySelector('#center_col');" +
     "if(!s)return false;const as=s.querySelectorAll('a');let n=0;for(const a of as){const h=a.getAttribute('href')||'';" +
     "if(h.startsWith('http')||h.startsWith('/url?q=')){if((a.innerText||'').trim().length>2)n++;}}return n>=3;};" +
     "while(Date.now()-start<12000){if(hasResults())break;await new Promise(r=>setTimeout(r,400));}" +
-    "const root=document.querySelector('#search')||document.querySelector('#rso')||document.querySelector('#center_col')||document.body;" +
+    "const root=document.querySelector('#search')||document.querySelector('#rso')||document.querySelector('#center_col')||document.body||document.documentElement;" +
     "const links=[];const seen=new Set();" +
     "for(const a of root.querySelectorAll('a')){const href=a.getAttribute('href')||'';let u=href;" +
     "if(href.startsWith('/url?q=')){try{u=decodeURIComponent(href.split('/url?q=')[1].split('&')[0]);}catch{}}" +
     "const t=(a.innerText||'').trim();" +
-    "if(u&&t&&t.length>2&&(u.startsWith('http')||href.startsWith('/url'))){" +
-    "const key=u;if(!seen.has(key)){seen.add(key);links.push({title:t.slice(0,150),url:u});}" +
-    "if(links.length>=10)break;}}" +
+    "if(u&&t&&t.length>2&&(u.startsWith('http')||href.startsWith('/url'))){u=new URL(u,location.href).href;if(skip(u))continue;" +
+    "const key=u;if(!seen.has(key)){seen.add(key);links.push({title:t.slice(0,150),url:u});}}" +
+    "if(links.length>=10)break;}" +
     "const text=(root.innerText||'').slice(0,6000).trim();" +
     "return {count:links.length,links,text};})()"
   );
@@ -209,10 +257,10 @@ function builtinTemplates(): Template[] {
       steps: "commands",
       body: [
         { name: "open_tab", args: { url: "https://www.google.com" }, note: "打开 Google 首页" },
-        { name: "js", args: { expression: "@focus" }, expect: "true", note: "等待并聚焦搜索框" },
+        { name: "js", args: { expression: "@focus" }, expectations: [{ path: "value", equals: true }], note: "等待并聚焦搜索框" },
         { name: "fill", args: { selector: "[data-bp-focus]", value: "$query" }, note: "填入关键词" },
-        { name: "press", args: { key: "Enter" }, note: "提交搜索" },
-        { name: "waitForURL", args: { pattern: "google.com/search", partial: true, timeoutMs: 20000 }, note: "等待结果页加载" },
+        { name: "press", args: { key: "Enter", selector: "[data-bp-focus]" }, note: "重新聚焦搜索框并提交搜索" },
+        { name: "waitForSelector", args: { selector: "#search,#rso,#center_col", visible: true, timeoutMs: 20000 }, note: "等待搜索结果 DOM，不依赖地区域名或 URL 形态" },
         { name: "js", args: { expression: "@results" }, note: "抓取搜索结果" },
       ],
       tokenStrategy: { defaultL0: true },
@@ -307,6 +355,8 @@ async function hashTemplate(template: Template): Promise<string> {
   return "sha256:" + [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+let legacyMigration: Promise<Record<string, InstalledTemplateRecord>> | null = null;
+
 async function loadInstalled(): Promise<Record<string, InstalledTemplateRecord>> {
   const raw = await chrome.storage.local.get([STORE_KEY, LEGACY_STORE_KEY]);
   const current = (raw[STORE_KEY] as Record<string, InstalledTemplateRecord> | undefined) ?? {};
@@ -314,21 +364,25 @@ async function loadInstalled(): Promise<Record<string, InstalledTemplateRecord>>
   if (raw[STORE_KEY] !== undefined) return current;
   const legacy = (raw[LEGACY_STORE_KEY] as Record<string, Template> | undefined) ?? {};
   if (!Object.keys(legacy).length) return current;
-  const now = Date.now();
-  const migrated: Record<string, InstalledTemplateRecord> = {};
-  for (const [id, template] of Object.entries(legacy)) {
-    migrated[id] = {
-      template,
-      enabled: true,
-      source: { type: "local" },
-      installedAt: now,
-      updatedAt: now,
-      contentHash: await hashTemplate(template),
-    };
-  }
-  await saveInstalled(migrated);
-  await chrome.storage.local.remove(LEGACY_STORE_KEY);
-  return migrated;
+  // 并发调用（如一次 dispatch 内多个模板命令）只做一次迁移，避免双写。
+  legacyMigration ??= (async () => {
+    const now = Date.now();
+    const migrated: Record<string, InstalledTemplateRecord> = {};
+    for (const [id, template] of Object.entries(legacy)) {
+      migrated[id] = {
+        template,
+        enabled: true,
+        source: { type: "local" },
+        installedAt: now,
+        updatedAt: now,
+        contentHash: await hashTemplate(template),
+      };
+    }
+    await saveInstalled(migrated);
+    await chrome.storage.local.remove(LEGACY_STORE_KEY);
+    return migrated;
+  })();
+  return legacyMigration;
 }
 
 async function saveInstalled(map: Record<string, InstalledTemplateRecord>): Promise<void> {
@@ -341,9 +395,9 @@ async function resolveInstalledRecord(id: string): Promise<InstalledTemplateReco
 }
 
 export async function resolveTemplateById(id: string, includeDisabled = false): Promise<Template | undefined> {
-  if (BUILTINS[id]) return BUILTINS[id];
   const record = await resolveInstalledRecord(id);
-  return record && (includeDisabled || record.enabled) ? record.template : undefined;
+  if (record && (includeDisabled || record.enabled)) return record.template;
+  return BUILTINS[id];
 }
 
 function templateCapabilities(template: Template): string[] {
@@ -353,7 +407,7 @@ function templateCapabilities(template: Template): string[] {
 
 export async function listTemplates(): Promise<unknown[]> {
   const installed = await loadInstalled();
-  const builtins = Object.values(BUILTINS).map((t) => ({
+  const builtins = Object.values(BUILTINS).filter((t) => !installed[t.id]).map((t) => ({
     id: t.id,
     name: t.name,
     version: t.version ?? "0.0.0",
@@ -390,6 +444,8 @@ export async function listTemplates(): Promise<unknown[]> {
     risk: r.template.discovery?.risk ?? "write",
     aliases: r.template.discovery?.aliases ?? [],
     builtin: false,
+    overridesBuiltin: !!BUILTINS[r.template.id],
+    fallbackBuiltin: !!BUILTINS[r.template.id],
     enabled: r.enabled,
     source: r.source,
     installedAt: r.installedAt,
@@ -459,8 +515,11 @@ export async function installTemplate(cmd: Command): Promise<unknown> {
       ? await fetchSource(source)
       : "";
   if (!content) throw new Error("install_template 需要 content、url 或 GitHub source");
+  // fetchSource 对远端有同样限制；content 直传路径也必须受约束（媒体走 download 通道）。
+  if (content.length > MAX_TEMPLATE_DEFINITION_BYTES) {
+    throw new Error("模板定义文件超过 1MB 限制（媒体资源请使用外部 URL/下载通道）");
+  }
   const template = parseTemplateContent(content);
-  if (BUILTINS[template.id]) throw new Error("不能覆盖内置模板: " + template.id);
   const records = await loadInstalled();
   const existing = records[template.id];
   const now = Date.now();
@@ -477,7 +536,16 @@ export async function installTemplate(cmd: Command): Promise<unknown> {
       : undefined,
   };
   await saveInstalled(records);
-  return { installed: true, id: template.id, name: template.name, version: template.version ?? "0.0.0", source, contentHash, updated: !!existing };
+  return {
+    installed: true,
+    id: template.id,
+    name: template.name,
+    version: template.version ?? "0.0.0",
+    source,
+    contentHash,
+    updated: !!existing,
+    overridesBuiltin: !!BUILTINS[template.id],
+  };
 }
 
 export async function importTemplate(cmd: Command): Promise<unknown> {
@@ -485,7 +553,8 @@ export async function importTemplate(cmd: Command): Promise<unknown> {
   if (args.id) {
     const t = await resolveTemplateById(args.id);
     if (!t) throw new Error("未找到要导入的模版: " + args.id);
-    return { imported: true, id: t.id, builtin: !!BUILTINS[t.id], name: t.name };
+    const installed = await resolveInstalledRecord(t.id);
+    return { imported: true, id: t.id, builtin: !installed && !!BUILTINS[t.id], name: t.name };
   }
   if (typeof args.content === "string" && args.content.trim()) {
     const installed = await installTemplate(cmd) as { id: string; name: string };
@@ -497,25 +566,29 @@ export async function importTemplate(cmd: Command): Promise<unknown> {
 export async function uninstallTemplate(cmd: Command): Promise<unknown> {
   const id = String(cmd.args?.id ?? "");
   if (!id) throw new Error("uninstall_template 需要 id");
-  if (BUILTINS[id]) throw new Error("内置模板不能卸载");
   const records = await loadInstalled();
-  if (!records[id]) throw new Error("未安装模板: " + id);
+  if (!records[id]) {
+    if (BUILTINS[id]) throw new Error("内置模板不能卸载");
+    throw new Error("未安装模板: " + id);
+  }
   delete records[id];
   await saveInstalled(records);
-  return { uninstalled: true, id };
+  return { uninstalled: true, id, restoredBuiltin: !!BUILTINS[id] };
 }
 
 export async function setTemplateEnabled(cmd: Command): Promise<unknown> {
   const id = String(cmd.args?.id ?? "");
   const enabled = cmd.args?.enabled;
   if (!id || typeof enabled !== "boolean") throw new Error("set_template_enabled 需要 id 和 enabled:boolean");
-  if (BUILTINS[id]) throw new Error("内置模板暂不支持禁用");
   const records = await loadInstalled();
-  if (!records[id]) throw new Error("未安装模板: " + id);
+  if (!records[id]) {
+    if (BUILTINS[id]) throw new Error("内置模板暂不支持禁用");
+    throw new Error("未安装模板: " + id);
+  }
   records[id].enabled = enabled;
   records[id].updatedAt = Date.now();
   await saveInstalled(records);
-  return { id, enabled };
+  return { id, enabled, fallbackBuiltinActive: !enabled && !!BUILTINS[id] };
 }
 
 export async function checkTemplateUpdate(cmd: Command): Promise<unknown> {
@@ -635,7 +708,16 @@ export async function getTemplateDetail(cmd: Command): Promise<unknown> {
   const local = await resolveTemplateById(id, true);
   if (local) {
     const record = await resolveInstalledRecord(id);
-    return { id, installed: !!record || !!BUILTINS[id], builtin: !!BUILTINS[id], template: local, markdown: toMarkdown(local), record };
+    return {
+      id,
+      installed: !!record || !!BUILTINS[id],
+      builtin: !record && !!BUILTINS[id],
+      overridesBuiltin: !!record && !!BUILTINS[id],
+      fallbackBuiltin: !!BUILTINS[id],
+      template: local,
+      markdown: toMarkdown(local),
+      record,
+    };
   }
   const cache = await getRegistryCache(cmd);
   const entry = cache.templates.find((item) => String(item.id) === id);
@@ -786,6 +868,10 @@ function runOne(cmd: Command): Promise<unknown> {
   return runner(cmd);
 }
 
+const VISIBLE_BEFORE_STEP = new Set<string>([
+  "snapshot", "readText", "screenshot", "scroll_screenshot", "js", "waitForURL", "waitForSelector", "pageInfo",
+]);
+
 function substValue(value: unknown, params: Record<string, unknown>): unknown {
   if (typeof value === "string") {
     return value.replace(/\{\{\s*([A-Za-z0-9_]+)\s*\}\}|\$([A-Za-z0-9_]+)/g, (m, a, b) => {
@@ -824,10 +910,8 @@ async function runStepWithRetry(step: TemplateStep, stepCmd: Command): Promise<u
   for (let attempt = 0; attempt <= retry; attempt++) {
     try {
       const res = await runOne(stepCmd);
-      if (step.expect) {
-        const s = JSON.stringify(res ?? {});
-        if (!s.includes(step.expect)) throw new Error("expect 未命中: " + step.expect);
-      }
+      const failure = checkStepExpect(res, step.expect, step.expectations);
+      if (failure) throw new Error(failure);
       return res;
     } catch (e) {
       lastErr = e;
@@ -908,10 +992,22 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     }
     // @focus：搜索框聚焦表达式；@results：搜索结果抓取表达式
     if (typeof stepArgs.expression === "string" && stepArgs.expression === "@focus") {
-      stepArgs.expression = focusBestExpr(GOOGLE_CANDS);
+      stepArgs.expression = focusBestExpr(stringList(stepArgs.selectors ?? params.focusSelectors, GOOGLE_CANDS));
     }
     if (typeof stepArgs.expression === "string" && stepArgs.expression === "@results") {
-      stepArgs.expression = googleResultsExpr();
+      const hasDeclaredSearch = Array.isArray(stepArgs.rootSelectors) || Array.isArray(params.resultRootSelectors);
+      if (hasDeclaredSearch) {
+        stepArgs.expression = searchResultsExpr({
+          rootSelectors: stringList(stepArgs.rootSelectors ?? params.resultRootSelectors, ["#search", "#rso", "#center_col"]),
+          linkSelector: typeof stepArgs.linkSelector === "string" ? stepArgs.linkSelector : undefined,
+          minResults: Number(stepArgs.minResults ?? params.minResults ?? 3),
+          limit: Number(stepArgs.limit ?? params.limit ?? 10),
+          textLimit: Number(stepArgs.textLimit ?? params.textLimit ?? 6000),
+          excludeUrlPrefixes: stringList(stepArgs.excludeUrlPrefixes ?? params.excludeUrlPrefixes, []),
+        });
+      } else {
+        stepArgs.expression = googleResultsExpr();
+      }
     }
     // @write：把 $prompt 安全写入富文本编辑器（mode 决定 Gemini-Quill / ChatGPT-ProseMirror），并记录回复基线
     if (typeof stepArgs.expression === "string" && stepArgs.expression === "@write") {
@@ -928,12 +1024,26 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     if (TAB_SCOPED.has(step.name) && currentTab !== undefined && stepArgs.tabId === undefined) {
       stepArgs.tabId = currentTab;
     }
+    const visibleTab = typeof stepArgs.tabId === "number" && Number.isFinite(stepArgs.tabId) ? Number(stepArgs.tabId) : currentTab;
+    if (visibleTab !== undefined && VISIBLE_BEFORE_STEP.has(step.name) && stepArgs.ensureVisible !== false) {
+      await runOne({
+        type: "command",
+        name: "ensure_visible",
+        args: { tabId: visibleTab },
+        requestId: cmd.requestId + ":" + i + ":visible",
+        space: cmd.space,
+        _clientId: cmd._clientId,
+        _foregroundLeaseToken: cmd._foregroundLeaseToken,
+      });
+    }
     const stepCmd: Command = {
       type: "command",
       name: step.name,
       args: stepArgs,
       requestId: cmd.requestId + ":" + i,
       space: cmd.space,
+      _clientId: cmd._clientId,
+      _foregroundLeaseToken: cmd._foregroundLeaseToken,
     };
     try {
       lastResult = await runStepWithRetry(step, stepCmd);

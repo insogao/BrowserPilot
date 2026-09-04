@@ -9,7 +9,7 @@
 ## 0. 一句话
 
 一个模板 = **一段编排描述**：把「打开页面 → 观测 → 动作 → 回收结果」写成一条命令序列（`steps:"commands"`）。
-外部 AI/CLI 发 `run_template {id, params}` 即可，命中即返回结果；跑不通会返回**结构化失败上下文**（failback）。
+外部 AI/CLI 发 `run_template {id, params}` 即可，命中即返回结果；跑不通会返回**结构化失败上下文**（failback）。新增站点适配默认走运行时模板安装，不需要重新编译扩展；普通 Chrome 商店用户没有源码，也不会运行 npm。模板安装后保存在 `chrome.storage.local`，插件本体不变。
 
 ## 1. 三种载体类型（`steps`）
 
@@ -55,8 +55,8 @@
 
 | 占位 | 展开为 | 用途 |
 |---|---|---|
-| `@focus` | `focusBestExpr(GOOGLE_CANDS)` | 等待并聚焦页面上可见输入区，打上 `data-bp-focus` 标（供 fill 命中）；返回布尔，**配 `expect:"true"`** |
-| `@results` | `googleResultsExpr()` | 抓 Google 搜索结果：等 ≥3 条真实链接后取前 10（`{count,links,text}`） |
+| `@focus` | `focusBestExpr(...)` | 等待并聚焦页面上可见输入区，打上 `data-bp-focus` 标（供 fill 命中）；搜索模板用 `selectors:[...]` 声明候选选择器；返回布尔，**配 `expect:"true"`** |
+| `@results` | `searchResultsExpr(...)` | 抓搜索结果：模板用 `rootSelectors/linkSelector/minResults/limit/textLimit` 声明解析规则，等 ≥N 条真实链接后返回 `{count,links,text}` |
 | `@write` | `aiWriteExpr(mode, $prompt)`（**需 `mode` 参数**） | 把 prompt 安全写入富文本编辑器，并记录回复基线 `window.__bpPrevMsg`（发送前最后一条消息容器的消息 ID 锚点） |
 | `@chatCollect` | `aiCollectExpr(mode)`（**需 `mode` 参数**） | 回收「基线后新增的**全部** AI 回复容器」（Gemini Choice A/B 各一个 `.markdown` 全收、多图一次集齐不漏图；去前缀/后缀，流式稳定≈5s 后返回 `{text, images[], url, title}`） |
 | `@collect` | `collectFeedbackExpr(responseSelector)` | 通用整页/指定容器文本回收（非站点特定） |
@@ -69,7 +69,7 @@
 - 起始 `currentTab` = `params.tabId`（或 `run_template` 顶层 `tabId`）。
 - 遇到 `open_tab` 成功返回 `{tabId}` 后，`currentTab` 自动更新为新标签 id。
 
-## 4. 一条谷歌搜索模板长什么样（照抄即可）
+## 4. 搜索模板长什么样（照抄即可）
 
 ```ts
 {
@@ -88,6 +88,8 @@
   tokenStrategy: { defaultL0: true },
 }
 ```
+
+内置搜索模板只代表随插件分发的少量基线能力。后续新增搜索引擎不要再改 `src/background/templates.ts`：在模板文件里声明选择器与结果根节点，然后通过看板、`install_template` 或 Registry 安装即可。
 
 ## 5. AI 聊天模板的写/回收规范（重点）
 
@@ -153,7 +155,7 @@
 
 ## 7. 新增模板的两条路
 
-### A. 运行时模板（不改代码，推荐先用这个试）
+### A. 运行时模板（不改代码，新增站点默认走这里）
 - 组装一个 Template 对象，转成 JSON（或 markdown 内嵌 ```json``` 块）。
 - 发 `import_template {content: "<JSON>"}` → 存进 `storage.local`（`browserpilot.templates.v1`）。
 - 之后 `run_template {id, params}` 即可。无需重建、无需重载 SW。
@@ -162,13 +164,13 @@
 {"type":"command","name":"import_template","args":{"content":"{\"id\":\"my-bing\",\"name\":\"必应搜索\",\"category\":\"search\",\"inputs\":[{\"name\":\"query\",\"type\":\"string\",\"required\":true}],\"steps\":\"commands\",\"body\":[{\"name\":\"open_tab\",\"args\":{\"url\":\"https://www.bing.com\"}},{\"name\":\"js\",\"args\":{\"expression\":\"@focus\"},\"expect\":\"true\"},{\"name\":\"fill\",\"args\":{\"selector\":\"[data-bp-focus]\",\"value\":\"$query\"}},{\"name\":\"press\",\"args\":{\"key\":\"Enter\"}},{\"name\":\"waitForURL\",\"args\":{\"pattern\":\"bing.com/search\",\"partial\":true,\"timeoutMs\":20000}},{\"name\":\"js\",\"args\":{\"expression\":\"@results\"}}]}"},"requestId":"1"}
 ```
 
-### B. 内置模板（稳定后固化成代码，随包分发）
+### B. 内置模板（只给插件内置基线能力用，不是普通用户安装路径）
 1. 在 `src/background/templates.ts` 的 `builtinTemplates()` 里加一个对象（照 §4 格式）。
 2. `npm run typecheck` + `node scripts/build.js` 重建 `dist/`。
 3. 重载扩展 SW（`reload` 命令或手动），发 `export_template {id, as:"md"}` 把 markdown 存到 `templates/<id>.md` 作为权威产物。
 
 ### 建议流程
-先用 **A 在真机试跑**，调通后再走 **B 固化**，避免反复改代码/重打包。
+先用 **A 在真机试跑**，调通后发布到 Registry；只有少量“默认随插件分发”的基线模板才走 **B 固化**，避免反复改代码/重打包。`npm run registry:build` 只属于维护者/CI 的发布流程，不是终端用户安装模板的步骤。
 
 ## 8. Registry 与命令参考
 
@@ -195,6 +197,7 @@
 Registry Protocol v1.1 规定每个公开模板使用目录包 `registry/templates/<id>/`，其中 `template.json` 是唯一真源，README/CHANGELOG/examples/tests 为配套资源。catalog 和详情 Markdown 通过 `npm run registry:build` 生成，CI 运行 `npm run registry:check`，禁止手工维护两套功能列表与详情数据。
 
 > `run_template` 顶层 `tabId` 会并入 params，使 `skipWhenParam:"tabId"` 与 `TAB_SCOPED` 注入生效（复用标签、不新开）。
+> `run_template` 会在观测、JS、截图和等待类步骤前自动恢复并聚焦目标窗口，降低最小化/后台渲染节流；步骤 args 可设置 `ensureVisible:false` 关闭。
 
 ## 9. 注意事项 / 坑
 

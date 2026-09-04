@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "google-scholar-search",
+    "params": {
+      "query": "deep learning transformers"
+    }
+  },
+  "expect": {
+    "minLinks": 1,
+    "contains": "transformer"
+  }
+}

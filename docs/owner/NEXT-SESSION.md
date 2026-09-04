@@ -1,0 +1,60 @@
+---
+type: SessionHandoff
+status: stable
+generated: { by: zcode, at: 2026-09-05T02:30:00+08:00 }
+stale_after: 2026-09-19
+---
+
+# 下一会话交接
+
+更新时间：2026-09-05 02:30 +08:00
+
+## 当前结论
+
+macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 由 Chrome 拉起，命令往返正常）。随后按 code review 清单完成 13 项修复，全部逐项验证。本仓库继续在 macOS 开发；Windows 部署链保留未动。
+
+**真实 smoke（2026-09-05 mac 真机）**：
+
+| 模板 | 状态 | 证据 |
+|---|---|---|
+| `search` | passed | 10 条结果，UI 链接已被 excludeUrlPrefixes 过滤；mac 区域版 Google 结果链接为 `/goto?url=` 跳转形态（真实结果，非 UI 噪音） |
+| `search-demo` | passed | 10 条结果 |
+| `bing-search` | passed ×4 连续 | flaky 根因已修（见下）；修复前复现为"首跑失败、重跑成功" |
+| `chatgpt-ask` / `gemini-ask` / `x-search` / `baidu-search` / `google-finance-search` / `google-scholar-search` | 未重测 | 上次真实证据仍以 2026-09-04（Windows）为准；scholar/gemini 保持 blocked |
+
+## 2026-09-05 修复清单（全部已验证）
+
+1. **debugger attach 自愈**（P1）：`attach()` catch "already attached" 后发探针命令区分自身遗留与外部调试器；SW 回收后动作命令不再永久失败。新增 core 测试。
+2. **前台租约自占用文案**：同 Agent 并发第二命令报 FOREGROUND_BUSY 时明确"同一 Agent 有命令正在使用前台"，不再误称"其他 Agent"。core 测试覆盖。
+3. **takeover 接管锁持久化**：`state.humanTakeoverTabIds` + `restoreMaskState()`（SW 启动时由 registerMaskHandlers 恢复）；SW 重启后"人工接管"不丢失。core 测试模拟重启验证。
+4. **模板结构化断言 `expectations`**：`path/equals/includes/min/exists` 点路径断言（`template-schema.checkStepExpect`），旧 `expect` 子串兼容保留；`validateTemplate` 校验形状。内置 search 的 `expect:"true"` 已升级。core 测试覆盖弱断言误判场景。
+5. **host.js 加固**：token 常数时间比较；requestId 原样回传（对象型不再互相串扰）；pending 上限 512。
+6. **install_template content 1MB 上限**（此前只约束 fetch 路径）；`drainEvents` 返回 `generation`（SW 重启可检测游标失效）；移除 `getHostPort` 死代码；`loadInstalled` v1→v2 迁移并发防护。
+7. **smoke-template 超时对齐**：run_template 外层 180s→600s（与 client 内部一致），超时报错带最后 300 字符输出。
+8. **run-site-regression 收尾自动 `registry:check`**：Adapter 改模板后 catalog 过期会在回归中直接暴露（此前"全绿回归"后 check 仍红）。
+9. **stop 作用域语义**：Agent 身份调用只清自己的空间/租约/遮罩/attach（且仅在自己持有前台租约时取消模板运行代际）；popup/options（browserpilot-internal）保持全局清理。源码断言测试 + guide 文案更新。
+10. **QUALITY-GATES 漂移修正**：明确 `agents:regression` 只覆盖动态包；内置兜底回归需先 `uninstall_template` 再 smoke（smoke 对已有动态包的模板测到的是动态版本，builtinOrder 机制无法直测内置）。
+11. **@results 表达式两处硬修复**（额外发现）：
+    - **语法错误**：`collect` 收尾 `break;}}` 多关一层，`return`/`const start` 被挤出函数体——`searchResultsExpr`/`googleResultsExpr` 生成的页面代码**从未在 V8 下合法过**；9-04 的 smoke passed 是因为 Windows 上 dist 为旧构建。已修复 + 新增 core 语法守卫（esbuild 转译真实生成函数 → new Function 解析）。
+    - **Google UI 链接过滤**：内置 googleResultsExpr 内置排除表；通用 searchResultsExpr 新增模板声明式 `excludeUrlPrefixes`（search 动态包已声明）。不做全局内置——finance 需要抓 `/finance/quote` 前缀。
+12. **bing-search flaky 根因修复**：`waitForURL` 通过时新文档 body 尚未创建，`pickRoot()` 返回 null → `querySelectorAll` TypeError（不在瞬态重试名单）→ 首跑失败。修复：pickRoot 兜底 `documentElement` + collect 调用包 try/catch 交给既有重试循环。修复后 4 连 smoke 通过。
+13. **export_guide 平台兜底**：user-data-dir/chromeExe 占位值按平台显示（此前恒为 Windows 路径）。
+
+## 门禁状态（2026-09-05 全绿）
+
+`doctor`、`typecheck`、`test:core`（12/12，含新增 4 项）、`test:host`、`test:profile`（6/6）、`registry:build` + `registry:check`。`dist/` 已重建并 reload 到运行中的扩展。
+
+## 下一步优先级
+
+1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。
+2. 若要回归扩展内置兜底版本：先 `uninstall_template` 对应动态包，再 `npm run smoke:template -- <id>`（见 QUALITY-GATES 说明），测完重装动态包。
+3. 完整回归 `npm run agents:regression`（opencode 外部 Agent 串行队列）——需要时再派发。
+4. Review 遗留低优先级：事件缓冲跨重启的游标协议（generation 已提供基础）、第三方模板安装的 UI 风险提示。
+
+## 已知风险
+
+- mac wrapper 内嵌 homebrew node 绝对路径；node 升级/迁移后重跑 `npm run register-host:mac`。
+- Google（mac 区域）结果链接为 `/goto?url=` 跳转形态；如需最终 URL 可在消费端解析或后续增强 normalize。
+- `set_humanize` 仍未实现；单 Chrome profile 共享 cookie、可见操作串行。
+- 模板 `expect` 子串匹配仍对存量动态包生效（bing/baidu/x/finance 等包内 `expect:"true"` 未逐个升级为 expectations，行为兼容、精度弱）。
+- 仓库无 git：无法追溯"表达式语法何时引入"；建议尽早 `git init` 建立基线（需用户授权）。

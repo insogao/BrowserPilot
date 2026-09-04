@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "gemini-ask",
+    "params": {
+      "prompt": "Reply with exactly BP_GEMINI_SMOKE_20260904"
+    }
+  },
+  "expect": {
+    "contains": "BP_GEMINI_SMOKE_20260904"
+  }
+}
+

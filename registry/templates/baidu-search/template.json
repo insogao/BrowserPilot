@@ -1,0 +1,78 @@
+{
+  "id": "baidu-search",
+  "name": "百度搜索",
+  "version": "1.2.0",
+  "description": "在百度搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。",
+  "category": "search",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "搜索关键词"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": { "url": "https://www.baidu.com" },
+      "note": "打开百度首页"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@focus",
+        "selectors": ["#chat-textarea", "textarea[name=wd]", "#kw"]
+      },
+      "expect": "true",
+      "note": "等待并聚焦搜索框"
+    },
+    {
+      "name": "fill",
+      "args": { "selector": "[data-bp-focus]", "value": "$query" },
+      "note": "填入关键词"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const f=document.querySelector('#form');if(f){f.submit();return true;}return false;})()"
+      },
+      "expect": "true",
+      "note": "提交表单（#chat-textarea 在 #form 外，press Enter 不可靠）"
+    },
+    {
+      "name": "waitForURL",
+      "args": { "pattern": "baidu.com/s", "partial": true, "timeoutMs": 20000 },
+      "note": "等待结果页加载"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@results",
+        "rootSelectors": ["#content_left", ".result", ".c-container"],
+        "linkSelector": "h3 a,.t a",
+        "minResults": 3,
+        "limit": 10,
+        "textLimit": 6000
+      },
+      "note": "抓取搜索结果"
+    }
+  ],
+  "tokenStrategy": { "defaultL0": true },
+  "scope": {
+    "sites": ["baidu.com"]
+  },
+  "discovery": {
+    "intents": ["search", "web.search"],
+    "keywords": ["百度", "baidu", "搜索", "search"],
+    "outputs": [
+      { "name": "count", "type": "number", "description": "返回结果条数" },
+      { "name": "links", "type": "array", "description": "搜索结果列表，每项含title和url" },
+      { "name": "text", "type": "string", "description": "结果页纯文本摘要" }
+    ],
+    "risk": "read",
+    "aliases": ["baidu", "bd-search"],
+    "browserpilot": ">=0.1.0"
+  }
+}

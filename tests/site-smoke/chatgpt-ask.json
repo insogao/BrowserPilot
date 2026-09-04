@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "chatgpt-ask",
+    "params": {
+      "prompt": "Reply with exactly BP_CHATGPT_SMOKE_20260904"
+    }
+  },
+  "expect": {
+    "contains": "BP_CHATGPT_SMOKE_20260904"
+  }
+}
+

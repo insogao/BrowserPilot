@@ -1,0 +1,84 @@
+{
+  "id": "bing-search",
+  "name": "必应搜索",
+  "version": "1.2.2",
+  "description": "在必应搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。",
+  "category": "search",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "搜索关键词"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": { "url": "https://www.bing.com" },
+      "note": "打开必应首页"
+    },
+    {
+      "name": "waitForSelector",
+      "args": { "selector": "#sb_form_q", "visible": true, "timeoutMs": 20000 },
+      "note": "等待搜索框出现"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const deadline=Date.now()+15000;while(Date.now()<deadline&&document.readyState!==\"complete\")await new Promise(r=>setTimeout(r,200));const sels=[\"#sb_form_q\",\"input[name=q]\",\"input[type=search]\"];const start=Date.now();while(Date.now()-start<10000){let el=null;for(const s of sels){const c=document.querySelector(s);if(c&&c.offsetParent!==null){el=c;break;}}if(!el){const all=document.querySelectorAll(\"input[type=text],input[type=search],textarea,[contenteditable=true]\");for(const c of all){if(c.offsetParent!==null){el=c;break;}}}if(el){el.focus();el.setAttribute(\"data-bp-focus\",\"1\");return true;}await new Promise(r=>setTimeout(r,400));}return false;})()"
+      },
+      "expect": "true",
+      "note": "等待页面就绪后聚焦搜索框"
+    },
+    {
+      "name": "type",
+      "args": { "value": "$query", "typingDelayMs": 30 },
+      "note": "逐字输入关键词"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": { "ms": 500 },
+      "note": "等待输入事件处理"
+    },
+    {
+      "name": "press",
+      "args": { "key": "Enter" },
+      "note": "提交搜索"
+    },
+    {
+      "name": "waitForURL",
+      "args": { "pattern": "bing.com/search", "partial": true, "timeoutMs": 20000 },
+      "note": "等待结果页加载"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@results",
+        "rootSelectors": ["#b_results"],
+        "linkSelector": "li.b_algo h2 a",
+        "minResults": 3,
+        "limit": 10,
+        "textLimit": 6000
+      },
+      "note": "抓取搜索结果"
+    }
+  ],
+  "tokenStrategy": { "defaultL0": true },
+  "scope": {
+    "sites": ["bing.com"]
+  },
+  "discovery": {
+    "intents": ["search", "web.search"],
+    "keywords": ["必应", "bing", "搜索", "search", "microsoft"],
+    "outputs": [
+      { "name": "count", "type": "number", "description": "返回结果条数" },
+      { "name": "links", "type": "array", "description": "搜索结果列表，每项含title和url" },
+      { "name": "text", "type": "string", "description": "结果页纯文本摘要" }
+    ],
+    "risk": "read",
+    "aliases": ["bing", "ms-search"],
+    "browserpilot": ">=0.1.0"
+  }
+}

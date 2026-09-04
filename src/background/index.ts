@@ -1,15 +1,14 @@
 // SW 入口：初始化和消息路由。
 // 对齐技术路径 M1（骨架/三入口/保活）+ M2（host 连接）。
-import { connectHost } from "./native-bridge";
+import { connectHost, isHostConnected } from "./native-bridge";
 import { loadState, patchState } from "./state";
 import { buildGuideFromCmd, dispatch } from "./commands";
-import { registerMaskHandlers, requestTakeover, isHumanTakeover, isMaskActive } from "./mask";
-import { bindActiveTab } from "./tab-resolver";
+import { registerMaskHandlers, requestTakeover, isHumanTakeover, maskOff } from "./mask";
 import { isAttached } from "./debugger-bridge";
 import type { PopupGuide, PopupRequest, PopupStatus } from "../shared/types";
+import { claimSpaceForTab, registerSpaceLifecycleHandlers } from "./spaces";
 
 const HEARTBEAT = "browserpilot.heartbeat";
-const CONTEXT_ITEM = "browserpilot.takeover";
 
 async function init(): Promise<void> {
   await chrome.alarms.create(HEARTBEAT, { periodInMinutes: 0.5 }); // ~30s
@@ -17,11 +16,6 @@ async function init(): Promise<void> {
 }
 
 chrome.runtime.onInstalled.addListener((details) => {
-  chrome.contextMenus.create({
-    id: CONTEXT_ITEM,
-    title: "在本页使用 Agent",
-    contexts: ["page"],
-  });
   void init();
   if (details.reason === "install") void chrome.runtime.openOptionsPage();
 });
@@ -36,13 +30,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await connectHost();
     const s = await loadState();
     await patchState({ startTime: s.startTime }); // 触碰存储以保持活跃
-  }
-});
-
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === CONTEXT_ITEM && tab?.id !== undefined) {
-    await patchState({ activeSpaceId: String(tab.windowId) });
-    await bindActiveTab(String(tab.windowId));
   }
 });
 
@@ -71,31 +58,47 @@ async function handlePopup(msg: PopupRequest): Promise<unknown> {
       const tabId = tab?.id;
       const attached = tabId !== undefined && isAttached(tabId);
       const human = tabId !== undefined && isHumanTakeover(tabId);
-      const ready = tabId !== undefined && s.spaces[String(tab.windowId)]?.tabId === tabId;
+      const hostReady = isHostConnected() && typeof s.hostPort === "number" && Number.isFinite(s.hostPort);
+      const connected = !!s.agentActive;
       return {
         attached,
-        mode: human ? "human" : attached || (tabId !== undefined && isMaskActive(tabId)) ? "agent" : ready ? "ready" : "idle",
+        hostReady,
+        connected,
+        clientCount: s.externalClients ?? 0,
+        mode: human ? "human" : connected ? "agent" : "idle",
         tabId,
-        layer: attached ? "L1" : ready ? "L0" : undefined,
+        layer: attached ? "L1" : undefined,
         profile: s.profile,
         hostPort: s.hostPort,
       };
     }
-    case "use_current_tab": {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (tab?.id === undefined) return { attached: false, mode: "idle" };
-      await patchState({ activeSpaceId: String(tab.windowId) });
-      await bindActiveTab(String(tab.windowId));
-      return { attached: isAttached(tab.id), mode: isAttached(tab.id) ? "agent" : "ready", tabId: tab.id, layer: isAttached(tab.id) ? "L1" : "L0" };
-    }
     case "take_over": {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-      if (!tab?.id) return { attached: false };
-      await patchState({ activeSpaceId: String(tab.windowId) });
+      const s = await loadState();
+      if (!tab?.id || !s.agentActive) {
+        return { attached: false, hostReady: isHostConnected() && typeof s.hostPort === "number", connected: false, mode: "idle", profile: s.profile, hostPort: s.hostPort };
+      }
       // 用户点「接管」= 用户接管控制：取消蓝色遮罩 + 暂停 AI（与遮罩上「人工接管」按钮一致的通用路径）。
       // 不是弹遮罩——遮罩是「AI 在操作」时显示；用户点「接管」时应取消。
       requestTakeover(tab.id);
-      return { attached: isAttached(tab.id), mode: "human", tabId: tab.id, layer: isAttached(tab.id) ? "L1" : undefined };
+      return { attached: isAttached(tab.id), connected: true, mode: "human", tabId: tab.id, layer: isAttached(tab.id) ? "L1" : undefined };
+    }
+    case "resume_agent": {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab?.id) return { attached: false, connected: false, mode: "idle" };
+      await maskOff(tab.id);
+      await claimSpaceForTab(tab.id);
+      const s = await loadState();
+      return {
+        attached: isAttached(tab.id),
+        hostReady: isHostConnected() && typeof s.hostPort === "number",
+        connected: !!s.agentActive,
+        mode: s.agentActive ? "agent" : "idle",
+        tabId: tab.id,
+        layer: isAttached(tab.id) ? "L1" : undefined,
+        profile: s.profile,
+        hostPort: s.hostPort,
+      };
     }
     case "get_guide": {
       const s = await loadState();
@@ -121,4 +124,5 @@ async function handlePopup(msg: PopupRequest): Promise<unknown> {
 }
 
 registerMaskHandlers();
+registerSpaceLifecycleHandlers();
 void init();

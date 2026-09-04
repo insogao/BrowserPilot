@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "search",
+    "params": {
+      "query": "BrowserPilot"
+    }
+  },
+  "expect": {
+    "minLinks": 1
+  }
+}

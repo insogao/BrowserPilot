@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "search-demo",
+    "params": {
+      "query": "BrowserPilot"
+    }
+  },
+  "expect": {
+    "minLinks": 1,
+    "contains": "BrowserPilot"
+  }
+}

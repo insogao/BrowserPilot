@@ -12,7 +12,6 @@
     "storage",
     "alarms",
     "downloads",
-    "contextMenus",
     "nativeMessaging"
   ],
   "host_permissions": ["<all_urls>"],

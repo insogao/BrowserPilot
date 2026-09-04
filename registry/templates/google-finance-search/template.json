@@ -1,0 +1,64 @@
+{
+  "id": "google-finance-search",
+  "name": "Google Finance Search",
+  "version": "1.1.0",
+  "description": "Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.",
+  "category": "finance",
+  "inputs": [
+    { "name": "query", "type": "string", "required": true, "description": "Ticker symbol (e.g. AAPL) or company name (e.g. Apple)" }
+  ],
+  "steps": "commands",
+  "body": [
+    { "name": "open_tab", "args": { "url": "https://www.google.com/finance" }, "note": "Open Google Finance home page." },
+    {
+      "name": "waitForSelector",
+      "args": { "selector": "div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]", "timeoutMs": 15000 },
+      "note": "Wait for the search launcher button to appear."
+    },
+    {
+      "name": "click",
+      "args": { "selector": "div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]" },
+      "note": "Click the search launcher to reveal the search textarea."
+    },
+    {
+      "name": "waitForSelector",
+      "args": { "selector": "textarea[aria-label=\"Ask about this or search\"]", "timeoutMs": 10000 },
+      "note": "Wait for the search textarea to become visible."
+    },
+    { "name": "fill", "args": { "selector": "textarea[aria-label=\"Ask about this or search\"]", "value": "$query" }, "note": "Fill the search query." },
+    { "name": "press", "args": { "key": "Enter", "selector": "textarea[aria-label=\"Ask about this or search\"]" }, "note": "Submit the search query." },
+    {
+      "name": "waitForURL",
+      "args": { "pattern": "finance/beta/quote", "partial": true, "timeoutMs": 20000 },
+      "note": "Wait for navigation to a quote-result route (must not already match the homepage)."
+    },
+    {
+      "name": "waitForTimeout",
+      "args": { "timeoutMs": 2000 },
+      "note": "Wait for quote page content to render after navigation."
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(function(){var t=document.title||\"\";var u=window.location.href;var text=(document.body.innerText||\"\").slice(0,6000).trim();var ticker=null;var company=null;var price=null;var change=null;var um=u.match(/\\/quote\\/([A-Z]+):([A-Z]+)/);if(um)ticker=um[1];var pm=text.match(/\\$([\\d,]+\\.\\d{2})\\narrow_upward\\n\\+([\\d.]+)%/);if(pm){price=\"$\"+pm[1];change=\"+\"+pm[2]+\"%\";}else{var pd=text.match(/\\$([\\d,]+\\.\\d{2})\\narrow_downward\\n-([\\d.]+)%/);if(pd){price=\"$\"+pd[1];change=\"-\"+pd[2]+\"%\";}}var lines=text.split(\"\\n\");for(var i=0;i<lines.length;i++){if(lines[i].trim()===price&&i>0){company=lines[i-1].trim();break;}}var results=[];var links=[];if(ticker){results.push({ticker:ticker,company:company,price:price,change:change,url:u});links.push(u);}return {count:results.length,results:results,links:links,text:text};})()"
+      },
+      "note": "Extract the current stock quote from the page title and URL."
+    }
+  ],
+  "tokenStrategy": { "defaultL0": true },
+  "scope": { "sites": ["google.com"] },
+  "discovery": {
+    "intents": ["finance.search", "finance.quote", "finance.lookup"],
+    "keywords": ["google finance", "stock", "ticker", "quote", "finance", "investing"],
+    "outputs": [
+      { "name": "count", "type": "number", "description": "Number of quote results returned." },
+      { "name": "results", "type": "array", "description": "Quote results, each with ticker, company, price, change, and url." },
+      { "name": "text", "type": "string", "description": "Visible text from the results page (max 6000 chars)." }
+    ],
+    "risk": "read",
+    "alternatives": [],
+    "replaces": [],
+    "aliases": ["gfinance", "google-finance", "stock-search"],
+    "browserpilot": ">=0.1.0"
+  }
+}

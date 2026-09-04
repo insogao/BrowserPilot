@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "baidu-search",
+    "params": {
+      "query": "BrowserPilot"
+    }
+  },
+  "expect": {
+    "minLinks": 1,
+    "contains": "BrowserPilot"
+  }
+}

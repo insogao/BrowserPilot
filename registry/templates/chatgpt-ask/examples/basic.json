@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "chatgpt-ask",
+    "params": {
+      "prompt": "Reply with the exact text BROWSERPILOT_MARKER_2026"
+    }
+  },
+  "expect": {
+    "contains": "BROWSERPILOT_MARKER_2026"
+  }
+}

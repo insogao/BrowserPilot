@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "ownerEntry": "AGENTS.md",
+  "docs": [
+    "docs/README.md",
+    "docs/owner/START-HERE.md",
+    "docs/owner/CONSTITUTION.md",
+    "docs/owner/WORKFLOW.md",
+    "docs/owner/ROLES.md",
+    "docs/owner/ARCHITECTURE.md",
+    "docs/owner/QUALITY-GATES.md",
+    "docs/owner/NEXT-SESSION.md",
+    "docs/dev/task-spaces.md",
+    "docs/handover/opencode-agents.md",
+    "registry/templates/README.md"
+  ],
+  "commands": [
+    "doctor",
+    "typecheck",
+    "test:core",
+    "test:host",
+    "test:host:exe",
+    "registry:build",
+    "registry:check",
+    "smoke:template",
+    "browser:lease",
+    "agents:queue",
+    "agents:finance",
+    "agents:regression",
+    "agents:regression:remaining",
+    "agents:migrate-builtins",
+    "agents:regression:plan"
+  ],
+  "requiredTemplateFiles": [
+    "template.json",
+    "README.md",
+    "CHANGELOG.md",
+    "examples/basic.json",
+    "tests/smoke.json"
+  ],
+  "retiredPhrases": [
+    "exitCode === 0 means runtime passed",
+    "adapter agents should not run smoke",
+    "Space = the entire browser"
+  ],
+  "ignoredScanDirectories": [
+    ".git",
+    "node_modules",
+    "dist",
+    ".browserpilot-runs"
+  ]
+}

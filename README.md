@@ -8,6 +8,8 @@
 
 ## 目录
 
+AI Project Owner 或新维护者先读 [`AGENTS.md`](AGENTS.md)；完整文档索引位于 [`docs/README.md`](docs/README.md)。
+
 ```
 plugin-v1/
 ├── manifest.json              # MV3 清单（权限一次性给齐；无 sidePanel；含稳定 key）
@@ -17,7 +19,7 @@ plugin-v1/
 ├── src/
 │   ├── background/            # SW：index / native-bridge / commands / state / events / debugger-bridge
 │   ├── content/bridge.ts      # 内容脚本（L0 观测，M3 填充）
-│   ├── popup/                 # 人工入口（状态 + 接管/复制使用文档/Stop）
+│   ├── popup/                 # 人工入口（连接状态 + 人工接管/恢复 + Copy Skill + 模板管理）
 │   ├── kernel/                # sandbox 内核（M6）
 │   ├── offscreen/             # 承载 sandbox 内核（M6）
 │   ├── onboarding/            # 权限说明页
@@ -26,8 +28,9 @@ plugin-v1/
 │   ├── host.js                # native messaging 分帧 + TCP 桥（外部 AI 连入）
 │   ├── profile.js             # 读 Chrome 父进程命令行探测 profile
 │   ├── host.manifest.json     # host manifest（allowed_origins 用固定扩展 ID）
-│   ├── register.ps1           # 写 HKCU 注册表（Chrome + Edge）
-│   ├── dist/browserpilot-host.exe  # 打包产物（node scripts/build-host.mjs 生成）
+│   ├── paths.js               # host/client 共享的本机 session 目录
+│   ├── register.ps1           # Windows：写 HKCU 注册表（Chrome + Edge）
+│   ├── dist/browserpilot-host.exe  # Windows 打包产物（node scripts/build-host.mjs 生成）
 │   └── test-*.mjs             # host / profile 自测
 ├── assets/icons/
 └── dist/                      # 构建输出（Chrome 「加载已解压」指向此目录）
@@ -41,8 +44,14 @@ plugin-v1/
 cd plugin-v1
 npm install                 # esbuild / typescript / @types/chrome / postject
 npm run build               # 构建扩展 → dist/
-npm run build:host          # 构建 native host → native-host/dist/browserpilot-host.exe
-npm run register-host       # 注册 com.browserpilot.browseragent（HKCU Chrome+Edge）
+npm run build:host          # Windows：构建 native host → native-host/dist/browserpilot-host.exe
+npm run register-host       # Windows：注册 com.browserpilot.browseragent（HKCU Chrome+Edge）
+```
+
+macOS 无需 build:host：注册脚本生成一个用本机 node 直跑 `host.js` 的 wrapper（token 与 client 共用 `auth.json`）：
+
+```bash
+npm run register-host:mac   # 写 ~/Library/Application Support/<浏览器>/NativeMessagingHosts/
 ```
 
 > 项目内 npm 可能需要走 Node 直调（本机 npm 是 shell shim，被 WSL 转译干扰）：
@@ -72,7 +81,7 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 2. 点「加载已解压的扩展程序」，选本目录 `dist/`。
 3. 固定 ID：`manifest.json` 已带 `key`，扩展 ID 固定为 **`nnollghpaggbcdkkgoieneffnlijinio`**（与 `host.manifest.json` 的 `allowed_origins` 一致）。
    - 首次加载后可在 `chrome://extensions` 核对；若 ID 不一致，用实际 ID 重跑 `register-host`。
-4. 重启 Chrome（让 host 注册生效），然后在扩展页点击图标 / 右键「在本页使用 Agent」，SW 会 `connectNative` 拉起 host。
+4. 重启 Chrome（让 host 注册生效），然后点一次扩展图标，SW 会 `connectNative` 拉起 host，并缓存当前 profile，供官方 client 后续自动启动。
 
 ---
 
@@ -97,7 +106,7 @@ host 监听 `127.0.0.1:<port>`（默认 47001，被占向后扫描），TCP **�
 
 `host.js` 同时在 `stdout` 用 native messaging 4 字节长度前缀与扩展通信；`ready` 上报 `{port, authToken, profile}`。
 
-推荐直接使用项目自带客户端，它会自动扫描动态端口并读取当前构建的 capability token：
+推荐直接使用项目自带客户端，它会自动扫描动态端口、读取当前构建的 capability token；若 host 不在线，会尝试启动上次缓存的浏览器 profile：
 
 ```bash
 npm run client -- list_tabs '{}'
@@ -132,7 +141,7 @@ Registry 使用 `browserpilot.templates.v2`，首次读取会自动迁移 v1 本
 | M4 L1 attach + AX 快照 + @N | ⬜ |
 | M5 动作全集 + js()/waitFor + 导航版本 | ✅ |
 | M6 sandbox 内核（run_script 脚本型） | ⬜（骨架已留） |
-| M7 Task Space 浏览器级接管（list_tabs + tabId 跨标签 + 缺省当前激活标签） | ✅ |
+| M7 Task Space 所有权（Agent 身份 + 独立窗口 + tab 归属 + 人工交接 + 前台串行） | ✅ |
 | M8 profile 使用文档导出 + onboarding 文案 | ✅（含 host capability token） |
 | M9 插件化操作模版（import/run + failback，省 token 驱动，内置 search/gemini-ask/chatgpt-ask；含追问 URL 锚定 `@verifyConv` + 图片 `@chatCollect` 多图全收〔Gemini Choice A/B〕+ `download_resource`〔通道 B：blob canvas 全尺寸 / 登录态 http 页面 fetch / `urls[]` 一次下多张自动编号，文件名可控〕，均已实现并真机闭环测试） | ✅ |
 | M10 模拟人工防限流（set_humanize + botCheck） | ⬜ |

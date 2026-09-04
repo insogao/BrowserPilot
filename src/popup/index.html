@@ -12,14 +12,14 @@
         --fg: #111827;
         --muted: #6b7280;
         --border: #e5e7eb;
-        --danger: #dc2626;
         --ok: #16a34a;
+        --warn: #d97706;
       }
       * { box-sizing: border-box; }
       body {
         margin: 0;
         padding: 14px;
-        width: 320px;
+        width: 292px;
         font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
         font-size: 13px;
         color: var(--fg);
@@ -28,6 +28,7 @@
       h1 { font-size: 14px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
       .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
       .dot.on { background: var(--ok); }
+      .dot.paused { background: var(--warn); }
       .card {
         border: 1px solid var(--border);
         border-radius: 8px;
@@ -38,7 +39,11 @@
       .row { display: flex; justify-content: space-between; padding: 2px 0; }
       .row .k { color: var(--muted); }
       .row .v { font-weight: 500; word-break: break-all; text-align: right; }
-      .buttons { display: flex; flex-direction: column; gap: 8px; }
+      .main-action { margin-bottom: 9px; }
+      .main-action button { width: 100%; }
+      .utilities { display: flex; gap: 8px; }
+      .utilities .copy { flex: 1; }
+      .utilities .icon { width: 40px; padding-left: 0; padding-right: 0; font-size: 17px; }
       button {
         border: 1px solid var(--border);
         background: #fff;
@@ -52,7 +57,8 @@
       button:hover { background: #f3f4f6; }
       button.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
       button.primary:hover { background: var(--blue-hover); }
-      button.danger { color: var(--danger); }
+      button.resume { color: #92400e; background: #fffbeb; border-color: #fcd34d; }
+      button[hidden] { display: none; }
       .toast { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; }
     </style>
   </head>
@@ -60,18 +66,18 @@
     <h1><span class="dot" id="dot"></span> BrowserPilot</h1>
 
     <div class="card">
-      <div class="row"><span class="k">接管状态</span><span class="v" id="attached">未接管</span></div>
-      <div class="row"><span class="k">层级</span><span class="v" id="layer">-</span></div>
+      <div class="row"><span class="k">Host 状态</span><span class="v" id="host">未就绪</span></div>
+      <div class="row"><span class="k">Agent 状态</span><span class="v" id="connection">未连接</span></div>
       <div class="row"><span class="k">Profile</span><span class="v" id="profile">-</span></div>
-      <div class="row"><span class="k">Host 端口</span><span class="v" id="port">-</span></div>
+      <div class="row"><span class="k">Host 端口</span><span class="v" id="hostPort">-</span></div>
     </div>
 
-    <div class="buttons">
-      <button class="primary" id="use-current">允许 Agent 操作本页</button>
-      <button id="takeover">人工接管（暂停 AI）</button>
-      <button id="guide">复制使用文档</button>
-      <button id="manage">管理操作模板</button>
-      <button class="danger" id="stop">停止全部操作</button>
+    <div class="main-action">
+      <button class="primary" id="takeover" hidden>人工接管</button>
+    </div>
+    <div class="utilities">
+      <button class="copy" id="guide" title="复制 BrowserPilot Skill">⧉&nbsp; Copy Skill</button>
+      <button class="icon" id="manage" title="管理操作模板" aria-label="管理操作模板">⚙</button>
     </div>
 
     <div class="toast" id="toast"></div>

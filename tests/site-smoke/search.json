@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "search",
+    "params": {
+      "query": "BrowserPilot smoke test"
+    }
+  },
+  "expect": {
+    "minLinks": 1
+  }
+}
+

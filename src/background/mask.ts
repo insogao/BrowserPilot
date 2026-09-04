@@ -16,6 +16,25 @@ const MASK_IDLE_MS = 60_000;
 const idleTimers = new Map<number, ReturnType<typeof setTimeout>>();
 let busy = 0;
 
+// takeover 锁的持久层：SW 被回收重启后内存 Set 清零，但「用户正在人工接管」不能随之失效。
+// 内存 Set 仍是同步判定源；state.humanTakeoverTabIds 是恢复源，SW 启动时 restoreMaskState() 回灌。
+function persistTakeover(): void {
+  void import("./state")
+    .then(({ patchState }) => patchState({ humanTakeoverTabIds: [...takeover] }))
+    .catch(() => {});
+}
+
+/** SW 启动时从 storage.session 恢复接管锁（activeMasks 是纯视觉态，不恢复）。 */
+export async function restoreMaskState(): Promise<void> {
+  try {
+    const { loadState } = await import("./state");
+    const s = await loadState();
+    for (const tabId of s.humanTakeoverTabIds ?? []) takeover.add(tabId);
+  } catch {
+    /* state 不可用时退化为无锁，权限侧仍有 space ownership=user 兜底 */
+  }
+}
+
 function armIdle(tabId: number): void {
   const t = idleTimers.get(tabId);
   if (t !== undefined) clearTimeout(t);
@@ -67,7 +86,10 @@ export async function maskOn(tabId: number): Promise<boolean> {
 export async function maskOff(tabId: number, clearTakeoverState = true): Promise<void> {
   clearIdle(tabId);
   activeMasks.delete(tabId);
-  if (clearTakeoverState) takeover.delete(tabId);
+  if (clearTakeoverState) {
+    takeover.delete(tabId);
+    persistTakeover();
+  }
   try {
     await sendToTab(tabId, { kind: "mask_off" }, 0);
   } catch {
@@ -91,10 +113,12 @@ export async function withCdpAllow<T>(tabId: number, fn: () => Promise<T>): Prom
 export function requestTakeover(tabId: number): void {
   if (tabId === undefined || takeover.has(tabId)) return;
   takeover.add(tabId);
+  persistTakeover();
   pushEvent("mask_takeover", { tabId });
   // 只释放视觉遮罩，保留 takeover 锁；必须显式 stop_mask/resume 才允许 Agent 继续。
   void maskOff(tabId, false);
   void import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId));
+  void import("./spaces").then(({ handoffSpaceForTab }) => handoffSpaceForTab(tabId));
 }
 
 export function isHumanTakeover(tabId: number): boolean {
@@ -112,7 +136,16 @@ export function isMaskActive(tabId: number): boolean {
 export async function resetAllMasks(): Promise<number[]> {
   const tabs = [...new Set([...activeMasks, ...takeover])];
   await Promise.all(tabs.map((tabId) => maskOff(tabId, true)));
+  persistTakeover();
   return tabs;
+}
+
+/** 只重置给定 tab 的遮罩/接管锁（Agent 级 stop 清理自己的窗口时用，不碰其他 Agent/用户）。 */
+export async function resetMasksForTabs(tabIds: number[]): Promise<number[]> {
+  const hits = [...new Set(tabIds)].filter((tabId) => activeMasks.has(tabId) || takeover.has(tabId));
+  await Promise.all(hits.map((tabId) => maskOff(tabId, true)));
+  persistTakeover();
+  return hits;
 }
 
 /** 注册 content → SW 的「人工接管」上报 + 页面导航后清理遮罩状态。 */
@@ -127,8 +160,11 @@ export function registerMaskHandlers(): void {
   // 页面导航后，旧帧的遮罩/接管态随之失效，及时清除，避免误拦后续动作。
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (changeInfo.status === "loading") {
-      activeMasks.delete(tabId);
-      takeover.delete(tabId);
+      const had = activeMasks.delete(tabId) || takeover.delete(tabId);
+      if (had) persistTakeover();
     }
   });
+
+  // SW 启动：恢复「用户正在人工接管」的锁（registerMaskHandlers 由 index.ts 在 SW 顶层调用）。
+  void restoreMaskState();
 }

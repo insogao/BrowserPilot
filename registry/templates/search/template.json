@@ -1,0 +1,144 @@
+{
+  "id": "search",
+  "name": "Google Search",
+  "version": "1.0.0",
+  "description": "Search Google and return the top 10 results with title, URL, and snippet.",
+  "category": "search",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "Search query"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://www.google.com"
+      },
+      "note": "Open Google homepage."
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@focus",
+        "selectors": [
+          "textarea[name='q']",
+          "input[name='q']",
+          "input[type='search']",
+          "input[type='text']"
+        ]
+      },
+      "expect": "true",
+      "note": "Wait for and focus the search input."
+    },
+    {
+      "name": "fill",
+      "args": {
+        "selector": "[data-bp-focus]",
+        "value": "$query"
+      },
+      "note": "Fill the search query."
+    },
+    {
+      "name": "press",
+      "args": {
+        "key": "Enter",
+        "selector": "[data-bp-focus]"
+      },
+      "note": "Submit the search."
+    },
+    {
+      "name": "waitForSelector",
+      "args": {
+        "selector": "#search,#rso,#center_col",
+        "visible": true,
+        "timeoutMs": 20000
+      },
+      "note": "Wait for results DOM, independent of regional domain."
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@results",
+        "rootSelectors": [
+          "#search",
+          "#rso",
+          "#center_col"
+        ],
+        "minResults": 3,
+        "limit": 10,
+        "textLimit": 6000,
+        "excludeUrlPrefixes": [
+          "/search?",
+          "/imgres",
+          "/preferences",
+          "/advanced_search",
+          "/intl/",
+          "/settings",
+          "/webhp",
+          "/maps",
+          "/shopping",
+          "/translate",
+          "/travel",
+          "/support",
+          "/policies",
+          "/accounts",
+          "https://www.google.com/search?",
+          "https://www.google.com/preferences",
+          "https://www.google.com/intl/",
+          "https://www.google.com/webhp"
+        ]
+      },
+      "note": "抓取搜索结果（排除 Google 自家 UI 链接）"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "google.com",
+      "google.com.hk",
+      "google.co.jp",
+      "google.co.uk"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "search",
+      "web.search"
+    ],
+    "keywords": [
+      "google",
+      "search",
+      "web search"
+    ],
+    "outputs": [
+      {
+        "name": "count",
+        "type": "number",
+        "description": "Number of results returned"
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "Result list, each with title and url"
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "Visible text from the result container"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "google",
+      "google-search"
+    ],
+    "browserpilot": ">=0.1.0"
+  }
+}

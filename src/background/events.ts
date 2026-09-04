@@ -5,6 +5,8 @@ import type { EventMsg } from "../shared/types";
 const MAX = 10000;
 const events: EventMsg[] = [];
 let sequence = 0;
+// SW 每次重启归零重计；Agent 对比 drainEvents 两次调用间的 generation 即可发现缓冲被重置、游标失效。
+const generation = "g" + Date.now().toString(36);
 
 export function recordEvent(name: string, args: unknown): EventMsg {
   const ev: EventMsg = { type: "event", name, args, sequence: ++sequence };
@@ -17,7 +19,7 @@ export function drainEvents(opts: {
   after_sequence?: number;
   methods?: string[];
   limit?: number;
-}): { events: EventMsg[]; cursor: number; hasMore: boolean; truncated: boolean } {
+}): { generation: string; events: EventMsg[]; cursor: number; hasMore: boolean; truncated: boolean } {
   const after = opts.after_sequence ?? 0;
   let list = events.filter((e) => e.sequence > after);
   if (opts.methods && opts.methods.length) list = list.filter((e) => opts.methods!.includes(e.name));
@@ -27,7 +29,7 @@ export function drainEvents(opts: {
   const out = hasMore ? list.slice(0, limit) : list;
   const cursor = out.length ? out[out.length - 1].sequence : after;
   const truncated = hasMore;
-  return { events: out, cursor, hasMore, truncated };
+  return { generation, events: out, cursor, hasMore, truncated };
 }
 
 /** 记录事件，并通过 send 回调推给 host（广播）。 */
