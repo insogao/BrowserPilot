@@ -1,14 +1,59 @@
 {
   "version": 1,
   "productSites": [
-    { "site": "Google Search", "templateId": "search", "kind": "runtime", "fallback": "builtin" },
-    { "site": "Baidu", "templateId": "baidu-search", "kind": "runtime" },
-    { "site": "Bing", "templateId": "bing-search", "kind": "runtime" },
-    { "site": "X/Twitter", "templateId": "x-search", "kind": "runtime" },
-    { "site": "Google Scholar", "templateId": "google-scholar-search", "kind": "runtime" },
-    { "site": "Google Finance", "templateId": "google-finance-search", "kind": "runtime" },
-    { "site": "ChatGPT", "templateId": "chatgpt-ask", "kind": "runtime", "fallback": "builtin" },
-    { "site": "Gemini", "templateId": "gemini-ask", "kind": "runtime", "fallback": "builtin" }
+    {
+      "site": "Google Search",
+      "templateId": "search",
+      "kind": "runtime",
+      "fallback": "builtin"
+    },
+    {
+      "site": "Baidu",
+      "templateId": "baidu-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "Bing",
+      "templateId": "bing-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "X/Twitter",
+      "templateId": "x-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "Google Scholar",
+      "templateId": "google-scholar-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "Google Finance",
+      "templateId": "google-finance-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "ChatGPT",
+      "templateId": "chatgpt-ask",
+      "kind": "runtime",
+      "fallback": "builtin"
+    },
+    {
+      "site": "Gemini",
+      "templateId": "gemini-ask",
+      "kind": "runtime",
+      "fallback": "builtin"
+    },
+    {
+      "site": "Bilibili Search",
+      "templateId": "bilibili-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "Bilibili Video Download",
+      "templateId": "bilibili-download-video",
+      "kind": "runtime"
+    }
   ],
   "runtimeOrder": [
     "google-finance-search",
@@ -18,8 +63,10 @@
     "x-search",
     "google-scholar-search",
     "search",
+    "bilibili-search",
     "chatgpt-ask",
-    "gemini-ask"
+    "gemini-ask",
+    "bilibili-download-video"
   ],
   "builtinOrder": [],
   "builtinMigrationOrder": [
@@ -34,7 +81,9 @@
     "search-demo": "This is the runtime Google search adaptation example, not a ninth product site. Check compatibility with the current press selector and result-DOM contract.",
     "search": "The compiled-in Google Search smoke reaches a real results page but returns count=0 and links=[]. Create a dynamic runtime package for the product template id search. Use the live Google DOM and regional google.com.hk route as evidence; do not copy search-demo blindly. The final smoke must return at least one real result link.",
     "chatgpt-ask": "The compiled-in fallback fills the prompt but fails to locate button[data-testid=send-button] on the current ChatGPT page. Create a dynamic runtime package for chatgpt-ask, inspect the signed-in live page in a maximized Task Space, submit one harmless exact-reply smoke prompt, and verify the response contains the marker. Do not modify core source.",
-    "gemini-ask": "The compiled-in fallback fills the prompt but fails to locate button[aria-label='Send message'] on the current Gemini page. Create a dynamic runtime package for gemini-ask, inspect the signed-in live page in a maximized Task Space, submit one harmless exact-reply smoke prompt, and verify the response contains the marker. Do not modify core source."
+    "gemini-ask": "The compiled-in fallback fills the prompt but fails to locate button[aria-label='Send message'] on the current Gemini page. Create a dynamic runtime package for gemini-ask, inspect the signed-in live page in a maximized Task Space, submit one harmless exact-reply smoke prompt, and verify the response contains the marker. Do not modify core source.",
+    "bilibili-search": "2026-09-05 macOS 真机创建并 smoke 通过：直连 search.bilibili.com/all 结果页（避开首页输入框改版风险），.bili-video-card 卡片链接抓取（真机 42 卡片结构验证）。",
+    "bilibili-download-video": "2026-09-05 macOS 真机创建：playurl platform=html5 单文件 MP4（720P 上限，账号 accept 含 1080P+ 但 html5 封顶 720），页面内拉流 CORS 验证 206，58.8MB 落盘 ~/Downloads 成功。番剧/互动视频不支持（结构化报错）。"
   },
   "nonSiteStaticOnly": [
     "browserpilot-example-prompt"

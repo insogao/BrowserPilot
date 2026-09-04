@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "bilibili-search",
+    "params": {
+      "query": "浏览器自动化"
+    }
+  },
+  "expect": {
+    "minLinks": 3,
+    "contains": "bilibili.com"
+  }
+}

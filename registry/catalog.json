@@ -63,6 +63,132 @@
       "fingerprint": "sha256:c0dbeb07a0f8f02c3d8acc430b640ae95f2c5ae5e556c4a6a67358afc7d21b42"
     },
     {
+      "id": "bilibili-download-video",
+      "name": "B站视频下载",
+      "version": "1.0.2",
+      "path": "registry/templates/bilibili-download-video/template.json",
+      "detailsPath": "registry/details/bilibili-download-video.md",
+      "description": "下载当前/指定B站视频为单个 MP4 文件（音视频已合成，720P，落盘到浏览器下载目录）。仅下载你有权限访问的内容。",
+      "category": "media",
+      "sites": [
+        "bilibili.com"
+      ],
+      "intents": [
+        "download",
+        "video.download"
+      ],
+      "keywords": [
+        "bilibili",
+        "B站",
+        "b站",
+        "下载视频",
+        "视频下载",
+        "download video"
+      ],
+      "capabilities": [
+        "js"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "视频页链接（bilibili.com/video/BV...）；不填则在当前标签页上下载"
+        },
+        {
+          "name": "page",
+          "type": "number",
+          "required": false,
+          "description": "分P序号，默认 P1"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filename",
+          "type": "string",
+          "description": "落盘文件名（浏览器下载目录）"
+        },
+        {
+          "name": "sizeMB",
+          "type": "number",
+          "description": "文件大小"
+        },
+        {
+          "name": "quality",
+          "type": "number",
+          "description": "清晰度代号（64=720P）"
+        }
+      ],
+      "risk": "download",
+      "aliases": [
+        "B站下载",
+        "bilibili 下载",
+        "下载B站视频"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:ab8fbdce4112015178d9b506dbed28807fc1594d204558df29af86dd82cf5f21"
+    },
+    {
+      "id": "bilibili-search",
+      "name": "B站搜索",
+      "version": "1.0.2",
+      "path": "registry/templates/bilibili-search/template.json",
+      "detailsPath": "registry/details/bilibili-search.md",
+      "description": "在B站搜索关键词，取回前10条视频结果（标题+链接+页面摘要）。",
+      "category": "search",
+      "sites": [
+        "bilibili.com"
+      ],
+      "intents": [
+        "search",
+        "video.search"
+      ],
+      "keywords": [
+        "bilibili",
+        "B站",
+        "b站",
+        "视频搜索",
+        "bilibili search"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForSelector"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number",
+          "description": "结果条数"
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "标题+链接+作者列表"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "页面文本摘要"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "B站视频搜索",
+        "bilibili 搜索"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:202205919c79fc01036a505916a9773c77fedff54fe175e68450ee98cc424ea6"
+    },
+    {
       "id": "bing-search",
       "name": "必应搜索",
       "version": "1.2.2",

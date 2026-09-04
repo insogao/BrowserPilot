@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "bilibili-search",
+    "params": {
+      "query": "BrowserPilot"
+    }
+  },
+  "expect": {
+    "minLinks": 3
+  }
+}

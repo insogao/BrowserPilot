@@ -1,0 +1,90 @@
+{
+  "id": "bilibili-search",
+  "name": "B站搜索",
+  "version": "1.0.2",
+  "description": "在B站搜索关键词，取回前10条视频结果（标题+链接+页面摘要）。",
+  "category": "search",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "搜索关键词"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://search.bilibili.com/all?keyword=$query"
+      },
+      "note": "直接打开B站搜索结果页（比首页输入框更稳，不受首页改版影响）"
+    },
+    {
+      "name": "waitForSelector",
+      "args": {
+        "selector": ".bili-video-card",
+        "visible": true,
+        "timeoutMs": 20000
+      },
+      "note": "等待结果卡片渲染完成"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const start=Date.now();let out=[];const isCover=(t)=>/^稍后再看/.test(t)||/\\d{1,2}:\\d{2}/.test(t);while(Date.now()-start<12000){out=[...document.querySelectorAll('.bili-video-card')].map(c=>{const links=[...c.querySelectorAll(\"a[href*='/video/BV']\")];if(!links.length)return null;let href=links[0].getAttribute('href')||'';let url=href.startsWith('//')?('https:'+href):href;try{url=new URL(url,location.href).href;}catch{}const titEl=c.querySelector('.bili-video-card__info--tit');let title=titEl?(titEl.textContent||'').trim():'';if(!title){const t=links.map(x=>(x.textContent||'').trim()).find(x=>x.length>2&&!isCover(x));title=t||'';}if(!title||title.length<2)return null;const owner=c.querySelector('.bili-video-card__info--owner');const author=owner?(owner.textContent||'').split('·')[0].trim().slice(0,40):'';return {title:title.slice(0,150),url:url,author:author};}).filter(Boolean);const seen=new Set();out=out.filter(x=>!seen.has(x.url)&&seen.add(x.url));if(out.length>=3)break;await new Promise(r=>setTimeout(r,400));}return {count:out.length,links:out.slice(0,10),text:(document.body.innerText||'').slice(0,6000).trim()};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.count",
+          "min": 3
+        }
+      ],
+      "note": "卡片级抓取：标题优先 .bili-video-card__info--tit，兜底滤掉封面文本（稍后再看/播放量+弹幕+时长粘连）"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "bilibili.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "search",
+      "video.search"
+    ],
+    "keywords": [
+      "bilibili",
+      "B站",
+      "b站",
+      "视频搜索",
+      "bilibili search"
+    ],
+    "outputs": [
+      {
+        "name": "count",
+        "type": "number",
+        "description": "结果条数"
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "标题+链接+作者列表"
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "页面文本摘要"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "B站视频搜索",
+      "bilibili 搜索"
+    ]
+  }
+}

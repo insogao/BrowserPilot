@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "bilibili-download-video",
+    "params": {
+      "url": "https://www.bilibili.com/video/BV1Wf4y1Q7H5"
+    }
+  },
+  "expect": {
+    "contains": "downloaded"
+  }
+}

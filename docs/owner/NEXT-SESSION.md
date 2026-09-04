@@ -1,7 +1,7 @@
 ---
 type: SessionHandoff
 status: stable
-generated: { by: zcode, at: 2026-09-05T02:30:00+08:00 }
+generated: { by: zcode, at: 2026-09-05T03:15:00+08:00 }
 stale_after: 2026-09-19
 ---
 
@@ -20,6 +20,8 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 | `search` | passed | 10 条结果，UI 链接已被 excludeUrlPrefixes 过滤；mac 区域版 Google 结果链接为 `/goto?url=` 跳转形态（真实结果，非 UI 噪音） |
 | `search-demo` | passed | 10 条结果 |
 | `bing-search` | passed ×4 连续 | flaky 根因已修（见下）；修复前复现为"首跑失败、重跑成功" |
+| `bilibili-search` | passed | 新增站点 v1.0.2：卡片级抓取（标题/作者/链接），39 条去重结果；B站卡片 DOM 有变体，标题优先 `.bili-video-card__info--tit`、兜底滤封面文本 |
+| `bilibili-download-video` | passed | 新增站点 v1.0.2：playurl HTML5 单文件 MP4 真实落盘 9.3MB/58.8MB 两轮；清晰度随B站风控浮动 360P~720P，文件名后缀为真实档位 |
 | `chatgpt-ask` / `gemini-ask` / `x-search` / `baidu-search` / `google-finance-search` / `google-scholar-search` | 未重测 | 上次真实证据仍以 2026-09-04（Windows）为准；scholar/gemini 保持 blocked |
 
 ## 2026-09-05 修复清单（全部已验证）
@@ -43,6 +45,13 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 ## 门禁状态（2026-09-05 全绿）
 
 `doctor`、`typecheck`、`test:core`（12/12，含新增 4 项）、`test:host`、`test:profile`（6/6）、`registry:build` + `registry:check`。`dist/` 已重建并 reload 到运行中的扩展。
+
+## B站适配（2026-09-05 追加）
+
+- `bilibili-search`（第 9 个站点）+ `bilibili-download-video`（媒体下载能力）已登记进 site-regression-plan（10 个产品工作流）。
+- 下载方案：页面上下文 fetch B站 playurl（`platform=html5&high_quality=1`，登录态共享）→ 单文件 MP4（音视频合成）→ 页面内 blob 锚点另存到 ~/Downloads。无需新权限、无 Referer 问题（页面发起）。
+- 已知限制：清晰度实测 360P~720P 浮动（短时高频请求被B站降档，等待恢复）；1080P+ 为 DASH 分离流需 ffmpeg 合成，明确不做；番剧/互动视频/充电专属返回结构化错误；>2GB 拒绝。
+- 1080P 的未来路径（如需要）：扩展加 declarativeNetRequest 权限改写下载请求 Referer + DASH 双文件下载（音/视频分开，不合成）——待产品决策。
 
 ## 下一步优先级
 
