@@ -1,0 +1,85 @@
+{
+  "id": "jiuyangongshe-user-timeline",
+  "name": "韭研公社账号时间线",
+  "version": "1.0.0",
+  "description": "抓取某个韭研公社作者主页的最新文章列表。需要微信登录态。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "uid",
+      "type": "string",
+      "required": true,
+      "description": "作者主页路径 /u/<hash> 中的 hash（在文章页点作者名可得）"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 15,
+      "description": "最多条数"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://www.jiuyangongshe.com/u/$uid"
+      },
+      "note": "打开作者主页"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 3000
+      },
+      "note": "渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,600));const arts=[...document.querySelectorAll('a[href*=\"/a/\"]')];const seen=new Set();const posts=[];for(const a of arts){if(posts.length>=(Number('$limit')||15))break;const href=a.getAttribute('href')||'';const url=location.origin+href;if(seen.has(url))continue;seen.add(url);const t=(a.textContent||'').replace(/\\s+/g,' ').trim();if(t.length>3)posts.push({title:t.slice(0,120),url:url});}return {ok:true,count:posts.length,posts:posts};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "滚动触发懒加载后抓取文章流"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "jiuyangongshe.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "finance.timeline",
+      "account.watch"
+    ],
+    "keywords": [
+      "韭研公社",
+      "九阳公社",
+      "作者",
+      "大V",
+      "账号"
+    ],
+    "outputs": [
+      {
+        "name": "posts",
+        "type": "array",
+        "description": "title/url"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "九阳公社作者",
+      "公社大V"
+    ]
+  }
+}

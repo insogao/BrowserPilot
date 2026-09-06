@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "xueqiu-user-timeline",
+    "params": {
+      "uid": "5364567880",
+      "limit": 5
+    }
+  },
+  "expect": {
+    "minLinks": 3
+  }
+}

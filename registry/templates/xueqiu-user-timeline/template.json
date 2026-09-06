@@ -1,0 +1,86 @@
+{
+  "id": "xueqiu-user-timeline",
+  "name": "雪球账号时间线",
+  "version": "1.0.0",
+  "description": "抓取某个雪球用户主页的最新帖子（内容摘要+互动数+帖子链接）。需雪球登录态。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "uid",
+      "type": "string",
+      "required": true,
+      "description": "雪球用户数字 ID（主页链接 xueqiu.com/<uid> 中的数字）"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "最多条数"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://xueqiu.com/$uid"
+      },
+      "note": "打开用户主页"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 3000
+      },
+      "note": "SPA 渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));const items=[...document.querySelectorAll('.timeline__item')];const posts=items.map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');const nums=[...it.querySelectorAll('.timeline__item__control')].map(e=>parseInt((e.textContent||'').trim())||0);return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120),reposts:nums[0]||0,replies:nums[1]||0,likes:nums[2]||0}:null;}).filter(Boolean);return {ok:true,count:posts.length,posts:posts.slice(0,Number('$limit')||10)};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "时间线抓取（含转发/评论/赞）"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "xueqiu.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "finance.timeline",
+      "account.watch"
+    ],
+    "keywords": [
+      "雪球",
+      "大V",
+      "账号",
+      "时间线",
+      "用户动态"
+    ],
+    "outputs": [
+      {
+        "name": "posts",
+        "type": "array",
+        "description": "author/time/url/excerpt/reposts/replies/likes"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "雪球大V",
+      "雪球用户",
+      "雪球动态"
+    ]
+  }
+}

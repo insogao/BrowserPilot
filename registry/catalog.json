@@ -950,6 +950,62 @@
       "fingerprint": "sha256:7e9bab852b6c50a078af95cee8089059c5c3d7208dddd3971ea2c300d5e10862"
     },
     {
+      "id": "jiuyangongshe-user-timeline",
+      "name": "韭研公社账号时间线",
+      "version": "1.0.0",
+      "path": "registry/templates/jiuyangongshe-user-timeline/template.json",
+      "detailsPath": "registry/details/jiuyangongshe-user-timeline.md",
+      "description": "抓取某个韭研公社作者主页的最新文章列表。需要微信登录态。",
+      "category": "finance",
+      "sites": [
+        "jiuyangongshe.com"
+      ],
+      "intents": [
+        "finance.timeline",
+        "account.watch"
+      ],
+      "keywords": [
+        "韭研公社",
+        "九阳公社",
+        "作者",
+        "大V",
+        "账号"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "uid",
+          "type": "string",
+          "required": true,
+          "description": "作者主页路径 /u/<hash> 中的 hash（在文章页点作者名可得）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多条数"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "posts",
+          "type": "array",
+          "description": "title/url"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "九阳公社作者",
+        "公社大V"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:cca80cc601090652e9d9b5181e7cf630873a6cf5edfe07193a42d011ced25926"
+    },
+    {
       "id": "search-demo",
       "name": "Search Demo Template",
       "version": "1.0.0",
@@ -1125,6 +1181,66 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:8253732a51e0c8fc11cb5d551fecb26c29a4524f84574e7b818a8565a9434f24"
+    },
+    {
+      "id": "x-user-timeline",
+      "name": "X账号时间线",
+      "version": "1.0.0",
+      "path": "registry/templates/x-user-timeline/template.json",
+      "detailsPath": "registry/details/x-user-timeline.md",
+      "description": "抓取某个 X（Twitter）账号主页的最新推文（文本/时间/链接），支持滚动加载。需要浏览器已有 X 登录态。",
+      "category": "social",
+      "sites": [
+        "x.com",
+        "twitter.com"
+      ],
+      "intents": [
+        "social.timeline",
+        "account.watch"
+      ],
+      "keywords": [
+        "X",
+        "Twitter",
+        "推特",
+        "账号",
+        "时间线",
+        "大V"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout",
+        "waitForURL"
+      ],
+      "inputs": [
+        {
+          "name": "handle",
+          "type": "string",
+          "required": true,
+          "description": "X 用户名（不含 @，如 elonmusk）"
+        },
+        {
+          "name": "maxScrolls",
+          "type": "number",
+          "required": false,
+          "description": "滚动加载轮数（1-10，越多抓得越深）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "tweets",
+          "type": "array",
+          "description": "user/text/time/url"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "推特账号",
+        "X时间线",
+        "大V动态"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:df8e5566645b90382a6eda351fc3cfc1f8baa06529ad8bebbb110282f23b811c"
     },
     {
       "id": "xueqiu-article",
@@ -1311,6 +1427,63 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:d05413202075413c624907914cea6a76c4998508dd311ea94e8bd151e22c7b05"
+    },
+    {
+      "id": "xueqiu-user-timeline",
+      "name": "雪球账号时间线",
+      "version": "1.0.0",
+      "path": "registry/templates/xueqiu-user-timeline/template.json",
+      "detailsPath": "registry/details/xueqiu-user-timeline.md",
+      "description": "抓取某个雪球用户主页的最新帖子（内容摘要+互动数+帖子链接）。需雪球登录态。",
+      "category": "finance",
+      "sites": [
+        "xueqiu.com"
+      ],
+      "intents": [
+        "finance.timeline",
+        "account.watch"
+      ],
+      "keywords": [
+        "雪球",
+        "大V",
+        "账号",
+        "时间线",
+        "用户动态"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "uid",
+          "type": "string",
+          "required": true,
+          "description": "雪球用户数字 ID（主页链接 xueqiu.com/<uid> 中的数字）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多条数"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "posts",
+          "type": "array",
+          "description": "author/time/url/excerpt/reposts/replies/likes"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "雪球大V",
+        "雪球用户",
+        "雪球动态"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:904a7c7a5ea93ebb7a92d7efff07cb98aaac4591d1e3576263796742deb2f5ef"
     }
   ]
 }

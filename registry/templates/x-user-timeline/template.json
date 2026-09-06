@@ -1,0 +1,101 @@
+{
+  "id": "x-user-timeline",
+  "name": "X账号时间线",
+  "version": "1.0.0",
+  "description": "抓取某个 X（Twitter）账号主页的最新推文（文本/时间/链接），支持滚动加载。需要浏览器已有 X 登录态。",
+  "category": "social",
+  "inputs": [
+    {
+      "name": "handle",
+      "type": "string",
+      "required": true,
+      "description": "X 用户名（不含 @，如 elonmusk）"
+    },
+    {
+      "name": "maxScrolls",
+      "type": "number",
+      "required": false,
+      "default": 4,
+      "description": "滚动加载轮数（1-10，越多抓得越深）"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://x.com/$handle"
+      },
+      "note": "打开账号主页"
+    },
+    {
+      "name": "waitForURL",
+      "args": {
+        "pattern": "x.com/",
+        "partial": true,
+        "timeoutMs": 20000
+      },
+      "note": "等待页面就绪"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 2500
+      },
+      "note": "时间线渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2000));const loginWall=document.querySelector('[data-testid=\"login\"]')||document.querySelector('[data-testid=\"sheetDialog\"]');if(loginWall)return {ok:false,error:'login_required',hint:'X 未登录（登录墙）。BrowserPilot 不做登录绕过；请在浏览器中登录 X 后重试。'};const MAX_SCROLLS=Math.max(0,Math.min(Number('$maxScrolls')||4,10));const DELAY=800;const PX=800;let prev=0;for(let i=0;i<MAX_SCROLLS;i++){const n=document.querySelectorAll('article[data-testid=\"tweet\"]').length;if(n===prev&&i>0)break;prev=n;window.scrollBy(0,PX);await new Promise(r=>setTimeout(r,DELAY));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,600));const arts=document.querySelectorAll('article[data-testid=\"tweet\"]');const tweets=[];const seen=new Set();for(const a of arts){if(tweets.length>=20)break;const u=a.querySelector('[data-testid=\"User-Name\"]');const txt=a.querySelector('[data-testid=\"tweetText\"]');const time=a.querySelector('time');const linkA=a.querySelector('a[href*=\"/status/\"]');const hn=u?u.textContent.replace(/\\n+/g,' ').slice(0,50):null;const key=hn+(txt?txt.textContent.slice(0,20):'');if(seen.has(key))continue;seen.add(key);tweets.push({user:hn,text:txt?txt.textContent.replace(/\\s+/g,' ').trim().slice(0,400):null,time:time?time.getAttribute('datetime'):null,url:linkA?('https://x.com'+linkA.getAttribute('href')):null});}return {ok:true,count:tweets.length,tweets:tweets};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        },
+        {
+          "path": "value.count",
+          "min": 1
+        }
+      ],
+      "note": "登录墙检测 + 滚动加载 + 推文提取"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "x.com",
+      "twitter.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "social.timeline",
+      "account.watch"
+    ],
+    "keywords": [
+      "X",
+      "Twitter",
+      "推特",
+      "账号",
+      "时间线",
+      "大V"
+    ],
+    "outputs": [
+      {
+        "name": "tweets",
+        "type": "array",
+        "description": "user/text/time/url"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "推特账号",
+      "X时间线",
+      "大V动态"
+    ]
+  }
+}

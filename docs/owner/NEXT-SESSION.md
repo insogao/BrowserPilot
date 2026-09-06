@@ -1,7 +1,7 @@
 ---
 type: SessionHandoff
 status: stable
-generated: { by: zcode, at: 2026-09-07T01:30:00+08:00 }
+generated: { by: zcode, at: 2026-09-07T02:40:00+08:00 }
 stale_after: 2026-09-19
 ---
 
@@ -77,6 +77,15 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - `guba-list` v1.0.1：个股吧列表页（.listitem）——标题/链接/阅读数/评论数/时间，默认按时间，smoke passed。**列表级互动数据以本模板为准。**
 - **股吧帖子回复区仍受限**：新改版回复列表为 gbapi 懒加载，页面外 fetch 被 CORS 拦截、页面内点击展开才渲染且结构不稳定——回复内容暂不可爬（guba-article README 已声明），后续如需要可走点击展开方案。
 - 教训记录：write_pkg 时 example/smoke 传参顺序写反导致断言错位（smoke 契约 minLinks 打在没有 links 字段的模板上）；js 表达式内自导航与 evalPage 瞬态重试互相踩（Inspected target navigated）——导航一律用 open_tab 步骤，js 只抓取。
+
+## 账号订阅/大V时间线（2026-09-07 第二批）
+
+- `x-user-timeline` v1.0.0：X 账号主页推文流（text/time/url，滚动加载可加深，登录墙返回结构化 login_required）。mac 真机验证：X 可达且该 profile 已登录 X，elonmusk 时间线 4 条推文提取成功。选择器复用 x-search 体系。
+- `xueqiu-user-timeline` v1.0.0：雪球用户主页时间线（xueqiu.com/<数字uid>），摘要+转发/评论/赞+帖子链接。
+- `jiuyangongshe-user-timeline` v1.0.0：作者主页 /u/<hash> 文章流（滚动触发懒加载）。
+- 组合链路：user-timeline → article → comments 已在三家全部成立（大V订阅完整链路）。
+- **股吧作者订阅待做**：财富号文章页只暴露通用 i.eastmoney.com「个人主页」入口，无稳定作者 uid URL；财富号作者页真实 URL 形态（caifuhao.eastmoney.com/dh/<id>?）待后续确认。
+- 教训再次复现：write_pkg 的 example/smoke 传参顺序写反（第二次了）——模板包脚手架应改为具名参数或写个单测锁死顺序。
 
 ## 下一步优先级
 

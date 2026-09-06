@@ -98,6 +98,21 @@
       "site": "Jiuyangongshe Comments",
       "templateId": "jiuyangongshe-comments",
       "kind": "runtime"
+    },
+    {
+      "site": "X User Timeline",
+      "templateId": "x-user-timeline",
+      "kind": "runtime"
+    },
+    {
+      "site": "Xueqiu User Timeline",
+      "templateId": "xueqiu-user-timeline",
+      "kind": "runtime"
+    },
+    {
+      "site": "Jiuyangongshe User Timeline",
+      "templateId": "jiuyangongshe-user-timeline",
+      "kind": "runtime"
     }
   ],
   "runtimeOrder": [
@@ -120,7 +135,10 @@
     "jiuyangongshe-article",
     "xueqiu-comments",
     "guba-list",
-    "jiuyangongshe-comments"
+    "jiuyangongshe-comments",
+    "x-user-timeline",
+    "xueqiu-user-timeline",
+    "jiuyangongshe-user-timeline"
   ],
   "builtinOrder": [],
   "builtinMigrationOrder": [
@@ -146,7 +164,10 @@
     "jiuyangongshe-article": "2026-09-05 macOS 真机创建：正文容器 .detail-container（含标题作者时间正文）。",
     "xueqiu-comments": "2026-09-07 真机创建：statuses/comments.json 接口分页评论，登录态共享。",
     "guba-list": "2026-09-07 真机创建：个股吧 .listitem 行解析，列表行自带阅读/评论数。注意：帖子回复区受限（新版回复列表 API 懒加载+页面外 CORS 拦截），回复内容暂不可爬。",
-    "jiuyangongshe-comments": "2026-09-07 真机创建：.comment-content 懒加载抓取，需微信登录态。"
+    "jiuyangongshe-comments": "2026-09-07 真机创建：.comment-content 懒加载抓取，需微信登录态。",
+    "x-user-timeline": "2026-09-07 macOS 真机创建：X 登录态可用（无登录墙），elonmusk 时间线 4 条推文提取成功；选择器复用 x-search 体系（article[data-testid=tweet]）。",
+    "xueqiu-user-timeline": "2026-09-07 macOS 真机创建：用户主页 xueqiu.com/<uid> 时间线与搜索页同构（.timeline__item）。",
+    "jiuyangongshe-user-timeline": "2026-09-07 macOS 真机创建：作者主页 /u/<hash> 文章流；uid hash 从文章页作者链接获取。"
   },
   "nonSiteStaticOnly": [
     "browserpilot-example-prompt"

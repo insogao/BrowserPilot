@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "x-user-timeline",
+    "params": {
+      "handle": "elonmusk",
+      "maxScrolls": 2
+    }
+  },
+  "expect": {
+    "contains": "tweets"
+  }
+}

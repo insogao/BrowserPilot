@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "jiuyangongshe-user-timeline",
+    "params": {
+      "uid": "df576db64b8c4bad8eb9256d9b024e54",
+      "limit": 5
+    }
+  },
+  "expect": {
+    "contains": "/a/"
+  }
+}
