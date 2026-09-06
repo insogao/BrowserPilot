@@ -1,6 +1,14 @@
 # chatgpt-ask
 
 向 ChatGPT (chatgpt.com) 提问，等待回复流式结束并回收反馈文本。
+## 功能一览
+
+- **功能**：向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。
+- **输入**：`prompt`(string, 必填)、`tabId`(number)、`responseSelector`(string)、`conversationUrl`(url)
+- **返回**：`text`、`images`、`url`、`title`
+- **站点**：chatgpt.com ｜ **风险**：write ｜ **版本**：v1.0.0
+
+
 
 ## 前置条件
 

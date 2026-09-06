@@ -797,7 +797,7 @@
       ],
       "keywords": [
         "韭研公社",
-        "九阳公社",
+        "韭研公社",
         "公社文章",
         "爬取"
       ],
@@ -828,7 +828,7 @@
       ],
       "risk": "read",
       "aliases": [
-        "九阳公社文章",
+        "韭研公社文章",
         "公社爬取"
       ],
       "deprecated": false,
@@ -851,7 +851,7 @@
       ],
       "keywords": [
         "韭研公社",
-        "九阳公社",
+        "韭研公社",
         "评论"
       ],
       "capabilities": [
@@ -880,7 +880,7 @@
       ],
       "risk": "read",
       "aliases": [
-        "九阳公社评论",
+        "韭研公社评论",
         "公社评论"
       ],
       "deprecated": false,
@@ -892,7 +892,7 @@
       "version": "1.2.0",
       "path": "registry/templates/jiuyangongshe-search/template.json",
       "detailsPath": "registry/details/jiuyangongshe-search.md",
-      "description": "在韭研公社（九阳公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
+      "description": "在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
       "category": "finance",
       "sites": [
         "jiuyangongshe.com"
@@ -903,7 +903,6 @@
       ],
       "keywords": [
         "韭研公社",
-        "九阳公社",
         "jiuyangongshe",
         "公社搜索"
       ],
@@ -943,7 +942,6 @@
       ],
       "risk": "read",
       "aliases": [
-        "九阳公社搜索",
         "韭研公社"
       ],
       "deprecated": false,
@@ -966,7 +964,7 @@
       ],
       "keywords": [
         "韭研公社",
-        "九阳公社",
+        "韭研公社",
         "作者",
         "大V",
         "账号"
@@ -999,7 +997,7 @@
       ],
       "risk": "read",
       "aliases": [
-        "九阳公社作者",
+        "韭研公社作者",
         "公社大V"
       ],
       "deprecated": false,

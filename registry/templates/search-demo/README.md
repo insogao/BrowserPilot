@@ -1,6 +1,14 @@
 # Search Demo Template
 
 This package demonstrates how to adapt a search engine without changing BrowserPilot plugin code.
+## 功能一览
+
+- **功能**：A copyable demo for adapting a search engine with runtime template selectors.
+- **输入**：`query`(string, 必填)
+- **返回**：`links`、`text`
+- **站点**：google.com ｜ **风险**：read ｜ **版本**：v1.0.0
+
+
 
 ## Adaptation Steps
 

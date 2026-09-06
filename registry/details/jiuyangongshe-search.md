@@ -1,6 +1,6 @@
 # 韭研公社搜索
 
-> 在韭研公社（九阳公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。
+> 在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。
 
 - ID: `jiuyangongshe-search`
 - 版本: `1.2.0`
@@ -23,13 +23,21 @@
 
 ## 发现信息
 
-- Keywords: 韭研公社, 九阳公社, jiuyangongshe, 公社搜索
-- Aliases: 九阳公社搜索, 韭研公社
+- Keywords: 韭研公社, jiuyangongshe, 公社搜索
+- Aliases: 韭研公社
 - BrowserPilot: `未声明`
 
 ## 详细说明
 
 在韭研公社（原韭菜公社，jiuyangongshe.com）搜索关键词，返回文章列表。
+## 功能一览
+
+- **功能**：在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。
+- **输入**：`query`(string, 必填)、`sort`(string)
+- **返回**：`count`、`links`、`text`
+- **站点**：jiuyangongshe.com ｜ **风险**：read ｜ **版本**：v1.2.0
+
+
 
 ## 输入参数
 

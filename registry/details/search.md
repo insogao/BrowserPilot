@@ -29,6 +29,14 @@
 ## 详细说明
 
 Search Google and return the top 10 results with title, URL, and snippet.
+## 功能一览
+
+- **功能**：Search Google and return the top 10 results with title, URL, and snippet.
+- **输入**：`query`(string, 必填)
+- **返回**：`count`、`links`、`text`
+- **站点**：google.com、google.com.hk、google.co.jp、google.co.uk ｜ **风险**：read ｜ **版本**：v1.0.0
+
+
 
 ## Category
 

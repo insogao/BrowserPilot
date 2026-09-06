@@ -1,6 +1,14 @@
 # 韭研公社搜索模板
 
 在韭研公社（原韭菜公社，jiuyangongshe.com）搜索关键词，返回文章列表。
+## 功能一览
+
+- **功能**：在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。
+- **输入**：`query`(string, 必填)、`sort`(string)
+- **返回**：`count`、`links`、`text`
+- **站点**：jiuyangongshe.com ｜ **风险**：read ｜ **版本**：v1.2.0
+
+
 
 ## 输入参数
 

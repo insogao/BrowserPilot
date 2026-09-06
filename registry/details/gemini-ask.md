@@ -33,6 +33,14 @@
 ## 详细说明
 
 > 向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。
+## 功能一览
+
+- **功能**：向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。
+- **输入**：`prompt`(string, 必填)、`tabId`(number)、`responseSelector`(string)、`conversationUrl`(url)
+- **返回**：`text`、`images`、`url`、`title`
+- **站点**：gemini.google.com ｜ **风险**：write ｜ **版本**：v1.0.0
+
+
 
 ## 分类
 

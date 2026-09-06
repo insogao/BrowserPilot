@@ -2,7 +2,7 @@
   "id": "jiuyangongshe-search",
   "name": "韭研公社搜索",
   "version": "1.2.0",
-  "description": "在韭研公社（九阳公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
+  "description": "在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
   "category": "finance",
   "inputs": [
     {
@@ -64,7 +64,6 @@
     ],
     "keywords": [
       "韭研公社",
-      "九阳公社",
       "jiuyangongshe",
       "公社搜索"
     ],
@@ -85,7 +84,6 @@
     ],
     "risk": "read",
     "aliases": [
-      "九阳公社搜索",
       "韭研公社"
     ]
   }

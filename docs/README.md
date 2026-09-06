@@ -30,6 +30,7 @@ stale_after: 2026-12-03
 
 - [dev/task-spaces.md](dev/task-spaces.md) — Task Space、所有权和前台串行机制。
 - [../registry/templates/README.md](../registry/templates/README.md) — 站点适配 Agent 的唯一工作规范与真实 smoke 要求。
+- [../registry/INDEX.md](../registry/INDEX.md) — 全部模板一览（自动生成，按分类分组）。
 - [../registry/README.md](../registry/README.md) — Registry 协议和发布侧说明。
 - [../scripts/site-regression-plan.json](../scripts/site-regression-plan.json) — 支持站点和回归顺序的机器清单。
 

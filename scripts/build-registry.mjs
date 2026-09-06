@@ -155,6 +155,33 @@ for (let i = 0; i < packages.length; i++) {
 
 const catalog = JSON.stringify({ schemaVersion: 2, generatorVersion: 1, templates: packages.map((x) => x.entry) }, null, 2) + "\n";
 const outputs = new Map([[catalogPath, catalog]]);
+
+function indexMarkdown(entries) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const cat = entry.category || "generic";
+    if (!groups.has(cat)) groups.set(cat, []);
+    groups.get(cat).push(entry);
+  }
+  const lines = [
+    "# 模板一览（自动生成）",
+    "",
+    "> 由 `npm run registry:build` 生成，**勿手改**。权威定义在各自包内 `template.json`；机器可读目录为 [`registry/catalog.json`](./catalog.json)，逐模板详情在 [`registry/details/`](./details/)。",
+    "> 共 " + entries.length + " 个模板。",
+    "",
+  ];
+  for (const [cat, items] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    lines.push("## " + cat, "", "| 模板 ID | 名称 | 版本 | 功能 | 风险 | 包目录 |", "|---|---|---|---|---|---|");
+    for (const e of items.sort((a, b) => a.id.localeCompare(b.id))) {
+      const dir = "templates/" + e.id + "/";
+      lines.push("| `" + e.id + "` | " + e.name + " | " + e.version + " | " + e.description + " | " + e.risk + " | [" + dir + "](" + dir + ") |");
+    }
+    lines.push("");
+  }
+  return lines.join("\n") + "\n";
+}
+outputs.set(path.join(root, "registry", "INDEX.md"), indexMarkdown(packages.map((x) => x.entry)));
+
 for (const item of packages) outputs.set(path.join(detailsRoot, item.template.id + ".md"), detailMarkdown(item.template, item.entry, item.packageDir));
 
 if (check) {

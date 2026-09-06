@@ -29,6 +29,14 @@
 ## 详细说明
 
 Search Google Scholar (scholar.google.com) for academic papers and return top results with title, URL, and visible text summary.
+## 功能一览
+
+- **功能**：Search Google Scholar for academic papers and return top results with title, URL, and visible text summary.
+- **输入**：`query`(string, 必填)
+- **返回**：`count`、`links`、`text`
+- **站点**：scholar.google.com ｜ **风险**：read ｜ **版本**：v1.2.0
+
+
 
 ## Input Parameters
 

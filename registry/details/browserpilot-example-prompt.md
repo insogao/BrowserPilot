@@ -30,6 +30,13 @@
 
 它只返回拼装后的 prompt，不访问网页，也不产生外部副作用。
 
+## 功能一览
+
+- **功能**：把输入主题整理为一个不执行网页动作的示例提示词。
+- **输入**：`topic`(string, 必填)
+- **返回**：`prompt`
+- **站点**：无站点限制 ｜ **风险**：read ｜ **版本**：v1.1.0
+
 ## 权威定义
 
 [`template.json`](../templates/browserpilot-example-prompt/template.json)
