@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "xueqiu-comments",
+    "params": {
+      "url": "https://xueqiu.com/5364567880/408184584",
+      "limit": 5
+    }
+  },
+  "expect": {
+    "contains": "user"
+  }
+}

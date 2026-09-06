@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "jiuyangongshe-comments",
+    "params": {
+      "url": "https://www.jiuyangongshe.com/a/2gskypscpuh",
+      "limit": 10
+    }
+  },
+  "expect": {
+    "contains": "comment"
+  }
+}

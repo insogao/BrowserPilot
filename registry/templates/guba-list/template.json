@@ -1,0 +1,84 @@
+{
+  "id": "guba-list",
+  "name": "个股吧帖子流",
+  "version": "1.0.1",
+  "description": "按股票代码打开个股吧列表页，返回最新帖子流（标题/链接/阅读数/评论数/时间），默认按时间排序。无需登录。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "code",
+      "type": "string",
+      "required": true,
+      "description": "6 位股票代码（如 600519）；或用 params.url 传含代码的链接"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 30,
+      "description": "最多条数"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "http://guba.eastmoney.com/list,$code.html"
+      },
+      "note": "打开个股吧列表页（默认按时间）"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 2500
+      },
+      "note": "列表渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const code=(want('$code')||(want('$url').match(/(\\d{6})/)||[])[1]||'');if(!code)return {ok:false,error:'no-code',hint:'请传 6 位股票代码（params.code）'};await new Promise(r=>setTimeout(r,800));const rows=[...document.querySelectorAll('.listitem, tr[class*=listitem], [id*=tr_]')];const items=rows.map(r=>{const a=r.querySelector('a[href*=news],a[href*=caifuhao],a[href]');const nums=(r.innerText||'').match(/[\\d.]+\\s*[万]?/g)||[];const timeM=(r.textContent||'').match(/\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}/);return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100),url:a.href.startsWith('//')?'https:'+a.href:a.href,reads:nums[0]||null,replies:nums[1]||null,time:timeM?timeM[0]:null}:null;}).filter(Boolean).slice(0,Math.max(1,Math.min(Number('$limit')||30,50)));return {ok:true,code:code,count:items.length,posts:items,sort:'time'};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "列表行解析：标题/链接/阅读/评论/时间"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "guba.eastmoney.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "finance.forum",
+      "stock.posts"
+    ],
+    "keywords": [
+      "股吧",
+      "个股吧",
+      "帖子列表",
+      "最新帖"
+    ],
+    "outputs": [
+      {
+        "name": "posts",
+        "type": "array",
+        "description": "title/url/reads/replies/time"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "股吧列表",
+      "个股吧"
+    ]
+  }
+}

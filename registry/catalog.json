@@ -661,6 +661,61 @@
       "fingerprint": "sha256:c9b8ee440a0bf11961cc5a0e21a7e40348da22a42a4aff5214cb6a6d41923dd2"
     },
     {
+      "id": "guba-list",
+      "name": "个股吧帖子流",
+      "version": "1.0.1",
+      "path": "registry/templates/guba-list/template.json",
+      "detailsPath": "registry/details/guba-list.md",
+      "description": "按股票代码打开个股吧列表页，返回最新帖子流（标题/链接/阅读数/评论数/时间），默认按时间排序。无需登录。",
+      "category": "finance",
+      "sites": [
+        "guba.eastmoney.com"
+      ],
+      "intents": [
+        "finance.forum",
+        "stock.posts"
+      ],
+      "keywords": [
+        "股吧",
+        "个股吧",
+        "帖子列表",
+        "最新帖"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "code",
+          "type": "string",
+          "required": true,
+          "description": "6 位股票代码（如 600519）；或用 params.url 传含代码的链接"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多条数"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "posts",
+          "type": "array",
+          "description": "title/url/reads/replies/time"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "股吧列表",
+        "个股吧"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:db2029cacf246102fd5541dc77c9c8f6a04ed60d52d09332c1349986c30912d2"
+    },
+    {
       "id": "guba-search",
       "name": "股吧搜索",
       "version": "1.1.1",
@@ -778,6 +833,58 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:b6e2d108d4559a8482095e5cea03229f7e1e28e91df0b39300a9bcc30f057794"
+    },
+    {
+      "id": "jiuyangongshe-comments",
+      "name": "韭研公社评论爬取",
+      "version": "1.0.0",
+      "path": "registry/templates/jiuyangongshe-comments/template.json",
+      "detailsPath": "registry/details/jiuyangongshe-comments.md",
+      "description": "爬取一篇韭研公社文章下的评论（用户/时间/内容）。需要微信登录态；无评论时返回空列表。",
+      "category": "finance",
+      "sites": [
+        "jiuyangongshe.com"
+      ],
+      "intents": [
+        "crawl",
+        "finance.comments"
+      ],
+      "keywords": [
+        "韭研公社",
+        "九阳公社",
+        "评论"
+      ],
+      "capabilities": [
+        "js"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "文章链接；不填则用当前标签页"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多抓取条数（1-100）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "comments",
+          "type": "array",
+          "description": "user/time/raw"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "九阳公社评论",
+        "公社评论"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:5d410ef704f76c204d818745eb6f98b4b24da8f49fd717612d8d8d7d3e8439b2"
     },
     {
       "id": "jiuyangongshe-search",
@@ -1072,6 +1179,73 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:0e792905f29431487c01983795ee42bc8bd2ac8fd7bf2343902d9d89490c1bb1"
+    },
+    {
+      "id": "xueqiu-comments",
+      "name": "雪球评论爬取",
+      "version": "1.0.0",
+      "path": "registry/templates/xueqiu-comments/template.json",
+      "detailsPath": "registry/details/xueqiu-comments.md",
+      "description": "爬取一篇雪球帖子下的评论（用户/内容/点赞/时间），支持分页。需雪球登录态。",
+      "category": "finance",
+      "sites": [
+        "xueqiu.com"
+      ],
+      "intents": [
+        "crawl",
+        "finance.comments"
+      ],
+      "keywords": [
+        "雪球",
+        "评论",
+        "回复",
+        "comments"
+      ],
+      "capabilities": [
+        "js"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "雪球帖子链接；不填则用当前标签页"
+        },
+        {
+          "name": "page",
+          "type": "number",
+          "required": false,
+          "description": "评论页码"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "每页条数（1-100）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "comments",
+          "type": "array",
+          "description": "user/text/likes/time"
+        },
+        {
+          "name": "page",
+          "type": "number"
+        },
+        {
+          "name": "total",
+          "type": "number"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "雪球评论",
+        "帖子评论"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:ba4f90ba08b96cd9b23acdb2faed062d79ddbe2d820bf100a1868e00e9787905"
     },
     {
       "id": "xueqiu-search",

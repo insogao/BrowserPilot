@@ -1,0 +1,85 @@
+{
+  "id": "xueqiu-comments",
+  "name": "雪球评论爬取",
+  "version": "1.0.0",
+  "description": "爬取一篇雪球帖子下的评论（用户/内容/点赞/时间），支持分页。需雪球登录态。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "url",
+      "type": "url",
+      "required": false,
+      "description": "雪球帖子链接；不填则用当前标签页"
+    },
+    {
+      "name": "page",
+      "type": "number",
+      "required": false,
+      "default": 1,
+      "description": "评论页码"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "每页条数（1-100）"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/xueqiu\\.com\\/\\d+\\/\\d+/.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入雪球帖子链接（xueqiu.com/<uid>/<postid>）'};const pid=(location.href.match(/\\/(\\d+)\\/(\\d+)/)||[])[2];const page=Math.max(1,Number('$page')||1);const count=Math.max(1,Math.min(Number('$limit')||20,100));const r=await fetch('https://xueqiu.com/statuses/comments.json?id='+pid+'&page='+page+'&count='+count,{credentials:'include'}).then(x=>x.json());const list=r.comments||[];return {ok:true,postUrl:location.href,page:page,fetched:list.length,comments:list.map(c=>({user:c.user&&c.user.screen_name,text:(c.text||'').replace(/<[^>]+>/g,'').replace(/\\s+/g,' ').trim().slice(0,500),likes:c.like_count||0,time:c.created_at?new Date(c.created_at).toISOString().slice(0,19).replace('T',' '):null})),total:r.total!==undefined?r.total:null};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "走雪球官方评论接口（页面上下文，带登录态）"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "xueqiu.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "crawl",
+      "finance.comments"
+    ],
+    "keywords": [
+      "雪球",
+      "评论",
+      "回复",
+      "comments"
+    ],
+    "outputs": [
+      {
+        "name": "comments",
+        "type": "array",
+        "description": "user/text/likes/time"
+      },
+      {
+        "name": "page",
+        "type": "number"
+      },
+      {
+        "name": "total",
+        "type": "number"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "雪球评论",
+      "帖子评论"
+    ]
+  }
+}

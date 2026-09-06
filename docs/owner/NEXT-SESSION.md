@@ -1,7 +1,7 @@
 ---
 type: SessionHandoff
 status: stable
-generated: { by: zcode, at: 2026-09-05T05:30:00+08:00 }
+generated: { by: zcode, at: 2026-09-07T01:30:00+08:00 }
 stale_after: 2026-09-19
 ---
 
@@ -69,6 +69,14 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - **排序 v1.1**：雪球 sort=latest（点「最新讨论」）、股吧 sort=latest（点「按时间排序」，带 6 次重试）、九阳 sort=latest（点「按时间」）——三个搜索 smoke 全部以 time 排序通过。
 - **九阳互动的诚实结论**：搜索结果页互动条仅个别卡片渲染（按热度/按时间视图均不稳定），站点不提供稳定来源——搜索模板不返回互动字段（v1.2.0），文章模板取不到时返回 null 而非 0，README 均已说明。
 - 九阳搜索 v1.2.0 曾引入表达式语法残留（字符串手术事故），已修复并保留语法守卫流程（new Function 预检）。
+
+## 评论/列表能力补全（2026-09-07）
+
+- `xueqiu-comments` v1.0.0：statuses/comments.json 接口分页评论（user/text/likes/time），smoke passed。**至此雪球完整链条成立：搜索→帖子全文→评论翻页。**
+- `jiuyangongshe-comments` v1.0.0：.comment-content 懒加载抓取（滚动全页触发），smoke passed。
+- `guba-list` v1.0.1：个股吧列表页（.listitem）——标题/链接/阅读数/评论数/时间，默认按时间，smoke passed。**列表级互动数据以本模板为准。**
+- **股吧帖子回复区仍受限**：新改版回复列表为 gbapi 懒加载，页面外 fetch 被 CORS 拦截、页面内点击展开才渲染且结构不稳定——回复内容暂不可爬（guba-article README 已声明），后续如需要可走点击展开方案。
+- 教训记录：write_pkg 时 example/smoke 传参顺序写反导致断言错位（smoke 契约 minLinks 打在没有 links 字段的模板上）；js 表达式内自导航与 evalPage 瞬态重试互相踩（Inspected target navigated）——导航一律用 open_tab 步骤，js 只抓取。
 
 ## 下一步优先级
 

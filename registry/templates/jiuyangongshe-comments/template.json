@@ -1,0 +1,69 @@
+{
+  "id": "jiuyangongshe-comments",
+  "name": "韭研公社评论爬取",
+  "version": "1.0.0",
+  "description": "爬取一篇韭研公社文章下的评论（用户/时间/内容）。需要微信登录态；无评论时返回空列表。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "url",
+      "type": "url",
+      "required": false,
+      "description": "文章链接；不填则用当前标签页"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 30,
+      "description": "最多抓取条数（1-100）"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/jiuyangongshe\\.com\\/a\\//.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入公社文章链接（jiuyangongshe.com/a/<id>）'};for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}await new Promise(r=>setTimeout(r,1000));window.scrollTo(0,0);const nodes=[...document.querySelectorAll('.comment-content')];const limit=Math.max(1,Math.min(Number('$limit')||30,100));const comments=nodes.slice(0,limit).map(n=>{const t=(n.innerText||'').replace(/\\n+/g,' ').trim();const user=(t.split('只看TA')[0]||'').trim().slice(0,40);const timeM=t.match(/((昨天|今天)?\\s*[\\d-]{5,10}\\s*\\d{2}:\\d{2})/);return {raw:t.slice(0,400),user:user||null,time:timeM?timeM[1].trim():null};});return {ok:true,fetched:comments.length,total:comments.length>=limit?'>='+limit:comments.length,comments:comments,url:location.href};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "滚动触发懒加载后抓取 .comment-content"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "jiuyangongshe.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "crawl",
+      "finance.comments"
+    ],
+    "keywords": [
+      "韭研公社",
+      "九阳公社",
+      "评论"
+    ],
+    "outputs": [
+      {
+        "name": "comments",
+        "type": "array",
+        "description": "user/time/raw"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "九阳公社评论",
+      "公社评论"
+    ]
+  }
+}
