@@ -3,16 +3,17 @@
 > 在东方财富股吧搜索关键词，返回相关帖子（标题+链接+摘要）。无需登录即可访问。
 
 - ID: `guba-search`
-- 版本: `1.0.0`
+- 版本: `1.1.1`
 - 风险: `read`
 - 适用站点: `eastmoney.com`, `guba.eastmoney.com`
 - Intents: `search`, `finance.forum`
 - Capabilities: `js`, `open_tab`, `waitForTimeout`
-- 功能指纹: `sha256:55c932f4111a923fbcc92a75215403b146c6995b1d8d2c40aab0192f6c62d299`
+- 功能指纹: `sha256:84de08c63ed395a75dd3d16b67f73a352e39c0f7265cc53d2f619a75974a415d`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词（股票名/话题）
+- `sort` (string): 排序：latest=按时间；留空=默认（相关度）
 
 ## 输出
 

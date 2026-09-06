@@ -3,7 +3,7 @@
 > 爬取一篇股吧帖子的正文（标题+内容，最多8000字符）。无需登录。
 
 - ID: `guba-article`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `guba.eastmoney.com`
 - Intents: `crawl`, `finance.forum`

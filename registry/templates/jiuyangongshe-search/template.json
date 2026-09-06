@@ -1,7 +1,7 @@
 {
   "id": "jiuyangongshe-search",
   "name": "韭研公社搜索",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "在韭研公社（九阳公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
   "category": "finance",
   "inputs": [
@@ -10,6 +10,13 @@
       "type": "string",
       "required": true,
       "description": "搜索关键词"
+    },
+    {
+      "name": "sort",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "排序：latest=按时间；留空=按热度"
     }
   ],
   "steps": "commands",
@@ -31,7 +38,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('a[href*=\"/a/\"]')].map(a=>({title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:location.origin+(a.getAttribute('href')||'')})).filter(x=>x.title.length>5);const seen=new Set();posts=posts.filter(x=>!seen.has(x.url)&&seen.add(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2000).trim()};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){const t=[...document.querySelectorAll('a,div,span')].find(e=>e.children.length<=1&&/^\\s*按时间\\s*$/.test(e.textContent||''));if(t){t.click();sorted=true;await new Promise(r=>setTimeout(r,2500));}}for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,800));const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('a[href*=\"/a/\"]')].map(a=>{const url=location.origin+(a.getAttribute('href')||'');return {title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:url};});const seen=new Set();posts=posts.filter(x=>!seen.has(x.url)&&seen.add(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {sort:sorted?'time':'hot',count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2000).trim()};})()"
       },
       "expectations": [
         {
@@ -39,7 +46,7 @@
           "min": 3
         }
       ],
-      "note": "抓取 /a/ 文章链接"
+      "note": "抓取 /a/ 文章链接（搜索页互动条仅个别卡片渲染，站点不提供稳定数据→省略字段）"
     }
   ],
   "tokenStrategy": {

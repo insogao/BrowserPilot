@@ -1,7 +1,7 @@
 {
   "id": "guba-search",
   "name": "股吧搜索",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "在东方财富股吧搜索关键词，返回相关帖子（标题+链接+摘要）。无需登录即可访问。",
   "category": "finance",
   "inputs": [
@@ -10,6 +10,13 @@
       "type": "string",
       "required": true,
       "description": "搜索关键词（股票名/话题）"
+    },
+    {
+      "name": "sort",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "排序：latest=按时间；留空=默认（相关度）"
     }
   ],
   "steps": "commands",
@@ -31,7 +38,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('.article_item')].map(d=>{const a=d.querySelector('a[href]');return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:a.href,excerpt:(d.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100)}:null;}).filter(x=>x&&x.url&&/guba\\.eastmoney\\.com\\/(news|list)/.test(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2500).trim()};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){for(let att=0;att<6&&!sorted;att++){const t=[...document.querySelectorAll('a')].find(a=>/按时间排序/.test(a.textContent||''));if(t){t.click();sorted=true;await new Promise(r=>setTimeout(r,2500));}else{await new Promise(r=>setTimeout(r,800));}}}const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('.article_item')].map(d=>{const a=d.querySelector('a[href]');const c=d.querySelector('.article_content');return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:a.href,time:c?(c.textContent||'').trim().slice(0,20):null,excerpt:(d.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100)}:null;}).filter(x=>x&&x.url&&/guba\\.eastmoney\\.com\\/(news|list)/.test(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {sort:sorted?'time':'default',count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2500).trim()};})()"
       },
       "expectations": [
         {
@@ -39,7 +46,7 @@
           "min": 3
         }
       ],
-      "note": "抓取 .article_item 帖子结果"
+      "note": "抓取帖子结果（sort=latest 时点击页面「按时间排序」）"
     }
   ],
   "tokenStrategy": {

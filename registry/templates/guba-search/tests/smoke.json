@@ -3,7 +3,8 @@
   "args": {
     "id": "guba-search",
     "params": {
-      "query": "贵州茅台"
+      "query": "贵州茅台",
+      "sort": "latest"
     }
   },
   "expect": {

@@ -3,7 +3,7 @@
 > 爬取一篇雪球帖子/文章的全文（标题+正文，最多8000字符）。需浏览器已有雪球登录态。
 
 - ID: `xueqiu-article`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `xueqiu.com`
 - Intents: `crawl`, `finance.article`

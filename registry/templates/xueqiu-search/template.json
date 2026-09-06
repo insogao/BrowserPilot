@@ -1,7 +1,7 @@
 {
   "id": "xueqiu-search",
   "name": "雪球搜索",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "在雪球搜索关键词，返回相关讨论帖（作者+时间+链接+摘要）与页面信息（含股票行情卡文本）。需浏览器已有雪球登录态。",
   "category": "finance",
   "inputs": [
@@ -10,6 +10,13 @@
       "type": "string",
       "required": true,
       "description": "搜索关键词（股票名/代码/话题）"
+    },
+    {
+      "name": "sort",
+      "type": "string",
+      "required": false,
+      "default": "",
+      "description": "排序：latest=最新讨论；留空=默认排序"
     }
   ],
   "steps": "commands",
@@ -31,7 +38,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('.timeline__item')].map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120)}:null;}).filter(Boolean);if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {count:posts.length,links:posts.slice(0,10),text:(document.body.innerText||'').slice(0,3000).trim()};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sort=want('$sort').toLowerCase();if(sort==='latest'||sort==='time'){const btn=[...document.querySelectorAll('a,div,span')].find(e=>(e.textContent||'').trim()==='默认排序'&&e.children.length<=1);if(btn){btn.click();await new Promise(r=>setTimeout(r,900));const opt=[...document.querySelectorAll('li,div,a,span')].find(e=>(e.textContent||'').trim()==='最新讨论');if(opt){opt.click();await new Promise(r=>setTimeout(r,2500));}}}const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('.timeline__item')].map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');const nums=[...it.querySelectorAll('.timeline__item__control')].map(e=>parseInt((e.textContent||'').trim())||0);return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120),reposts:nums[0]||0,replies:nums[1]||0,likes:nums[2]||0}:null;}).filter(Boolean);if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {sort:sort||'default',count:posts.length,links:posts.slice(0,10),text:(document.body.innerText||'').slice(0,3000).trim()};})()"
       },
       "expectations": [
         {
@@ -39,7 +46,7 @@
           "min": 3
         }
       ],
-      "note": "抓取讨论帖流"
+      "note": "抓取讨论帖流（转发/评论/赞互动数；sort=latest 时先切「最新讨论」）"
     }
   ],
   "tokenStrategy": {

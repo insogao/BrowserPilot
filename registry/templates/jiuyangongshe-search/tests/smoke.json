@@ -3,7 +3,8 @@
   "args": {
     "id": "jiuyangongshe-search",
     "params": {
-      "query": "中国船舶"
+      "query": "中国船舶",
+      "sort": "latest"
     }
   },
   "expect": {

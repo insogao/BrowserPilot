@@ -609,7 +609,7 @@
     {
       "id": "guba-article",
       "name": "股吧帖子爬取",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "path": "registry/templates/guba-article/template.json",
       "detailsPath": "registry/details/guba-article.md",
       "description": "爬取一篇股吧帖子的正文（标题+内容，最多8000字符）。无需登录。",
@@ -663,7 +663,7 @@
     {
       "id": "guba-search",
       "name": "股吧搜索",
-      "version": "1.0.0",
+      "version": "1.1.1",
       "path": "registry/templates/guba-search/template.json",
       "detailsPath": "registry/details/guba-search.md",
       "description": "在东方财富股吧搜索关键词，返回相关帖子（标题+链接+摘要）。无需登录即可访问。",
@@ -694,6 +694,12 @@
           "type": "string",
           "required": true,
           "description": "搜索关键词（股票名/话题）"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "description": "排序：latest=按时间；留空=默认（相关度）"
         }
       ],
       "outputs": [
@@ -717,12 +723,12 @@
         "guba 搜索"
       ],
       "deprecated": false,
-      "fingerprint": "sha256:55c932f4111a923fbcc92a75215403b146c6995b1d8d2c40aab0192f6c62d299"
+      "fingerprint": "sha256:84de08c63ed395a75dd3d16b67f73a352e39c0f7265cc53d2f619a75974a415d"
     },
     {
       "id": "jiuyangongshe-article",
       "name": "韭研公社文章爬取",
-      "version": "1.0.0",
+      "version": "1.1.2",
       "path": "registry/templates/jiuyangongshe-article/template.json",
       "detailsPath": "registry/details/jiuyangongshe-article.md",
       "description": "爬取一篇韭研公社文章的标题与正文（最多8000字符）。需要微信登录态；积分/权限内容可能仅返回可见部分。",
@@ -776,7 +782,7 @@
     {
       "id": "jiuyangongshe-search",
       "name": "韭研公社搜索",
-      "version": "1.0.0",
+      "version": "1.2.0",
       "path": "registry/templates/jiuyangongshe-search/template.json",
       "detailsPath": "registry/details/jiuyangongshe-search.md",
       "description": "在韭研公社（九阳公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
@@ -805,6 +811,12 @@
           "type": "string",
           "required": true,
           "description": "搜索关键词"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "description": "排序：latest=按时间；留空=按热度"
         }
       ],
       "outputs": [
@@ -828,7 +840,7 @@
         "韭研公社"
       ],
       "deprecated": false,
-      "fingerprint": "sha256:c7a5fd5fff0413c20264a3032251c518a4856d033290394bf0d26d0eaa2e5fde"
+      "fingerprint": "sha256:7e9bab852b6c50a078af95cee8089059c5c3d7208dddd3971ea2c300d5e10862"
     },
     {
       "id": "search-demo",
@@ -1010,7 +1022,7 @@
     {
       "id": "xueqiu-article",
       "name": "雪球文章爬取",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "path": "registry/templates/xueqiu-article/template.json",
       "detailsPath": "registry/details/xueqiu-article.md",
       "description": "爬取一篇雪球帖子/文章的全文（标题+正文，最多8000字符）。需浏览器已有雪球登录态。",
@@ -1064,7 +1076,7 @@
     {
       "id": "xueqiu-search",
       "name": "雪球搜索",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "path": "registry/templates/xueqiu-search/template.json",
       "detailsPath": "registry/details/xueqiu-search.md",
       "description": "在雪球搜索关键词，返回相关讨论帖（作者+时间+链接+摘要）与页面信息（含股票行情卡文本）。需浏览器已有雪球登录态。",
@@ -1094,6 +1106,12 @@
           "type": "string",
           "required": true,
           "description": "搜索关键词（股票名/代码/话题）"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "description": "排序：latest=最新讨论；留空=默认排序"
         }
       ],
       "outputs": [
@@ -1118,7 +1136,7 @@
         "xueqiu 搜索"
       ],
       "deprecated": false,
-      "fingerprint": "sha256:b4b41ac511639c7d2af72b93b69a71c0a337d531143c3fb32efa4426081440ce"
+      "fingerprint": "sha256:d05413202075413c624907914cea6a76c4998508dd311ea94e8bd151e22c7b05"
     }
   ]
 }

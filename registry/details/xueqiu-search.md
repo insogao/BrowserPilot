@@ -3,16 +3,17 @@
 > 在雪球搜索关键词，返回相关讨论帖（作者+时间+链接+摘要）与页面信息（含股票行情卡文本）。需浏览器已有雪球登录态。
 
 - ID: `xueqiu-search`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `xueqiu.com`
 - Intents: `search`, `finance.search`, `stock.discussion`
 - Capabilities: `js`, `open_tab`, `waitForTimeout`
-- 功能指纹: `sha256:b4b41ac511639c7d2af72b93b69a71c0a337d531143c3fb32efa4426081440ce`
+- 功能指纹: `sha256:d05413202075413c624907914cea6a76c4998508dd311ea94e8bd151e22c7b05`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词（股票名/代码/话题）
+- `sort` (string): 排序：latest=最新讨论；留空=默认排序
 
 ## 输出
 

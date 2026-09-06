@@ -1,7 +1,7 @@
 ---
 type: SessionHandoff
 status: stable
-generated: { by: zcode, at: 2026-09-05T04:20:00+08:00 }
+generated: { by: zcode, at: 2026-09-05T05:30:00+08:00 }
 stale_after: 2026-09-19
 ---
 
@@ -61,6 +61,14 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 雪球/股吧/韭研公社各含 search + article 两个模板，共 6 个（产品工作流已达 16 个）。全部真机 smoke passed。
 - **反爬边界（宪章红线）**：只做真实浏览器+共享登录态+低频单页抓取；不做验证码绕过/指纹伪装。站点风控触发时记 blocked。
 - 站点关键事实：雪球搜索 /k?q=（SPA，需登录）；股吧帖子搜索必须走 so.eastmoney.com/tiezi/s（/guba/s 会重定向首页），正文 #newscontent；韭研公社搜索路径 token 为站内固定值（/search/fa3409...?k=词），需微信登录。
+
+## 截图验证与互动/排序升级（2026-09-05 第三批）
+
+- **截图比对**：雪球搜索/雪球文章/股吧搜索/九阳搜索 4 张截图与提取文本逐字一致（发现并确认了截图里可见的互动数字与排序控件）。
+- **互动数据 v1.1**：雪球搜索每帖带 reposts/replies/likes（.timeline__item__control 顺序=转发/评论/赞，与截图数字交叉验证一致）；雪球文章 engagement 走 statuses/show.json 接口（likes74/replies106/retweets14 与截图一致）+ author/pubTime；股吧帖子带 postTime/replies（页面正则，尽力而为）；九阳文章 engagement 尽力而为（badge-box，取不到为 null）。
+- **排序 v1.1**：雪球 sort=latest（点「最新讨论」）、股吧 sort=latest（点「按时间排序」，带 6 次重试）、九阳 sort=latest（点「按时间」）——三个搜索 smoke 全部以 time 排序通过。
+- **九阳互动的诚实结论**：搜索结果页互动条仅个别卡片渲染（按热度/按时间视图均不稳定），站点不提供稳定来源——搜索模板不返回互动字段（v1.2.0），文章模板取不到时返回 null 而非 0，README 均已说明。
+- 九阳搜索 v1.2.0 曾引入表达式语法残留（字符串手术事故），已修复并保留语法守卫流程（new Function 预检）。
 
 ## 下一步优先级
 

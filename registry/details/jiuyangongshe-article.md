@@ -3,7 +3,7 @@
 > 爬取一篇韭研公社文章的标题与正文（最多8000字符）。需要微信登录态；积分/权限内容可能仅返回可见部分。
 
 - ID: `jiuyangongshe-article`
-- 版本: `1.0.0`
+- 版本: `1.1.2`
 - 风险: `read`
 - 适用站点: `jiuyangongshe.com`
 - Intents: `crawl`, `finance.research`
