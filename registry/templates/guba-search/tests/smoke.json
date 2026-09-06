@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "guba-search",
+    "params": {
+      "query": "贵州茅台"
+    }
+  },
+  "expect": {
+    "minLinks": 3
+  }
+}

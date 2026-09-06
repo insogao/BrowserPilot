@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "jiuyangongshe-search",
+    "params": {
+      "query": "中国船舶"
+    }
+  },
+  "expect": {
+    "minLinks": 3,
+    "contains": "jiuyangongshe.com"
+  }
+}

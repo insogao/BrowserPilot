@@ -1,0 +1,85 @@
+{
+  "id": "jiuyangongshe-search",
+  "name": "韭研公社搜索",
+  "version": "1.0.0",
+  "description": "在韭研公社（九阳公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "搜索关键词"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://www.jiuyangongshe.com/search/fa3409439e2b45c79176c5eebf75a4f8?k=$query"
+      },
+      "note": "打开站内搜索结果页（搜索路径 token 为站内固定值，k 参数生效，2026-09 真机验证）"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 3000
+      },
+      "note": "SPA 渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('a[href*=\"/a/\"]')].map(a=>({title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:location.origin+(a.getAttribute('href')||'')})).filter(x=>x.title.length>5);const seen=new Set();posts=posts.filter(x=>!seen.has(x.url)&&seen.add(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2000).trim()};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.count",
+          "min": 3
+        }
+      ],
+      "note": "抓取 /a/ 文章链接"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "jiuyangongshe.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "search",
+      "finance.research"
+    ],
+    "keywords": [
+      "韭研公社",
+      "九阳公社",
+      "jiuyangongshe",
+      "公社搜索"
+    ],
+    "outputs": [
+      {
+        "name": "count",
+        "type": "number"
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "title/url"
+      },
+      {
+        "name": "text",
+        "type": "string"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "九阳公社搜索",
+      "韭研公社"
+    ]
+  }
+}

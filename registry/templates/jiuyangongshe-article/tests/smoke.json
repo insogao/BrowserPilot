@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "jiuyangongshe-article",
+    "params": {
+      "url": "https://www.jiuyangongshe.com/a/11cp4zrfyyq"
+    }
+  },
+  "expect": {
+    "contains": "中国船舶"
+  }
+}

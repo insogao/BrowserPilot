@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "guba-article",
+    "params": {
+      "url": "http://guba.eastmoney.com/news,600519,1742508787.html"
+    }
+  },
+  "expect": {
+    "contains": "茅台"
+  }
+}

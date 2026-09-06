@@ -53,6 +53,36 @@
       "site": "Bilibili Video Download",
       "templateId": "bilibili-download-video",
       "kind": "runtime"
+    },
+    {
+      "site": "Xueqiu",
+      "templateId": "xueqiu-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "Xueqiu Article",
+      "templateId": "xueqiu-article",
+      "kind": "runtime"
+    },
+    {
+      "site": "Eastmoney Guba",
+      "templateId": "guba-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "Eastmoney Guba Article",
+      "templateId": "guba-article",
+      "kind": "runtime"
+    },
+    {
+      "site": "Jiuyangongshe",
+      "templateId": "jiuyangongshe-search",
+      "kind": "runtime"
+    },
+    {
+      "site": "Jiuyangongshe Article",
+      "templateId": "jiuyangongshe-article",
+      "kind": "runtime"
     }
   ],
   "runtimeOrder": [
@@ -66,7 +96,13 @@
     "bilibili-search",
     "chatgpt-ask",
     "gemini-ask",
-    "bilibili-download-video"
+    "bilibili-download-video",
+    "xueqiu-search",
+    "xueqiu-article",
+    "guba-search",
+    "guba-article",
+    "jiuyangongshe-search",
+    "jiuyangongshe-article"
   ],
   "builtinOrder": [],
   "builtinMigrationOrder": [
@@ -83,7 +119,13 @@
     "chatgpt-ask": "The compiled-in fallback fills the prompt but fails to locate button[data-testid=send-button] on the current ChatGPT page. Create a dynamic runtime package for chatgpt-ask, inspect the signed-in live page in a maximized Task Space, submit one harmless exact-reply smoke prompt, and verify the response contains the marker. Do not modify core source.",
     "gemini-ask": "The compiled-in fallback fills the prompt but fails to locate button[aria-label='Send message'] on the current Gemini page. Create a dynamic runtime package for gemini-ask, inspect the signed-in live page in a maximized Task Space, submit one harmless exact-reply smoke prompt, and verify the response contains the marker. Do not modify core source.",
     "bilibili-search": "2026-09-05 macOS 真机创建并 smoke 通过：直连 search.bilibili.com/all 结果页（避开首页输入框改版风险），.bili-video-card 卡片链接抓取（真机 42 卡片结构验证）。",
-    "bilibili-download-video": "2026-09-05 macOS 真机创建：playurl platform=html5 单文件 MP4（720P 上限，账号 accept 含 1080P+ 但 html5 封顶 720），页面内拉流 CORS 验证 206，58.8MB 落盘 ~/Downloads 成功。番剧/互动视频不支持（结构化报错）。"
+    "bilibili-download-video": "2026-09-05 macOS 真机创建：playurl platform=html5 单文件 MP4（720P 上限，账号 accept 含 1080P+ 但 html5 封顶 720），页面内拉流 CORS 验证 206，58.8MB 落盘 ~/Downloads 成功。番剧/互动视频不支持（结构化报错）。",
+    "xueqiu-search": "2026-09-05 macOS 真机创建：/k?q= SPA 搜索页，.timeline__item 帖子流（user-name/date-and-source/content），需登录态。",
+    "xueqiu-article": "2026-09-05 macOS 真机创建：正文容器 .article__bd__detail，标题 h1 兜底 document.title。",
+    "guba-search": "2026-09-05 macOS 真机创建：搜索走 so.eastmoney.com/tiezi/s（/guba/s 会被重定向首页），.article_item 结果。",
+    "guba-article": "2026-09-05 macOS 真机创建：正文容器 #newscontent（新版页面无 zw 类名）。",
+    "jiuyangongshe-search": "2026-09-05 macOS 真机创建：搜索路径 /search/<固定token>?k=词（token 为站内固定值，换 k 生效），需微信登录态。",
+    "jiuyangongshe-article": "2026-09-05 macOS 真机创建：正文容器 .detail-container（含标题作者时间正文）。"
   },
   "nonSiteStaticOnly": [
     "browserpilot-example-prompt"

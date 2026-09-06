@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "xueqiu-article",
+    "params": {
+      "url": "https://xueqiu.com/5364567880/408184584"
+    }
+  },
+  "expect": {
+    "contains": "茅台"
+  }
+}

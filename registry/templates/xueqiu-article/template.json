@@ -1,0 +1,70 @@
+{
+  "id": "xueqiu-article",
+  "name": "雪球文章爬取",
+  "version": "1.0.0",
+  "description": "爬取一篇雪球帖子/文章的全文（标题+正文，最多8000字符）。需浏览器已有雪球登录态。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "url",
+      "type": "url",
+      "required": false,
+      "description": "雪球帖子链接（xueqiu.com/<uid>/<postid>）；不填则在当前标签页爬取"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/xueqiu\\.com\\/\\d+\\/\\d+/.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入雪球帖子链接（xueqiu.com/<用户id>/<帖子id>），或在帖子页上直接运行'};await new Promise(r=>setTimeout(r,1500));const body=document.querySelector('.article__bd__detail');if(!body)return {ok:false,error:'no-content',hint:'正文未渲染、需登录或无权限访问'};const h=document.querySelector('h1');return {ok:true,title:((h?h.textContent.trim():'')||document.title.split('_')[0].split('-')[0].trim()),content:body.innerText.slice(0,8000),url:location.href};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "导航（如需）并提取正文"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "xueqiu.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "crawl",
+      "finance.article"
+    ],
+    "keywords": [
+      "雪球",
+      "xueqiu",
+      "爬文章",
+      "帖子全文"
+    ],
+    "outputs": [
+      {
+        "name": "title",
+        "type": "string"
+      },
+      {
+        "name": "content",
+        "type": "string"
+      },
+      {
+        "name": "url",
+        "type": "url"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "雪球文章",
+      "雪球全文"
+    ]
+  }
+}

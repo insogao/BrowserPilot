@@ -607,6 +607,230 @@
       "fingerprint": "sha256:9fa51c12e99fd3086d7af638e547ef872f58a1cfe7bda25af5b8bb5d2f6a96bd"
     },
     {
+      "id": "guba-article",
+      "name": "股吧帖子爬取",
+      "version": "1.0.0",
+      "path": "registry/templates/guba-article/template.json",
+      "detailsPath": "registry/details/guba-article.md",
+      "description": "爬取一篇股吧帖子的正文（标题+内容，最多8000字符）。无需登录。",
+      "category": "finance",
+      "sites": [
+        "guba.eastmoney.com"
+      ],
+      "intents": [
+        "crawl",
+        "finance.forum"
+      ],
+      "keywords": [
+        "股吧",
+        "guba",
+        "帖子正文",
+        "爬取"
+      ],
+      "capabilities": [
+        "js"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "股吧帖子链接（guba.eastmoney.com/news,代码,帖子id.html）；不填则在当前标签页爬取"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "content",
+          "type": "string"
+        },
+        {
+          "name": "url",
+          "type": "url"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "股吧帖子",
+        "股吧正文"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:c9b8ee440a0bf11961cc5a0e21a7e40348da22a42a4aff5214cb6a6d41923dd2"
+    },
+    {
+      "id": "guba-search",
+      "name": "股吧搜索",
+      "version": "1.0.0",
+      "path": "registry/templates/guba-search/template.json",
+      "detailsPath": "registry/details/guba-search.md",
+      "description": "在东方财富股吧搜索关键词，返回相关帖子（标题+链接+摘要）。无需登录即可访问。",
+      "category": "finance",
+      "sites": [
+        "eastmoney.com",
+        "guba.eastmoney.com"
+      ],
+      "intents": [
+        "search",
+        "finance.forum"
+      ],
+      "keywords": [
+        "股吧",
+        "东方财富",
+        "guba",
+        "股吧搜索",
+        "帖子搜索"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词（股票名/话题）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number"
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "title/url/excerpt"
+        },
+        {
+          "name": "text",
+          "type": "string"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "东方财富股吧",
+        "guba 搜索"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:55c932f4111a923fbcc92a75215403b146c6995b1d8d2c40aab0192f6c62d299"
+    },
+    {
+      "id": "jiuyangongshe-article",
+      "name": "韭研公社文章爬取",
+      "version": "1.0.0",
+      "path": "registry/templates/jiuyangongshe-article/template.json",
+      "detailsPath": "registry/details/jiuyangongshe-article.md",
+      "description": "爬取一篇韭研公社文章的标题与正文（最多8000字符）。需要微信登录态；积分/权限内容可能仅返回可见部分。",
+      "category": "finance",
+      "sites": [
+        "jiuyangongshe.com"
+      ],
+      "intents": [
+        "crawl",
+        "finance.research"
+      ],
+      "keywords": [
+        "韭研公社",
+        "九阳公社",
+        "公社文章",
+        "爬取"
+      ],
+      "capabilities": [
+        "js"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "文章链接（jiuyangongshe.com/a/<id>）；不填则在当前标签页爬取"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "content",
+          "type": "string"
+        },
+        {
+          "name": "url",
+          "type": "url"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "九阳公社文章",
+        "公社爬取"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:b6e2d108d4559a8482095e5cea03229f7e1e28e91df0b39300a9bcc30f057794"
+    },
+    {
+      "id": "jiuyangongshe-search",
+      "name": "韭研公社搜索",
+      "version": "1.0.0",
+      "path": "registry/templates/jiuyangongshe-search/template.json",
+      "detailsPath": "registry/details/jiuyangongshe-search.md",
+      "description": "在韭研公社（九阳公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
+      "category": "finance",
+      "sites": [
+        "jiuyangongshe.com"
+      ],
+      "intents": [
+        "search",
+        "finance.research"
+      ],
+      "keywords": [
+        "韭研公社",
+        "九阳公社",
+        "jiuyangongshe",
+        "公社搜索"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number"
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "title/url"
+        },
+        {
+          "name": "text",
+          "type": "string"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "九阳公社搜索",
+        "韭研公社"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:c7a5fd5fff0413c20264a3032251c518a4856d033290394bf0d26d0eaa2e5fde"
+    },
+    {
       "id": "search-demo",
       "name": "Search Demo Template",
       "version": "1.0.0",
@@ -782,6 +1006,119 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:8253732a51e0c8fc11cb5d551fecb26c29a4524f84574e7b818a8565a9434f24"
+    },
+    {
+      "id": "xueqiu-article",
+      "name": "雪球文章爬取",
+      "version": "1.0.0",
+      "path": "registry/templates/xueqiu-article/template.json",
+      "detailsPath": "registry/details/xueqiu-article.md",
+      "description": "爬取一篇雪球帖子/文章的全文（标题+正文，最多8000字符）。需浏览器已有雪球登录态。",
+      "category": "finance",
+      "sites": [
+        "xueqiu.com"
+      ],
+      "intents": [
+        "crawl",
+        "finance.article"
+      ],
+      "keywords": [
+        "雪球",
+        "xueqiu",
+        "爬文章",
+        "帖子全文"
+      ],
+      "capabilities": [
+        "js"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "雪球帖子链接（xueqiu.com/<uid>/<postid>）；不填则在当前标签页爬取"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "content",
+          "type": "string"
+        },
+        {
+          "name": "url",
+          "type": "url"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "雪球文章",
+        "雪球全文"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:0e792905f29431487c01983795ee42bc8bd2ac8fd7bf2343902d9d89490c1bb1"
+    },
+    {
+      "id": "xueqiu-search",
+      "name": "雪球搜索",
+      "version": "1.0.0",
+      "path": "registry/templates/xueqiu-search/template.json",
+      "detailsPath": "registry/details/xueqiu-search.md",
+      "description": "在雪球搜索关键词，返回相关讨论帖（作者+时间+链接+摘要）与页面信息（含股票行情卡文本）。需浏览器已有雪球登录态。",
+      "category": "finance",
+      "sites": [
+        "xueqiu.com"
+      ],
+      "intents": [
+        "search",
+        "finance.search",
+        "stock.discussion"
+      ],
+      "keywords": [
+        "雪球",
+        "xueqiu",
+        "股票讨论",
+        "投资搜索"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词（股票名/代码/话题）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "count",
+          "type": "number"
+        },
+        {
+          "name": "links",
+          "type": "array",
+          "description": "author/time/url/excerpt"
+        },
+        {
+          "name": "text",
+          "type": "string",
+          "description": "页面文本（含股票行情卡）"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "雪球搜索",
+        "xueqiu 搜索"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:b4b41ac511639c7d2af72b93b69a71c0a337d531143c3fb32efa4426081440ce"
     }
   ]
 }

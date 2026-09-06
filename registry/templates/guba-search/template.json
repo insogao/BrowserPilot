@@ -1,0 +1,87 @@
+{
+  "id": "guba-search",
+  "name": "股吧搜索",
+  "version": "1.0.0",
+  "description": "在东方财富股吧搜索关键词，返回相关帖子（标题+链接+摘要）。无需登录即可访问。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "搜索关键词（股票名/话题）"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://so.eastmoney.com/tiezi/s?keyword=$query"
+      },
+      "note": "打开股吧帖子搜索（so.eastmoney.com/tiezi）"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 2500
+      },
+      "note": "渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('.article_item')].map(d=>{const a=d.querySelector('a[href]');return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:a.href,excerpt:(d.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100)}:null;}).filter(x=>x&&x.url&&/guba\\.eastmoney\\.com\\/(news|list)/.test(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2500).trim()};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.count",
+          "min": 3
+        }
+      ],
+      "note": "抓取 .article_item 帖子结果"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "eastmoney.com",
+      "guba.eastmoney.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "search",
+      "finance.forum"
+    ],
+    "keywords": [
+      "股吧",
+      "东方财富",
+      "guba",
+      "股吧搜索",
+      "帖子搜索"
+    ],
+    "outputs": [
+      {
+        "name": "count",
+        "type": "number"
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "title/url/excerpt"
+      },
+      {
+        "name": "text",
+        "type": "string"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "东方财富股吧",
+      "guba 搜索"
+    ]
+  }
+}

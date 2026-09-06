@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "xueqiu-search",
+    "params": {
+      "query": "贵州茅台"
+    }
+  },
+  "expect": {
+    "minLinks": 3,
+    "contains": "xueqiu.com"
+  }
+}

@@ -1,7 +1,7 @@
 ---
 type: SessionHandoff
 status: stable
-generated: { by: zcode, at: 2026-09-05T03:15:00+08:00 }
+generated: { by: zcode, at: 2026-09-05T04:20:00+08:00 }
 stale_after: 2026-09-19
 ---
 
@@ -22,6 +22,9 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 | `bing-search` | passed ×4 连续 | flaky 根因已修（见下）；修复前复现为"首跑失败、重跑成功" |
 | `bilibili-search` | passed | 新增站点 v1.0.2：卡片级抓取（标题/作者/链接），39 条去重结果；B站卡片 DOM 有变体，标题优先 `.bili-video-card__info--tit`、兜底滤封面文本 |
 | `bilibili-download-video` | passed | 新增站点 v1.0.2：playurl HTML5 单文件 MP4 真实落盘 9.3MB/58.8MB 两轮；清晰度随B站风控浮动 360P~720P，文件名后缀为真实档位 |
+| `xueqiu-search` / `xueqiu-article` | passed | 新增 v1.0.0：搜索帖流（作者/时间/链接/摘要+股票行情卡）+ 帖子全文（.article__bd__detail）；需雪球登录态 |
+| `guba-search` / `guba-article` | passed | 新增 v1.0.0：so.eastmoney.com/tiezi/s 搜索（.article_item）+ 帖子正文（#newscontent）；免登录 |
+| `jiuyangongshe-search` / `jiuyangongshe-article` | passed | 新增 v1.0.0：固定 token 搜索路径 + .detail-container 正文；需微信登录态，积分内容只返回可见部分 |
 | `chatgpt-ask` / `gemini-ask` / `x-search` / `baidu-search` / `google-finance-search` / `google-scholar-search` | 未重测 | 上次真实证据仍以 2026-09-04（Windows）为准；scholar/gemini 保持 blocked |
 
 ## 2026-09-05 修复清单（全部已验证）
@@ -52,6 +55,12 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 下载方案：页面上下文 fetch B站 playurl（`platform=html5&high_quality=1`，登录态共享）→ 单文件 MP4（音视频合成）→ 页面内 blob 锚点另存到 ~/Downloads。无需新权限、无 Referer 问题（页面发起）。
 - 已知限制：清晰度实测 360P~720P 浮动（短时高频请求被B站降档，等待恢复）；1080P+ 为 DASH 分离流需 ffmpeg 合成，明确不做；番剧/互动视频/充电专属返回结构化错误；>2GB 拒绝。
 - 1080P 的未来路径（如需要）：扩展加 declarativeNetRequest 权限改写下载请求 Referer + DASH 双文件下载（音/视频分开，不合成）——待产品决策。
+
+## 财经资讯站适配（2026-09-05 第二批）
+
+- 雪球/股吧/韭研公社各含 search + article 两个模板，共 6 个（产品工作流已达 16 个）。全部真机 smoke passed。
+- **反爬边界（宪章红线）**：只做真实浏览器+共享登录态+低频单页抓取；不做验证码绕过/指纹伪装。站点风控触发时记 blocked。
+- 站点关键事实：雪球搜索 /k?q=（SPA，需登录）；股吧帖子搜索必须走 so.eastmoney.com/tiezi/s（/guba/s 会重定向首页），正文 #newscontent；韭研公社搜索路径 token 为站内固定值（/search/fa3409...?k=词），需微信登录。
 
 ## 下一步优先级
 

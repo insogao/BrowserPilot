@@ -1,0 +1,87 @@
+{
+  "id": "xueqiu-search",
+  "name": "雪球搜索",
+  "version": "1.0.0",
+  "description": "在雪球搜索关键词，返回相关讨论帖（作者+时间+链接+摘要）与页面信息（含股票行情卡文本）。需浏览器已有雪球登录态。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "query",
+      "type": "string",
+      "required": true,
+      "description": "搜索关键词（股票名/代码/话题）"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://xueqiu.com/k?q=$query"
+      },
+      "note": "打开雪球搜索结果页（需登录态）"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 2500
+      },
+      "note": "SPA 渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('.timeline__item')].map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120)}:null;}).filter(Boolean);if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {count:posts.length,links:posts.slice(0,10),text:(document.body.innerText||'').slice(0,3000).trim()};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.count",
+          "min": 3
+        }
+      ],
+      "note": "抓取讨论帖流"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "xueqiu.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "search",
+      "finance.search",
+      "stock.discussion"
+    ],
+    "keywords": [
+      "雪球",
+      "xueqiu",
+      "股票讨论",
+      "投资搜索"
+    ],
+    "outputs": [
+      {
+        "name": "count",
+        "type": "number"
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "author/time/url/excerpt"
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "页面文本（含股票行情卡）"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "雪球搜索",
+      "xueqiu 搜索"
+    ]
+  }
+}
