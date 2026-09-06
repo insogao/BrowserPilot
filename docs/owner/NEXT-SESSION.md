@@ -9,6 +9,13 @@ stale_after: 2026-09-19
 
 更新时间：2026-09-05 02:30 +08:00
 
+## 接手要点（给任何新接手的 AI / 人）
+
+1. **仓库位置与状态**：本目录 `/Users/gaoshizai/work/chrome/plugin-v1` 是权威工作树，git 历史接自 GitHub `insogao/BrowserPilot`（origin/main），**本地 main 领先远程 7 个提交且未推送**（macOS 适配 + 全部 review 修复 + 新模板都在这 7 个提交里）。若你在别的机器/GitHub 上看到的内容停留在 "fix: prevent legacy template resurrection"，先让用户推送或直接在本目录工作，不要用旧副本。
+2. **环境前提（不可迁移项）**：macOS + Chrome，扩展已由用户加载 `dist/`（开发者模式），native messaging 已注册（`npm run register-host:mac`，node 升级后需重跑）；**雪球/韭研公社/X/ChatGPT 的登录态绑定在这台机器的用户 Chrome profile 上**，换机器需要用户重新登录，缺失时对应模板如实报 blocked，不得绕过。
+3. **健康三查**：`npm run doctor`（结构）→ `npm run client -- ping '{}' --no-launch`（host+扩展链路）→ `git log origin/main..main`（确认提交状态）。
+4. 模板能力速查：[registry/INDEX.md](../INDEX.md)（24 个模板按分类）。
+
 ## 当前结论
 
 macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 由 Chrome 拉起，命令往返正常）。随后按 code review 清单完成 13 项修复，全部逐项验证。本仓库继续在 macOS 开发；Windows 部署链保留未动。
