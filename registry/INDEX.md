@@ -1,19 +1,21 @@
 # 模板一览（自动生成）
 
 > 由 `npm run registry:build` 生成，**勿手改**。权威定义在各自包内 `template.json`；机器可读目录为 [`registry/catalog.json`](./catalog.json)，逐模板详情在 [`registry/details/`](./details/)。
-> 共 24 个模板。
+> 共 27 个模板。
 
 ## ai-chat
 
 | 模板 ID | 名称 | 版本 | 功能 | 风险 | 包目录 |
 |---|---|---|---|---|---|
 | `chatgpt-ask` | ChatGPT 提问 | 1.0.0 | 向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。 | write | [templates/chatgpt-ask/](templates/chatgpt-ask/) |
+| `deepseek-ask` | DeepSeek 提问 | 1.0.0 | 向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。 | write | [templates/deepseek-ask/](templates/deepseek-ask/) |
 | `gemini-ask` | Gemini 提问 | 1.0.0 | 向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。 | write | [templates/gemini-ask/](templates/gemini-ask/) |
 
 ## finance
 
 | 模板 ID | 名称 | 版本 | 功能 | 风险 | 包目录 |
 |---|---|---|---|---|---|
+| `cls-telegraph` | 财联社电报 | 1.0.0 | 抓取财联社电报页最新快讯（时间/标题/正文），A股分钟级时效信息源。无需登录。 | read | [templates/cls-telegraph/](templates/cls-telegraph/) |
 | `google-finance-search` | Google Finance Search | 1.1.0 | Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data. | read | [templates/google-finance-search/](templates/google-finance-search/) |
 | `guba-article` | 股吧帖子爬取 | 1.1.0 | 爬取一篇股吧帖子的正文（标题+内容，最多8000字符）。无需登录。 | read | [templates/guba-article/](templates/guba-article/) |
 | `guba-list` | 个股吧帖子流 | 1.0.1 | 按股票代码打开个股吧列表页，返回最新帖子流（标题/链接/阅读数/评论数/时间），默认按时间排序。无需登录。 | read | [templates/guba-list/](templates/guba-list/) |
@@ -22,6 +24,7 @@
 | `jiuyangongshe-comments` | 韭研公社评论爬取 | 1.0.0 | 爬取一篇韭研公社文章下的评论（用户/时间/内容）。需要微信登录态；无评论时返回空列表。 | read | [templates/jiuyangongshe-comments/](templates/jiuyangongshe-comments/) |
 | `jiuyangongshe-search` | 韭研公社搜索 | 1.2.0 | 在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。 | read | [templates/jiuyangongshe-search/](templates/jiuyangongshe-search/) |
 | `jiuyangongshe-user-timeline` | 韭研公社账号时间线 | 1.0.0 | 抓取某个韭研公社作者主页的最新文章列表。需要微信登录态。 | read | [templates/jiuyangongshe-user-timeline/](templates/jiuyangongshe-user-timeline/) |
+| `stock-announcements` | 个股公告 | 1.0.0 | 按股票代码抓取东方财富的最新公告列表（标题/类型/日期/详情链接）。无需登录。 | read | [templates/stock-announcements/](templates/stock-announcements/) |
 | `xueqiu-article` | 雪球文章爬取 | 1.1.0 | 爬取一篇雪球帖子/文章的全文（标题+正文，最多8000字符）。需浏览器已有雪球登录态。 | read | [templates/xueqiu-article/](templates/xueqiu-article/) |
 | `xueqiu-comments` | 雪球评论爬取 | 1.0.0 | 爬取一篇雪球帖子下的评论（用户/内容/点赞/时间），支持分页。需雪球登录态。 | read | [templates/xueqiu-comments/](templates/xueqiu-comments/) |
 | `xueqiu-search` | 雪球搜索 | 1.1.0 | 在雪球搜索关键词，返回相关讨论帖（作者+时间+链接+摘要）与页面信息（含股票行情卡文本）。需浏览器已有雪球登录态。 | read | [templates/xueqiu-search/](templates/xueqiu-search/) |

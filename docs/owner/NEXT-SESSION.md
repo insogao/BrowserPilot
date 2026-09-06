@@ -1,7 +1,7 @@
 ---
 type: SessionHandoff
 status: stable
-generated: { by: zcode, at: 2026-09-07T02:40:00+08:00 }
+generated: { by: zcode, at: 2026-09-07T04:10:00+08:00 }
 stale_after: 2026-09-19
 ---
 
@@ -101,6 +101,14 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 已否决的越界提案：插件内工作流编排、插件内订阅水位存储（2026-09-05 曾误提，勿再犯）。
 - 修正后的插件侧路线图：①股吧回复区（最后一个评论缺口）②X Lists 时间线（原语，一个列表覆盖多账号）③set_humanize 礼貌限速 ④L1/AX 快照 ⑤新站点适配（财联社快讯/公告源等）⑥上架前安全工程（模板风险提示、权限说明）。
 - Agent 侧的使用方式（订阅清单/diff/cron 调度）写进使用文档即可，不是开发项。
+
+## 信息源补全批次（2026-09-07 第三批）
+
+- `cls-telegraph` v1.0.0：财联社电报页快讯（时间/标题/正文，工具类容器 .p-t-20.p-b-20，SPA 首屏 3.5s 等待）；nodeapi 需签名故走 DOM。smoke passed。
+- `stock-announcements` v1.0.0：东财个股公告页（/notices/detail/ 行：标题/类型/日期/链接）。smoke passed。类型字段可能为 null（行文本规范化后无分隔符）。
+- `deepseek-ask` v1.0.0：核心 `@write` 新增 **textarea 模式**（DeepSeek 等 textarea 输入的 AI 站）。**重要**：native setter 在模板执行环境下会 TypeError: Illegal invocation（手动单跑却成功——执行时序相关的诡异差异），已改用 `document.execCommand('insertText')` 首选 + setter 兜底；回复判定=最后一个 .ds-markdown 且 4s 文本稳定（深度思考块在正式回复之前，不取）。smoke passed（标记精确回显）。
+- **股吧回复区正式降级为受限**：实测样本无回复渲染、gbapi 旧路径 404、财富号链接失效重定向首页。恢复条件：需要用户在浏览器找一个多回复的原生帖作为测试样本后重探。已写入 guba-article README。
+- **运维坑**：连续 SW 热更新（reload）会让 Chrome 节流 native host 拉起，导致 host 断链且退避重连不恢复——恢复方式=chrome://extensions 手动 reload 扩展。模板开发时连续改动应合并 reload。
 
 ## 下一步优先级
 

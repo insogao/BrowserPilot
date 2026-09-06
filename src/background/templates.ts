@@ -107,7 +107,7 @@ function googleResultsExpr(): string {
  *  ChatGPT 每条消息容器带 data-message-id；Gemini 每轮对话容器是 div.conversation-container（id 属性=该轮消息 ID）。 */
 function aiWriteExpr(mode: string, prompt: string): string {
   const p = JSON.stringify(prompt);
-  const core = mode === "gemini" ? geminiQuillCore() : chatgptProseCore();
+  const core = mode === "gemini" ? geminiQuillCore() : mode === "textarea" ? textareaWriteCore() : chatgptProseCore();
   // 锚点 = 发送前最后一个「消息/轮次」容器的消息 ID
   const anchorExpr = mode === "gemini"
     ? "(()=>{const c=[...document.querySelectorAll('div.conversation-container')];return c.length?(c[c.length-1].getAttribute('id')||''):'';})()"
@@ -132,6 +132,20 @@ function geminiQuillCore(): string {
     "let ok=false;for(let i=0;i<30;i++){const b=document.querySelector(\"button[aria-label='Send message']\");if(b&&!b.disabled){ok=true;break;}await new Promise(r=>setTimeout(r,250));}" +
     "return {ok:true,method:'dom',prev:window.__bpPrevMsg,sendReady:ok};}" +
     "return {ok:false,prev:window.__bpPrevMsg};"
+  );
+}
+
+/** 通用 textarea 写入主体（DeepSeek 等）：native setter + input 事件（React 受控组件也能感知）。
+ *  写入前把当前 .ds-markdown 数量记到 window.__bpMdCount，供后续等待步骤判断"回复已开始渲染"。 */
+function textareaWriteCore(): string {
+  return (
+    "window.__bpMdCount=document.querySelectorAll('.ds-markdown').length;" +
+    "const ta=document.querySelector('textarea');" +
+    "if(!ta)return {ok:false,error:'no-textarea',hint:'页面未渲染输入框（未登录或改版）'};" +
+    "ta.focus();" +
+    "let ok=false;try{ok=document.execCommand('insertText',false,text);}catch{}" +
+    "if(!ok||(ta.value||'').length===0){try{const setter=Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype,'value').set;setter.call(ta,text);ta.dispatchEvent(new Event('input',{bubbles:true}));}catch{}}" +
+    "return {ok:(ta.value||'').length>0,method:(ta.value||'').length>0?'textarea':'failed',len:(ta.value||'').length};"
   );
 }
 

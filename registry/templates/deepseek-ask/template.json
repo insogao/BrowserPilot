@@ -1,0 +1,102 @@
+{
+  "id": "deepseek-ask",
+  "name": "DeepSeek 提问",
+  "version": "1.0.0",
+  "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。",
+  "category": "ai-chat",
+  "inputs": [
+    {
+      "name": "prompt",
+      "type": "string",
+      "required": true,
+      "description": "要问的问题"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://chat.deepseek.com/"
+      },
+      "note": "打开 DeepSeek（新对话）"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 3000
+      },
+      "note": "应用加载等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "@write",
+        "mode": "textarea"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "textarea 原语写入 prompt（React native setter + input 事件）"
+    },
+    {
+      "name": "press",
+      "args": {
+        "key": "Enter"
+      },
+      "note": "发送（textarea 聚焦状态）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const base=window.__bpMdCount||0;const start=Date.now();let last='';let stable=0;let replied=false;while(Date.now()-start<120000){const md=[...document.querySelectorAll('.ds-markdown')];if(md.length>base){replied=true;const t=(md[md.length-1].textContent||'').trim();if(t&&t===last){stable+=1000;if(stable>=4000)break;}else{last=t;stable=0;}}await new Promise(r=>setTimeout(r,1000));}if(!replied)return {ok:false,error:'no-response',hint:'发送后 120s 内未见回复渲染（未登录/网络/改版）'};return {ok:true,text:last.slice(0,8000),url:location.href};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "等待流式回复稳定（4s 无增长）后取最后一个 .ds-markdown"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "chat.deepseek.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "ai.ask"
+    ],
+    "keywords": [
+      "deepseek",
+      "AI",
+      "提问",
+      "对话"
+    ],
+    "outputs": [
+      {
+        "name": "text",
+        "type": "string",
+        "description": "回复文本（≤8000 字符）"
+      },
+      {
+        "name": "url",
+        "type": "url",
+        "description": "对话地址（可用于续问上下文）"
+      }
+    ],
+    "risk": "write",
+    "aliases": [
+      "DeepSeek 对话",
+      "ds 提问"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "deepseek-ask",
+    "params": {
+      "prompt": "Reply with exactly: DS_SMOKE_MARKER_OK"
+    }
+  },
+  "expect": {
+    "contains": "DS_SMOKE_MARKER_OK"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "stock-announcements",
+    "params": {
+      "code": "600519",
+      "limit": 10
+    }
+  },
+  "expect": {
+    "minResults": 3,
+    "contains": "notices/detail"
+  }
+}

@@ -113,6 +113,21 @@
       "site": "Jiuyangongshe User Timeline",
       "templateId": "jiuyangongshe-user-timeline",
       "kind": "runtime"
+    },
+    {
+      "site": "CLS Telegraph",
+      "templateId": "cls-telegraph",
+      "kind": "runtime"
+    },
+    {
+      "site": "Stock Announcements",
+      "templateId": "stock-announcements",
+      "kind": "runtime"
+    },
+    {
+      "site": "DeepSeek Ask",
+      "templateId": "deepseek-ask",
+      "kind": "runtime"
     }
   ],
   "runtimeOrder": [
@@ -138,7 +153,10 @@
     "jiuyangongshe-comments",
     "x-user-timeline",
     "xueqiu-user-timeline",
-    "jiuyangongshe-user-timeline"
+    "jiuyangongshe-user-timeline",
+    "cls-telegraph",
+    "stock-announcements",
+    "deepseek-ask"
   ],
   "builtinOrder": [],
   "builtinMigrationOrder": [
@@ -167,7 +185,10 @@
     "jiuyangongshe-comments": "2026-09-07 真机创建：.comment-content 懒加载抓取，需微信登录态。",
     "x-user-timeline": "2026-09-07 macOS 真机创建：X 登录态可用（无登录墙），elonmusk 时间线 4 条推文提取成功；选择器复用 x-search 体系（article[data-testid=tweet]）。",
     "xueqiu-user-timeline": "2026-09-07 macOS 真机创建：用户主页 xueqiu.com/<uid> 时间线与搜索页同构（.timeline__item）。",
-    "jiuyangongshe-user-timeline": "2026-09-07 macOS 真机创建：作者主页 /u/<hash> 文章流；uid hash 从文章页作者链接获取。"
+    "jiuyangongshe-user-timeline": "2026-09-07 macOS 真机创建：作者主页 /u/<hash> 文章流；uid hash 从文章页作者链接获取。",
+    "cls-telegraph": "2026-09-07 macOS 真机创建：电报页 SPA 首屏慢（3.5s 等待），条目为工具类容器 .p-t-20.p-b-20（时间+【标题】+正文）；nodeapi 需签名故走 DOM。",
+    "stock-announcements": "2026-09-07 macOS 真机创建：data.eastmoney.com/notices/stock/<code>.html，/notices/detail/ 行（标题/类型/日期）。",
+    "deepseek-ask": "2026-09-07 macOS 真机创建：核心 @write 新增 textarea 模式（native setter+input 事件），Enter 发送，最后一个 .ds-markdown 且 4s 稳定判定回复结束；需 DeepSeek 登录态。"
   },
   "nonSiteStaticOnly": [
     "browserpilot-example-prompt"

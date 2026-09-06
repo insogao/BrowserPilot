@@ -1,0 +1,79 @@
+{
+  "id": "cls-telegraph",
+  "name": "财联社电报",
+  "version": "1.0.0",
+  "description": "抓取财联社电报页最新快讯（时间/标题/正文），A股分钟级时效信息源。无需登录。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "最多条数（1-50）"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://www.cls.cn/telegraph"
+      },
+      "note": "打开财联社电报页"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 3500
+      },
+      "note": "SPA 渲染等待（首屏较慢）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,1500));const items=[...document.querySelectorAll('.p-t-20.p-b-20')];const list=items.map(it=>{const t=(it.innerText||'').replace(/\\n+/g,' ').trim();const tm=t.match(/^(\\d{2}:\\d{2}:\\d{2})/);const tiM=t.match(/【([^】]+)】/);return {time:tm?tm[1]:null,title:tiM?tiM[1]:null,content:t.slice(0,500)};}).filter(x=>x.time);return {ok:true,count:list.length,items:list.slice(0,Math.max(1,Math.min(Number('$limit')||20,50)))};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.count",
+          "min": 5
+        }
+      ],
+      "note": "抓取电报条目（.p-t-20.p-b-20，时间+【标题】+正文）"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "cls.cn"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "finance.flash",
+      "news.flash"
+    ],
+    "keywords": [
+      "财联社",
+      "cls",
+      "电报",
+      "快讯",
+      "flash news"
+    ],
+    "outputs": [
+      {
+        "name": "items",
+        "type": "array",
+        "description": "time/title/content"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "财联社快讯",
+      "cls 电报"
+    ]
+  }
+}

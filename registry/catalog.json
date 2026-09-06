@@ -384,6 +384,110 @@
       "fingerprint": "sha256:563b4c985037c8982951e6e979228f999d8a2b9093318952348884509067e807"
     },
     {
+      "id": "cls-telegraph",
+      "name": "财联社电报",
+      "version": "1.0.0",
+      "path": "registry/templates/cls-telegraph/template.json",
+      "detailsPath": "registry/details/cls-telegraph.md",
+      "description": "抓取财联社电报页最新快讯（时间/标题/正文），A股分钟级时效信息源。无需登录。",
+      "category": "finance",
+      "sites": [
+        "cls.cn"
+      ],
+      "intents": [
+        "finance.flash",
+        "news.flash"
+      ],
+      "keywords": [
+        "财联社",
+        "cls",
+        "电报",
+        "快讯",
+        "flash news"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多条数（1-50）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "items",
+          "type": "array",
+          "description": "time/title/content"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "财联社快讯",
+        "cls 电报"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:5f3f2b30b547b835fedbe35df7c622a5bbe5fae51ede88230e0eed11b92a8932"
+    },
+    {
+      "id": "deepseek-ask",
+      "name": "DeepSeek 提问",
+      "version": "1.0.0",
+      "path": "registry/templates/deepseek-ask/template.json",
+      "detailsPath": "registry/details/deepseek-ask.md",
+      "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。",
+      "category": "ai-chat",
+      "sites": [
+        "chat.deepseek.com"
+      ],
+      "intents": [
+        "ai.ask"
+      ],
+      "keywords": [
+        "deepseek",
+        "AI",
+        "提问",
+        "对话"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "press",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true,
+          "description": "要问的问题"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "string",
+          "description": "回复文本（≤8000 字符）"
+        },
+        {
+          "name": "url",
+          "type": "url",
+          "description": "对话地址（可用于续问上下文）"
+        }
+      ],
+      "risk": "write",
+      "aliases": [
+        "DeepSeek 对话",
+        "ds 提问"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:6bfc1ab95272e5e89d57f427d04feb960e40333338276b3f9ff4abc9326080fb"
+    },
+    {
       "id": "gemini-ask",
       "name": "Gemini 提问",
       "version": "1.0.0",
@@ -1120,6 +1224,62 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:7292e2457a6434fd9a511b4d485d4164a0c960ac643bef0c7b6879848dac3531"
+    },
+    {
+      "id": "stock-announcements",
+      "name": "个股公告",
+      "version": "1.0.0",
+      "path": "registry/templates/stock-announcements/template.json",
+      "detailsPath": "registry/details/stock-announcements.md",
+      "description": "按股票代码抓取东方财富的最新公告列表（标题/类型/日期/详情链接）。无需登录。",
+      "category": "finance",
+      "sites": [
+        "eastmoney.com"
+      ],
+      "intents": [
+        "finance.announcements",
+        "stock.disclosure"
+      ],
+      "keywords": [
+        "公告",
+        "东财",
+        "announcements",
+        "信息披露",
+        "巨潮替代"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "code",
+          "type": "string",
+          "required": true,
+          "description": "6 位股票代码（如 600519）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多条数（1-50）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "announcements",
+          "type": "array",
+          "description": "title/url/type/date"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "股票公告",
+        "公司公告"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:587725e71caa768f6ba9605d56241b2357eaea4a43c72e112207904792270f61"
     },
     {
       "id": "x-search",

@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "cls-telegraph",
+    "params": {
+      "limit": 10
+    }
+  },
+  "expect": {
+    "contains": "财联社"
+  }
+}

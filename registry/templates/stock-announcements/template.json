@@ -1,0 +1,85 @@
+{
+  "id": "stock-announcements",
+  "name": "个股公告",
+  "version": "1.0.0",
+  "description": "按股票代码抓取东方财富的最新公告列表（标题/类型/日期/详情链接）。无需登录。",
+  "category": "finance",
+  "inputs": [
+    {
+      "name": "code",
+      "type": "string",
+      "required": true,
+      "description": "6 位股票代码（如 600519）"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 20,
+      "description": "最多条数（1-50）"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://data.eastmoney.com/notices/stock/$code.html"
+      },
+      "note": "打开东财个股公告页"
+    },
+    {
+      "name": "waitForTimeout",
+      "args": {
+        "ms": 3000
+      },
+      "note": "渲染等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,800));const links=[...document.querySelectorAll('a[href*=\"/notices/detail/\"]')];const rows=links.map(a=>{const row=a.closest('tr')||a.closest('div');const txt=(row?row.innerText:'').replace(/\\s+/g,' ').trim();const dateM=txt.match(/\\d{4}-\\d{2}-\\d{2}/);const typeM=txt.match(/\\|([^|\\d][^|]*)\\|\\d{4}-\\d{2}-\\d{2}/);return {title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,140),url:location.origin+a.getAttribute('href'),type:typeM?typeM[1].trim():null,date:dateM?dateM[0]:null};});const seen=new Set();const list=rows.filter(x=>x.title.length>4&&!seen.has(x.url)&&seen.add(x.url)).slice(0,Math.max(1,Math.min(Number('$limit')||20,50)));return {ok:true,count:list.length,announcements:list};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "抓取 /notices/detail/ 公告行（标题/类型/日期）"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "eastmoney.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "finance.announcements",
+      "stock.disclosure"
+    ],
+    "keywords": [
+      "公告",
+      "东财",
+      "announcements",
+      "信息披露",
+      "巨潮替代"
+    ],
+    "outputs": [
+      {
+        "name": "announcements",
+        "type": "array",
+        "description": "title/url/type/date"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "股票公告",
+      "公司公告"
+    ]
+  }
+}
