@@ -139,7 +139,7 @@ export const TEMPLATE_STEP_COMMANDS = new Set<CommandName>([
   "snapshot", "readText", "screenshot", "scroll_screenshot", "pageInfo",
   "click", "dblclick", "hover", "drag", "wheel", "down", "up", "press", "type", "fill",
   "selectOption", "check", "uncheck", "setChecked",
-  "js", "waitForURL", "waitForSelector", "waitForTimeout", "drainEvents", "tab_cdp_call",
+  "js", "waitForURL", "waitForSelector", "waitForTimeout", "wait_dom_idle", "drainEvents", "tab_cdp_call",
   "list_tabs", "open_tab", "close_tab", "switch_tab", "ensure_visible", "list_spaces",
   "download_image", "download_resource", "start_mask", "stop_mask",
 ]);
@@ -196,7 +196,7 @@ export const TAB_SCOPED = new Set<string>([
   "snapshot", "readText", "getElementInfo", "screenshot",
   "click", "dblclick", "hover", "drag", "wheel", "down", "up",
   "press", "type", "fill", "selectOption", "check", "uncheck", "setChecked",
-  "js", "waitForURL", "waitForSelector", "waitForTimeout", "pageInfo",
+  "js", "waitForURL", "waitForSelector", "waitForTimeout", "wait_dom_idle", "pageInfo",
   "start_mask", "stop_mask", "switch_tab", "ensure_visible", "close_tab",
 ]);
 

@@ -5,6 +5,9 @@ import { ensureAttach, evalPage, resolveCoord, selFrom, sleep } from "./cdp";
 import { withCdpAllow } from "./mask";
 
 type Args = Record<string, unknown>;
+
+/** 焦点元素快照：供 press/type 返回"操作是否真的生效"的后置条件（如 Enter 后输入框是否清空）。 */
+const FOCUS_SNAPSHOT_EXPR = "(()=>{const el=document.activeElement;if(!el)return null;return {tag:el.tagName.toLowerCase(),valueLen:(typeof el.value==='string')?el.value.length:null,textLen:el.isContentEditable?(el.innerText||'').length:null};})()";
 const send = (tabId: number, method: string, params: Record<string, unknown>) =>
   sendCommand(tabId, method, params);
 
@@ -163,10 +166,16 @@ export async function press(tabId: number, a: Args): Promise<unknown> {
       if (!focused) throw new Error("press 目标未命中或无法聚焦: " + target);
     }
     const p = keyParamsFor(key);
+    const before = await evalPage(tabId, FOCUS_SNAPSHOT_EXPR).catch(() => null) as { valueLen?: number; textLen?: number } | null;
     await send(tabId, "Input.dispatchKeyEvent", { type: "keyDown", key: p.key, code: p.code, windowsVirtualKeyCode: p.windowsVirtualKeyCode, ...(p.text ? { text: p.text } : {}) });
     await sleep(20);
     await send(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key: p.key, code: p.code, windowsVirtualKeyCode: p.windowsVirtualKeyCode });
-    return { pressed: key, ...(typeof target === "string" ? { target } : {}) };
+    await sleep(250);
+    const after = await evalPage(tabId, FOCUS_SNAPSHOT_EXPR).catch(() => null) as { valueLen?: number; textLen?: number } | null;
+    const cleared = before && after && typeof before.valueLen === "number" && typeof after.valueLen === "number"
+      ? after.valueLen === 0 && before.valueLen > 0
+      : null;
+    return { pressed: key, ...(typeof target === "string" ? { target } : {}), focus: { before: before, after: after }, valueCleared: cleared };
   });
 }
 
@@ -179,7 +188,8 @@ export async function typeText(tabId: number, a: Args): Promise<unknown> {
       await send(tabId, "Input.insertText", { text: ch });
       await sleep(Number(a.typingDelayMs ?? 8));
     }
-    return { typed: text.length };
+    const after = await evalPage(tabId, FOCUS_SNAPSHOT_EXPR).catch(() => null) as { valueLen?: number } | null;
+    return { typed: text.length, valueLenAfter: after && typeof after.valueLen === "number" ? after.valueLen : null };
   });
 }
 

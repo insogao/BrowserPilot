@@ -99,6 +99,7 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   waitForURL: async (cmd) => ev.waitForURL(await resolveTargetTab(cmd), cmd.args ?? {}),
   waitForSelector: async (cmd) => ev.waitForSelector(await resolveTargetTab(cmd), cmd.args ?? {}),
   waitForTimeout: async (cmd) => ev.waitForTimeout(await resolveTargetTab(cmd), cmd.args ?? {}),
+  wait_dom_idle: async (cmd) => ev.waitDomIdle(await resolveTargetTab(cmd), cmd.args ?? {}),
   pageInfo: async (cmd) => ev.pageInfo(await resolveTargetTab(cmd)),
 
   drainEvents: async (cmd) => {
@@ -362,6 +363,7 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `type` | `{text, tabId?}` | 逐字敲入 |",
     "| `js` | `{expression, tabId?}` | Run JS 求值, 返回结果 |",
     "| `waitForURL` / `waitForSelector` / `waitForTimeout` | `{...}` | 等 URL/元素/时间 |",
+    "| `wait_dom_idle` | `{idleMs?,timeoutMs?,selector?}` | 等 DOM 静默（MutationObserver）：AI 聊天流式输出结束后内容才停止变化；超时返回 idle:false |",
     "| `drainEvents` | `{after_sequence?, methods?, limit?}` | 拉取事件游标 `{events,cursor,hasMore}` |",
     "| `screenshot` | `{format?}` | 视口截图(返回 base64) |",
     "| `scroll_screenshot` | `{pages?, gap?, format?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量 |",
@@ -379,6 +381,8 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "",
     "- **默认用 L0 观测**（纯文本树），需要精确才升级 L1；别一上来就截图。",
     "- **模版**（`run_template`）：把「搜索→取结果→人机/反馈」这类固定流程封装成一条命令，复用最省 token；跑不通时返回失败上下文，你据此现场写新模版。",
+    "- **AI 聊天页是流式渲染**：`snapshot`/`js` 返回的都是瞬时快照；用 `wait_dom_idle` 等回答写完再收集，并核对结尾是否为自然句子——「停止按钮消失」只是必要非充分条件。",
+    "- **发送验证**：`press` 返回焦点元素与输入框长度前后状态（valueCleared）；AI 模板内置输入框清空检查，输入框未清空=消息未发出。",
     "- `set_humanize`、L1/AX、脚本型模板当前尚未实现，不应调用。",
     "- **页面已变**：任何动作前若快照过期，返回 `page_updated`，重拍再动，避免盲操作。",
     "- **并发保护**：需要前台、截图或输入的命令由插件侧全局前台租约串行化；模板的全部子步骤继承同一租约。异常中断后租约会自动过期。",

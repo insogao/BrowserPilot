@@ -1,7 +1,7 @@
 {
   "id": "gemini-ask",
   "name": "Gemini 提问",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。",
   "category": "ai-chat",
   "inputs": [
@@ -80,6 +80,27 @@
     {
       "name": "js",
       "args": {
+        "expression": "(async()=>{const t0=Date.now();let cleared=false;while(Date.now()-t0<12000){const ed=document.querySelector('.ql-editor');const len=ed?(ed.textContent||'').trim().length:null;if(len===0){cleared=true;break;}await new Promise(r=>setTimeout(r,500));}if(!cleared)return {ok:false,error:'send-failed',hint:'点击发送后 12s 输入框未清空——消息可能未发出，不要继续收集回复'};return {ok:true,cleared:true};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "Gemini 发送验证：输入框清空=发送成功；12s 未清空快速失败（防静默无效发送）"
+    },
+    {
+      "name": "wait_dom_idle",
+      "args": {
+        "idleMs": 4000,
+        "timeoutMs": 180000
+      },
+      "note": "流式输出静默等待（MutationObserver）；idle:false=超时仍有变化"
+    },
+    {
+      "name": "js",
+      "args": {
         "expression": "@chatCollect",
         "mode": "gemini"
       },
@@ -90,19 +111,52 @@
     "defaultL0": true
   },
   "scope": {
-    "sites": ["gemini.google.com"]
+    "sites": [
+      "gemini.google.com"
+    ]
   },
   "discovery": {
-    "intents": ["ai.chat", "ask", "question"],
-    "keywords": ["Gemini", "AI", "聊天", "提问", "chat", "ask", "Google"],
+    "intents": [
+      "ai.chat",
+      "ask",
+      "question"
+    ],
+    "keywords": [
+      "Gemini",
+      "AI",
+      "聊天",
+      "提问",
+      "chat",
+      "ask",
+      "Google"
+    ],
     "outputs": [
-      { "name": "text", "type": "string", "description": "Gemini 回复文本" },
-      { "name": "images", "type": "array", "description": "回复中的图片 URL 列表" },
-      { "name": "url", "type": "string", "description": "当前会话 URL（可用于续问）" },
-      { "name": "title", "type": "string", "description": "页面标题" }
+      {
+        "name": "text",
+        "type": "string",
+        "description": "Gemini 回复文本"
+      },
+      {
+        "name": "images",
+        "type": "array",
+        "description": "回复中的图片 URL 列表"
+      },
+      {
+        "name": "url",
+        "type": "string",
+        "description": "当前会话 URL（可用于续问）"
+      },
+      {
+        "name": "title",
+        "type": "string",
+        "description": "页面标题"
+      }
     ],
     "risk": "write",
-    "aliases": ["gemini-ask", "gemini-chat"],
+    "aliases": [
+      "gemini-ask",
+      "gemini-chat"
+    ],
     "browserpilot": ">=0.1.0"
   }
 }

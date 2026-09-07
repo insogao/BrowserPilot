@@ -48,6 +48,30 @@ export async function waitForTimeout(_tabId: number, a: Args): Promise<unknown> 
   return { waitedMs: ms };
 }
 
+/** wait_dom_idle：等"内容原地持续变化"的页面（AI 聊天流式输出）归于静默。
+ *  MutationObserver 判定：连续 idleMs 无任何 childList/characterData 变化即静默；
+ *  超时返回 idle:false（调用方自行决定是否继续）。waitForURL/Selector/Timeout 都覆盖不了这个场景。 */
+export async function waitDomIdle(tabId: number, a: Args): Promise<unknown> {
+  const idleMs = Math.max(300, Math.min(Number(a.idleMs ?? 3000), 30000));
+  const timeoutMs = Math.max(idleMs + 500, Math.min(Number(a.timeoutMs ?? 60000), 300000));
+  const selector = typeof a.selector === "string" && a.selector.trim() ? a.selector.trim() : "";
+  const expr =
+    "(async()=>{const idleMs=" + idleMs + ",timeoutMs=" + timeoutMs + ";" +
+    "const root=" + (selector ? "document.querySelector(" + JSON.stringify(selector) + ")" : "document.body") + ";" +
+    "if(!root)return {idle:false,error:'no-root',selector:" + JSON.stringify(selector) + "};" +
+    "let last=Date.now(),mutations=0;" +
+    "const obs=new MutationObserver(ms=>{last=Date.now();mutations+=ms.length;});" +
+    "obs.observe(root,{childList:true,subtree:true,characterData:true});" +
+    "const start=Date.now();" +
+    "while(Date.now()-start<timeoutMs){if(Date.now()-last>=idleMs)break;await new Promise(r=>setTimeout(r,250));}" +
+    "obs.disconnect();" +
+    "const text=(root.innerText||'').trim();" +
+    "return {idle:(Date.now()-last)>=idleMs,waitedMs:Date.now()-start,mutations:mutations,rootTextLen:text.length,tail:text.slice(-120)};" +
+    "})()";
+  const value = await evalPage(tabId, expr);
+  return { tabId, idleMs, timeoutMs, selector: selector || "body", ...(value as Record<string, unknown>) };
+}
+
 export async function pageInfo(tabId: number): Promise<unknown> {
   const tab = await chrome.tabs.get(tabId);
   return {

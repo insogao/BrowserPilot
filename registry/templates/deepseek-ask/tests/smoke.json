@@ -3,10 +3,10 @@
   "args": {
     "id": "deepseek-ask",
     "params": {
-      "prompt": "Reply with exactly: DS_SMOKE_MARKER_OK2"
+      "prompt": "请从 1 数到 30，每行一个数字，不要输出其他内容。数完后另起一行输出 DS_DONE_30"
     }
   },
   "expect": {
-    "contains": "DS_SMOKE_MARKER_OK2"
+    "contains": "DS_DONE_30"
   }
 }

@@ -110,6 +110,16 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - **股吧回复区正式降级为受限**：实测样本无回复渲染、gbapi 旧路径 404、财富号链接失效重定向首页。恢复条件：需要用户在浏览器找一个多回复的原生帖作为测试样本后重探。已写入 guba-article README。
 - **运维坑**：连续 SW 热更新（reload）会让 Chrome 节流 native host 拉起，导致 host 断链且退避重连不恢复——恢复方式=chrome://extensions 手动 reload 扩展。模板开发时连续改动应合并 reload。
 
+## AI 流式原语与防截断（2026-09-07 第四批，外部 AI 开发者反馈落实）
+
+- **新原语 wait_dom_idle**（idleMs/timeoutMs/selector 可配）：MutationObserver 静默判定，补上 waitForURL/Selector/Timeout 都覆盖不了的「内容原地持续变化」场景。已入步骤白名单/TAB_SCOPED/前台命令集。
+- **press/type 后置条件**：返回焦点元素与输入框长度前后状态（valueCleared 等）——发送是否真的生效可判定，消灭「静默无效操作」。
+- **deepseek-ask v1.2.0 / chatgpt-ask v1.1.0**：发送后统一插入「输入框清空验证（12s 快速失败）」+ wait_dom_idle；deepseek 提取另加 6s 文本稳定复核（wait_dom_idle 可能被流中停顿提前触发，文本稳定才是权威判定）。
+- **防截断 smoke**（此前"回复固定短语"的测试被用户指出的敷衍问题已修正）：改为长输出+结尾哨兵（数数到 30 + DONE_30，中途截断必失败）+ 500 字长文自然句验证。结果：DeepSeek 785 字结尾自然句、ChatGPT 数到 30 哨兵完整。
+- **gemini-ask v1.1.0**：同样叠加发送验证+wait_dom_idle，但 Gemini 区域受限无法真机验证——changelog 已标注 untested，不得宣称 passed。
+- **断链原因更正**：前次 host 断链实为浏览器被关闭所致（非节流）。Chrome 完整重启后 SW 会自动拉起 host。「SW 回收后重连可靠性」仍列为待办改进。
+- export_guide FAQ 已补：流式快照/自然句验证/wait_dom_idle/发送验证条目。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。

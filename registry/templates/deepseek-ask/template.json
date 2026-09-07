@@ -1,7 +1,7 @@
 {
   "id": "deepseek-ask",
   "name": "DeepSeek 提问",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。",
   "category": "ai-chat",
   "inputs": [
@@ -52,7 +52,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const base=window.__bpMdCount||0;const start=Date.now();let last='';let stable=0;let replied=false;while(Date.now()-start<120000){const md=[...document.querySelectorAll('.ds-markdown')];if(md.length>base){replied=true;const t=(md[md.length-1].textContent||'').trim();if(t&&t===last){stable+=1000;if(stable>=4000)break;}else{last=t;stable=0;}}await new Promise(r=>setTimeout(r,1000));}if(!replied)return {ok:false,error:'no-response',hint:'发送后 120s 内未见回复渲染（未登录/网络/改版）'};return {ok:true,text:last.slice(0,8000),url:location.href};})()"
+        "expression": "(async()=>{const t0=Date.now();let cleared=false;while(Date.now()-t0<12000){const ta=document.querySelector('textarea');const len=ta?(ta.value||'').length:null;if(len===0){cleared=true;break;}await new Promise(r=>setTimeout(r,500));}if(!cleared)return {ok:false,error:'send-failed',hint:'Enter 后 12s 输入框未清空——消息可能未发出'};return {ok:true,cleared:true};})()"
       },
       "expectations": [
         {
@@ -60,7 +60,28 @@
           "equals": true
         }
       ],
-      "note": "等待流式回复稳定（4s 无增长）后取最后一个 .ds-markdown"
+      "note": "发送验证：Enter 后输入框清空才算发出；12s 未清空快速失败"
+    },
+    {
+      "name": "wait_dom_idle",
+      "args": {
+        "idleMs": 4000,
+        "timeoutMs": 120000
+      },
+      "note": "流式输出静默等待（MutationObserver）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const base=window.__bpMdCount||0;const getText=()=>{const md=[...document.querySelectorAll('.ds-markdown')];return md.length>base?((md[md.length-1].textContent||'').trim()):'';};let last=getText();let stable=0;const start=Date.now();while(Date.now()-start<90000){await new Promise(r=>setTimeout(r,1500));const cur=getText();if(cur&&cur===last){stable+=1500;if(stable>=6000)break;}else{last=cur;stable=0;}}const ta=document.querySelector('textarea');if(!last)return {ok:false,error:'send-failed',hint:'回复未开始渲染（消息可能未发出）'};return {ok:true,text:last.slice(0,8000),len:last.length,inputCleared:ta?(ta.value||'').length===0:null,url:location.href};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "提取 + 文本稳定复核（6s 无增长才算完）：wait_dom_idle 可能被流中停顿提前触发，此步兜底防截断"
     }
   ],
   "tokenStrategy": {

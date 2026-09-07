@@ -3,10 +3,10 @@
   "args": {
     "id": "chatgpt-ask",
     "params": {
-      "prompt": "Reply with the exact text BROWSERPILOT_MARKER_2026"
+      "prompt": "请从 1 数到 30，每行一个数字，不要输出其他内容。数完后另起一行输出 CHATGPT_DONE_30"
     }
   },
   "expect": {
-    "contains": "BROWSERPILOT_MARKER_2026"
+    "contains": "CHATGPT_DONE_30"
   }
 }
