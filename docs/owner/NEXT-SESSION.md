@@ -155,6 +155,15 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 换视频复测（用户要求，因首个样本内容不当）：@chipocooking 冰淇淋制作视频 5.6MB smoke passed；测试下载文件已清理。
 - 风控硬性规则不变：首触受限即停+报告（本次正是靠这个规则才在第二次尝试前停下来复查样本）。
 
+## export_guide 文档修复（2026-09-09，外部 AI 开发者 Bug 报告落实）
+
+外部 Agent 反馈：通读 guide 后不知道模板库存在（命令表漏 list_templates），手写 30 行 TCP 客户端 + 手动操作序列，实际一条 run_template 就够。四项修复已全部落地并真机验证：
+- 命令参考表补 `list_templates` / `search_templates` 两行
+- 第 3 节改为「第 0 步（最高优先级）：先查模板库」，点名 AI/搜索/财经/下载四类关键模板 ID
+- 第 6 节模版条目点名全部已适配模板 ID
+- client 路径指针：npm run client 不可用时 node <项目>/native-host/client.mjs 直调
+export_guide 实拉验证 6/6 PASS。正确姿势演示：run_template deepseek-ask 头脑风暴一条命令返回 5 点（242 字符）。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。
