@@ -135,6 +135,12 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - js 表达式内导航必须带守卫（同 URL 重复赋值会触发无限 reload，eval 上下文反复销毁）；open_tab 负责导航、js 只抓取的原则再次生效。
 - X 视频下载待定：推文页播放器为 HLS/blob（无直接 mp4），TS 段拼接方案输出兼容性妥协，待用户确认格式妥协是否可接受。TikTok 未探测（可达性未知）。
 
+## X/TikTok 视频下载评估（2026-09-09）
+
+- **X：技术路径已验证大半，可做**。播放器为 MSE blob（无直接 mp4），但 fetch/XHR hook 可安装（window 级，SPA 持久），播放触发后能捕获 video.twimg.com 分段/播放列表 URL。妥协：输出为分段拼接（fMP4/TS，兼容性一般）、依赖播放器交互、X 改版会破坏 hook。注意：X 页面会清理 performance buffer（performance 路径不可用，必须 hook）；autoplay 被策略拒绝需 muted+play 或控件点击。待做：完整 x-video-download 模板（hook→播放→捕获→拼接→下载）。
+- **TikTok：blocked**。站点可达、__UNIVERSAL_DATA_FOR_REHYDRATION__ 存在，但 video-detail 返回 statusCode 10204（内容受限/需登录态）。恢复条件：用户浏览器登录 TikTok 后重探 itemInfo 是否可得。
+- B站账号级链路（favlist/user-videos/download）已完成并验证。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。
