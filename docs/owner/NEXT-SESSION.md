@@ -141,6 +141,13 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - **TikTok：blocked**。站点可达、__UNIVERSAL_DATA_FOR_REHYDRATION__ 存在，但 video-detail 返回 statusCode 10204（内容受限/需登录态）。恢复条件：用户浏览器登录 TikTok 后重探 itemInfo 是否可得。
 - B站账号级链路（favlist/user-videos/download）已完成并验证。
 
+## 风控事故与硬性规则（2026-09-09，用户裁定）
+
+- **事故**：TikTok 探测首触即返回 statusCode 10204（IP/地区级屏蔽，先于任何重复访问），但执行 AI 未停止，又连续换了视频页探测——机器人式连续导航加重了会话风控状态。用户明确批评。
+- **硬性规则（所有 Agent 必须遵守）**：任何站点**首次出现风控/受限信号**（10204、验证码、403、反自动化页）= **立即全停 + 记录 blocked + 报告用户**。禁止换页面重试、禁止「再试一次」。
+- **TikTok 在本环境为环境级 blocked**（首次访问即受限，行为无法修复）。对该域名的任何访问已永久停止。
+- 用户需要 TikTok 内容时的正解：外部成熟工具（yt-dlp 等），不属于插件能力范围。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。
