@@ -138,7 +138,7 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 ## X/TikTok 视频下载评估（2026-09-09）
 
 - **X：技术路径已验证大半，可做**。播放器为 MSE blob（无直接 mp4），但 fetch/XHR hook 可安装（window 级，SPA 持久），播放触发后能捕获 video.twimg.com 分段/播放列表 URL。妥协：输出为分段拼接（fMP4/TS，兼容性一般）、依赖播放器交互、X 改版会破坏 hook。注意：X 页面会清理 performance buffer（performance 路径不可用，必须 hook）；autoplay 被策略拒绝需 muted+play 或控件点击。待做：完整 x-video-download 模板（hook→播放→捕获→拼接→下载）。
-- **TikTok：blocked**。站点可达、__UNIVERSAL_DATA_FOR_REHYDRATION__ 存在，但 video-detail 返回 statusCode 10204（内容受限/需登录态）。恢复条件：用户浏览器登录 TikTok 后重探 itemInfo 是否可得。
+- **TikTok：已推翻 blocked 结论（2026-09-09 用户登录后复查）**。10204 仅出现在 @tiktok 官方账号视频（官方内容区域限制），普通用户视频的 itemInfo/playAddr 完全可访问（Range 206 拉流验证）。`tiktok-video-download` v1.0.0 已交付。教训：样本选择偏差（官方账号恰好区域受限）不能等同于整站受限——但「首触受限即停」的规则本身仍然正确。
 - B站账号级链路（favlist/user-videos/download）已完成并验证。
 
 ## 风控事故与硬性规则（2026-09-09，用户裁定）
@@ -147,6 +147,12 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - **硬性规则（所有 Agent 必须遵守）**：任何站点**首次出现风控/受限信号**（10204、验证码、403、反自动化页）= **立即全停 + 记录 blocked + 报告用户**。禁止换页面重试、禁止「再试一次」。
 - **TikTok 在本环境为环境级 blocked**（首次访问即受限，行为无法修复）。对该域名的任何访问已永久停止。
 - 用户需要 TikTok 内容时的正解：外部成熟工具（yt-dlp 等），不属于插件能力范围。
+
+## TikTok 更正（2026-09-09）
+
+- 用户指出 tiktok.com 可正常访问，复查确认：10204 仅限 @tiktok 官方账号视频（官方内容区域限制），普通用户视频的 playAddr 完全可拉流（206 验证）。**「TikTok 环境级 blocked」的结论已撤销**。
+- `tiktok-video-download` v1.0.0 已交付：rehydration playAddr → 页面内拉流 → 锚点下载，最高可用码率自动选择。第 28 个产品工作流。
+- 风控硬性规则不变：首触受限即停+报告（本次正是靠这个规则才在第二次尝试前停下来复查样本）。
 
 ## 下一步优先级
 

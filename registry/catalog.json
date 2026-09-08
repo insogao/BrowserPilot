@@ -1395,6 +1395,61 @@
       "fingerprint": "sha256:587725e71caa768f6ba9605d56241b2357eaea4a43c72e112207904792270f61"
     },
     {
+      "id": "tiktok-video-download",
+      "name": "TikTok 视频下载",
+      "version": "1.0.0",
+      "path": "registry/templates/tiktok-video-download/template.json",
+      "detailsPath": "registry/details/tiktok-video-download.md",
+      "description": "下载一个 TikTok 视频为 MP4 文件（页面内拉流落盘到浏览器下载目录）。需要浏览器可访问 TikTok；受限视频返回结构化错误。",
+      "category": "media",
+      "sites": [
+        "tiktok.com"
+      ],
+      "intents": [
+        "video.download"
+      ],
+      "keywords": [
+        "tiktok",
+        "抖音国际版",
+        "视频下载",
+        "TikTok download"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": true,
+          "description": "TikTok 视频页链接（tiktok.com/@user/video/<id>）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "filename",
+          "type": "string"
+        },
+        {
+          "name": "sizeMB",
+          "type": "number"
+        },
+        {
+          "name": "durationSec",
+          "type": "number"
+        }
+      ],
+      "risk": "download",
+      "aliases": [
+        "TikTok 下载",
+        "抖音国际版下载"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:2d8464867550ce7f487ca0d6f58e7bd225ff537b7e4a113e86519f6b96e92621"
+    },
+    {
       "id": "x-search",
       "name": "X/Twitter 搜索",
       "version": "1.1.0",
