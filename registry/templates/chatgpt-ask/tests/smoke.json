@@ -3,10 +3,10 @@
   "args": {
     "id": "chatgpt-ask",
     "params": {
-      "prompt": "请从 1 数到 30，每行一个数字，不要输出其他内容。数完后另起一行输出 CHATGPT_DONE_30"
+      "prompt": "请严格按以下结构回答（保留换行）：\n第一行：输出 TRI_LINE_A\n第二行：用一句话介绍贵州茅台\n第三行：输出 TRI_LINE_B\n第四行：从 1 数到 10（每行一个数字）\n第五行：复制这段话：多行注入修复后的长文本测试——我们需要验证 execCommand 逐行注入方案在数百字符级别的多段落中文 prompt 下能否正确保留换行结构并完整发送，这是对外部 AI 开发者反馈的 Bug A 的回归验证，涉及 ProseMirror 的 insertText 与 insertLineBreak 组合行为，以及 ChatGPT 受控 contenteditable 的 React 状态同步是否正常工作，输入框应在发送后清空。\n最后一行：输出 CHATGPT_MULTILINE_OK"
     }
   },
   "expect": {
-    "contains": "CHATGPT_DONE_30"
+    "contains": "CHATGPT_MULTILINE_OK"
   }
 }

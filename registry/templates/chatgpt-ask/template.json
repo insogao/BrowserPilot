@@ -1,7 +1,7 @@
 {
   "id": "chatgpt-ask",
   "name": "ChatGPT 提问",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
   "category": "ai-chat",
   "inputs": [
@@ -70,11 +70,11 @@
       "note": "写入问题并记录回复基线（ProseMirror）"
     },
     {
-      "name": "click",
+      "name": "press",
       "args": {
-        "selector": "button[data-testid='send-button']"
+        "key": "Enter"
       },
-      "note": "点击发送按钮"
+      "note": "发送：@write 后 ProseMirror 仍聚焦，Enter 直接触发发送（CDP 坐标点击在新版页面被遮挡层拦截，已弃用）"
     },
     {
       "name": "js",

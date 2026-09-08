@@ -164,6 +164,14 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - client 路径指针：npm run client 不可用时 node <项目>/native-host/client.mjs 直调
 export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例命令补 authToken（逐字复制不再 auth 报错）、明确「内置即用仅 search/chatgpt-ask/gemini-ask，其余需 install_template」。共 5/5 PASS。正确姿势演示：run_template deepseek-ask 头脑风暴一条命令返回 5 点（242 字符）。
 
+## Bug A/B/C/D 修复（2026-09-09 第二份外部反馈落实）
+
+- **Bug A（chatgpt-ask 发送失败）已修**：根因两层——① chatgptProseCore 对含换行的长文本一次性 insertText 会被 ProseMirror 处理坏 → 改为逐行 insertText + insertLineBreak；② CDP 坐标点击 send-button 在新版页面被遮挡层拦截（调试证明注入全部成功且按钮可用，点击却无效）→ 发送改为 press Enter（ProseMirror 聚焦路径）。347 字符 6 行中文 prompt smoke passed（TRI_LINE_A 到 CHATGPT_MULTILINE_OK 全部正确）。
+- **Bug B（260s 断链丢 Space）排查结论**：症状=宿主重启到新 pid 且 spaces 全丢（SPACE_NOT_FOUND）。spaces 存 storage.session，浏览器级重启才会清空——**大概率是 ChatGPT 长回答期间浏览器被关闭/崩溃重启**，非宿主崩溃。已无法确证（无宿主崩溃日志机制）。待办：host 加最小崩溃日志；Agent 侧长任务建议分段轮询（wait_dom_idle 每次不超过 3-5 分钟）。
+- **Bug C 已修**：guide 常见问题补 sessions/<port>.json 恢复路径（export_guide 死路已声明）。
+- **Bug D 已修**：guide 补 failback 最小模板 JSON schema 说明 + readText 读 AI 回复的组合说明。
+- 注：报告中的「命令表漏 list_templates」上一批已修；本轮 guide 修改后 export_guide 实拉验证 5/5 PASS。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。

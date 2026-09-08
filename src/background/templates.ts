@@ -151,13 +151,18 @@ function textareaWriteCore(): string {
 
 /** ChatGPT 的 ProseMirror 写入主体（引用变量 text）。ProseMirror 监听 beforeinput/input，execCommand('insertText')
  *  会触发它把文本写进编辑器 state（实测 innerText 生效、发送按钮点亮）。
+ *  多段落文本按 \n 逐行 insertText + insertLineBreak——整段含换行一次性 insertText 会被 ProseMirror 处理坏
+ *  （2026-09-09 外部 Agent 复现：769 字符多行 prompt 注入后发送无效）。
  *  写完后轮询等待发送按钮就绪，避免紧接的 click 因按钮未渲染而定位失败。 */
 function chatgptProseCore(): string {
   return (
     "const pm=document.querySelector('.ProseMirror[contenteditable=\"true\"]')||document.querySelector('#prompt-textarea .ProseMirror')||document.querySelector('[contenteditable=\"true\"]');" +
     "if(!pm)return {ok:false,prev:window.__bpPrevMsg};" +
     "pm.focus();const sel=window.getSelection();const r=document.createRange();r.selectNodeContents(pm);sel.removeAllRanges();sel.addRange(r);document.execCommand('delete');" +
-    "let ins=false;try{ins=document.execCommand('insertText',false,text);}catch(e){}" +
+    "const lines=String(text).split('\\n');let ins=true;" +
+    "for(let i=0;i<lines.length;i++){" +
+    "if(lines[i]){try{if(!document.execCommand('insertText',false,lines[i]))ins=false;}catch(e){ins=false;}}" +
+    "if(i<lines.length-1){try{if(!document.execCommand('insertLineBreak'))ins=false;}catch(e){ins=false;}}}" +
     "let ok=false;for(let i=0;i<30;i++){const b=document.querySelector(\"button[data-testid='send-button']\");if(b&&!b.disabled){ok=true;break;}await new Promise(r=>setTimeout(r,250));}" +
     "return {ok:ins,method:'prosemirror',prev:window.__bpPrevMsg,sendReady:ok};"
   );
