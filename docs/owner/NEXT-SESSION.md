@@ -120,6 +120,14 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - **断链原因更正**：前次 host 断链实为浏览器被关闭所致（非节流）。Chrome 完整重启后 SW 会自动拉起 host。「SW 回收后重连可靠性」仍列为待办改进。
 - export_guide FAQ 已补：流式快照/自然句验证/wait_dom_idle/发送验证条目。
 
+## YouTube 下载评估（2026-09-07，结论：不做）
+
+真机探测证据（jNQXAC9IVRw，playability OK）：
+- 渐进式（音视频合成）格式仅 1 个：itag 18 = **240p**；更高清晰度全部是 DASH 音视频分离流。
+- 该 240p 直链在页面上下文 Range 拉取返回 **403**——YouTube 已强制 PO Token/上下文校验，绕过需要持续逆向 BotGuard（yt-dlp 每周更新在追的东西），对抗成本不可接受。
+- 条款与平台风险：YouTube ToS 明确禁止下载；Chrome Web Store 对 YouTube 下载扩展是重点下架对象——与本项目「上架商店」的目标直接冲突。
+- **决策：插件不内置 YouTube 视频下载。** 用户如需保存视频，正解是外部成熟工具（yt-dlp + 浏览器 cookie），属于外部 Agent 生态而非插件能力。YouTube 可作为信息源（标题/字幕/元数据）另行评估。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。
