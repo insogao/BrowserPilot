@@ -7,8 +7,8 @@
 
 | 模板 ID | 名称 | 版本 | 功能 | 风险 | 包目录 |
 |---|---|---|---|---|---|
-| `chatgpt-ask` | ChatGPT 提问 | 1.1.0 | 向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。 | write | [templates/chatgpt-ask/](templates/chatgpt-ask/) |
-| `deepseek-ask` | DeepSeek 提问 | 1.2.0 | 向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。 | write | [templates/deepseek-ask/](templates/deepseek-ask/) |
+| `chatgpt-ask` | ChatGPT 提问 | 1.3.0 | 向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。 | write | [templates/chatgpt-ask/](templates/chatgpt-ask/) |
+| `deepseek-ask` | DeepSeek 提问 | 1.3.1 | 向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。支持 conversationUrl 续问（同一会话多轮）。需要浏览器已有 DeepSeek 登录态。 | write | [templates/deepseek-ask/](templates/deepseek-ask/) |
 | `gemini-ask` | Gemini 提问 | 1.1.0 | 向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。 | write | [templates/gemini-ask/](templates/gemini-ask/) |
 
 ## finance

@@ -1,7 +1,7 @@
 {
   "id": "chatgpt-ask",
   "name": "ChatGPT 提问",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
   "category": "ai-chat",
   "inputs": [
@@ -39,12 +39,25 @@
         "url": "https://chatgpt.com/"
       },
       "skipWhenParam": "tabId",
-      "note": "打开 ChatGPT"
+      "note": "打开 ChatGPT（新对话；续问场景下下一步会直跳 conversationUrl）"
     },
     {
       "name": "switch_tab",
       "args": {},
       "note": "激活 ChatGPT 标签（后台标签不渲染回复，需前台）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$conversationUrl');if(!target)return {ok:true,skipped:'fresh-chat'};if(!location.href.startsWith(target)){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!location.href.startsWith(target))await new Promise(r=>setTimeout(r,400));}await new Promise(r=>setTimeout(r,3000));return {ok:true,navigated:true,url:location.href};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "会话直跳：传入 conversationUrl 时直接导航到该会话（不走新建提问路径）；URL 随回合更新，每次追问后记录返回的最新 url"
     },
     {
       "name": "js",

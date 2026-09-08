@@ -1,8 +1,8 @@
 {
   "id": "deepseek-ask",
   "name": "DeepSeek 提问",
-  "version": "1.2.0",
-  "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。",
+  "version": "1.3.1",
+  "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。支持 conversationUrl 续问（同一会话多轮）。需要浏览器已有 DeepSeek 登录态。",
   "category": "ai-chat",
   "inputs": [
     {
@@ -10,6 +10,12 @@
       "type": "string",
       "required": true,
       "description": "要问的问题"
+    },
+    {
+      "name": "conversationUrl",
+      "type": "url",
+      "required": false,
+      "description": "会话地址（上一次返回的 url）；传入则在同一会话中续问，不传则开新对话"
     }
   ],
   "steps": "commands",
@@ -19,7 +25,7 @@
       "args": {
         "url": "https://chat.deepseek.com/"
       },
-      "note": "打开 DeepSeek（新对话）"
+      "note": "打开 DeepSeek（新对话；续问场景下下一步会跳到 conversationUrl）"
     },
     {
       "name": "waitForTimeout",
@@ -27,6 +33,19 @@
         "ms": 3000
       },
       "note": "应用加载等待"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$conversationUrl');if(!target)return {ok:true,skipped:'new-conversation'};if(!/a\\/chat\\/s\\//.test(location.href)){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!/a\\/chat\\/s\\//.test(location.href))await new Promise(r=>setTimeout(r,400));}let rendered=false;const t1=Date.now();while(Date.now()-t1<15000){if(document.querySelectorAll('.ds-markdown').length>0){rendered=true;break;}await new Promise(r=>setTimeout(r,500));}await new Promise(r=>setTimeout(r,1500));return {ok:true,navigated:true,url:location.href};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "续问导航：跳转 conversationUrl 并等会话内容渲染（.ds-markdown 出现）后才允许写入——3s 内写入会被 DeepSeek 当成新对话"
     },
     {
       "name": "js",

@@ -172,6 +172,12 @@ export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例�
 - **Bug D 已修**：guide 补 failback 最小模板 JSON schema 说明 + readText 读 AI 回复的组合说明。
 - 注：报告中的「命令表漏 list_templates」上一批已修；本轮 guide 修改后 export_guide 实拉验证 5/5 PASS。
 
+## ChatGPT 会话续问（2026-09-09，用户指导）
+
+- **chatgpt-ask v1.3.0**：新增 conversationUrl 直跳——传入上次返回的 url 时直接导航到该会话（不再走新建提问路径），@verifyConv 校验通过后注入追问。真机双轮验证：暗号（榴莲披萨）跨调用保持 ✓。
+- **URL 机制（用户指正）**：ChatGPT 每轮提问后 URL 更新为新地址（/c/<新id>）——Agent 应记录**每次返回的最新 url** 供下次 conversationUrl 使用。guide 第 0 步已补追问用法示例。
+- **DeepSeek 续问 bug 待查**：conversationUrl 导航后落在了新会话（url 337302a6 ≠ 目标 e34d48bd），上下文丢失——可能原因：会话页历史未加载完成即注入/发送，或导航后输入框定位到非会话输入区。已暂停 DeepSeek 续问（单轮对话可用），待 ChatGPT 链路稳定后回来修。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。

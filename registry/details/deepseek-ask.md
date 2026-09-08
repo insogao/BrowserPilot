@@ -1,18 +1,19 @@
 # DeepSeek 提问
 
-> 向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。
+> 向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。支持 conversationUrl 续问（同一会话多轮）。需要浏览器已有 DeepSeek 登录态。
 
 - ID: `deepseek-ask`
-- 版本: `1.2.0`
+- 版本: `1.3.1`
 - 风险: `write`
 - 适用站点: `chat.deepseek.com`
 - Intents: `ai.ask`
 - Capabilities: `js`, `open_tab`, `press`, `waitForTimeout`, `wait_dom_idle`
-- 功能指纹: `sha256:4ce4284ff71cd100c101603ff45ba51b23e9aa829dd8592be1e99ce071ad1428`
+- 功能指纹: `sha256:5d54f9f581400c1f5401c488cf71d1da34bb3e20be59c2f9de86ddc87f9a79d0`
 
 ## 输入
 
 - `prompt` (string, required): 要问的问题
+- `conversationUrl` (url): 会话地址（上一次返回的 url）；传入则在同一会话中续问，不传则开新对话
 
 ## 输出
 
