@@ -3,12 +3,12 @@
 > 向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。
 
 - ID: `gemini-ask`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `write`
 - 适用站点: `gemini.google.com`
 - Intents: `ai.chat`, `ask`, `question`
-- Capabilities: `click`, `js`, `open_tab`, `switch_tab`
-- 功能指纹: `sha256:76c50b067e43e10b76be8e0add4b9664ad510a9f87f005bd97e1c213c56805fc`
+- Capabilities: `click`, `js`, `open_tab`, `switch_tab`, `wait_dom_idle`
+- 功能指纹: `sha256:d251320b9a827ab2b1631775501203e3897054574f4be32d68abc352d366bba6`
 
 ## 输入
 

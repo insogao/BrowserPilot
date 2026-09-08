@@ -129,6 +129,60 @@
       "fingerprint": "sha256:ab8fbdce4112015178d9b506dbed28807fc1594d204558df29af86dd82cf5f21"
     },
     {
+      "id": "bilibili-favlist",
+      "name": "B站收藏夹列表",
+      "version": "1.0.3",
+      "path": "registry/templates/bilibili-favlist/template.json",
+      "detailsPath": "registry/details/bilibili-favlist.md",
+      "description": "列出B站登录用户收藏夹中的视频（标题/BV号/链接），配合 bilibili-download-video 可批量下载自己收藏的内容。需要B站登录态。",
+      "category": "media",
+      "sites": [
+        "bilibili.com"
+      ],
+      "intents": [
+        "media.list",
+        "video.download"
+      ],
+      "keywords": [
+        "B站",
+        "收藏夹",
+        "favlist",
+        "批量下载"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab"
+      ],
+      "inputs": [
+        {
+          "name": "mid",
+          "type": "string",
+          "required": false,
+          "description": "B站用户 mid；不填则用当前登录账号"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多条数"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "videos",
+          "type": "array",
+          "description": "title/bvid/url"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "B站收藏",
+        "收藏夹下载"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:79b935d4615139c25a8c045afa14e1d7811bf4b5713b41c85771b98ea4215280"
+    },
+    {
       "id": "bilibili-search",
       "name": "B站搜索",
       "version": "1.0.2",
@@ -187,6 +241,62 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:202205919c79fc01036a505916a9773c77fedff54fe175e68450ee98cc424ea6"
+    },
+    {
+      "id": "bilibili-user-videos",
+      "name": "B站用户投稿列表",
+      "version": "1.0.2",
+      "path": "registry/templates/bilibili-user-videos/template.json",
+      "detailsPath": "registry/details/bilibili-user-videos.md",
+      "description": "抓取某个B站用户空间的投稿视频列表（标题/BV号/链接），滚动加载。配合 bilibili-download-video 可逐个下载。",
+      "category": "media",
+      "sites": [
+        "bilibili.com"
+      ],
+      "intents": [
+        "media.list",
+        "account.watch"
+      ],
+      "keywords": [
+        "B站",
+        "用户空间",
+        "投稿",
+        "UP主",
+        "时间线"
+      ],
+      "capabilities": [
+        "js",
+        "open_tab",
+        "waitForTimeout"
+      ],
+      "inputs": [
+        {
+          "name": "uid",
+          "type": "string",
+          "required": true,
+          "description": "B站用户 UID（space.bilibili.com/<uid> 的数字）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "description": "最多条数（1-60）"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "videos",
+          "type": "array",
+          "description": "title/bvid/url"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "B站UP主",
+        "空间投稿"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:0364d07658e2f492f855885f0041e80a006e5fceb8cec46c5f334c8bb476ac6b"
     },
     {
       "id": "bing-search",
@@ -299,7 +409,7 @@
     {
       "id": "chatgpt-ask",
       "name": "ChatGPT 提问",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "path": "registry/templates/chatgpt-ask/template.json",
       "detailsPath": "registry/details/chatgpt-ask.md",
       "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
@@ -325,7 +435,8 @@
         "click",
         "js",
         "open_tab",
-        "switch_tab"
+        "switch_tab",
+        "wait_dom_idle"
       ],
       "inputs": [
         {
@@ -381,7 +492,7 @@
         "chatgpt-chat"
       ],
       "deprecated": false,
-      "fingerprint": "sha256:563b4c985037c8982951e6e979228f999d8a2b9093318952348884509067e807"
+      "fingerprint": "sha256:8c56639757878494c5b64ce34d95e2b1ac998259943b3ef9825a7cbfeb5c08a1"
     },
     {
       "id": "cls-telegraph",
@@ -436,7 +547,7 @@
     {
       "id": "deepseek-ask",
       "name": "DeepSeek 提问",
-      "version": "1.0.0",
+      "version": "1.2.0",
       "path": "registry/templates/deepseek-ask/template.json",
       "detailsPath": "registry/details/deepseek-ask.md",
       "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。",
@@ -457,7 +568,8 @@
         "js",
         "open_tab",
         "press",
-        "waitForTimeout"
+        "waitForTimeout",
+        "wait_dom_idle"
       ],
       "inputs": [
         {
@@ -485,12 +597,12 @@
         "ds 提问"
       ],
       "deprecated": false,
-      "fingerprint": "sha256:6bfc1ab95272e5e89d57f427d04feb960e40333338276b3f9ff4abc9326080fb"
+      "fingerprint": "sha256:4ce4284ff71cd100c101603ff45ba51b23e9aa829dd8592be1e99ce071ad1428"
     },
     {
       "id": "gemini-ask",
       "name": "Gemini 提问",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "path": "registry/templates/gemini-ask/template.json",
       "detailsPath": "registry/details/gemini-ask.md",
       "description": "向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。",
@@ -516,7 +628,8 @@
         "click",
         "js",
         "open_tab",
-        "switch_tab"
+        "switch_tab",
+        "wait_dom_idle"
       ],
       "inputs": [
         {
@@ -572,7 +685,7 @@
         "gemini-chat"
       ],
       "deprecated": false,
-      "fingerprint": "sha256:76c50b067e43e10b76be8e0add4b9664ad510a9f87f005bd97e1c213c56805fc"
+      "fingerprint": "sha256:d251320b9a827ab2b1631775501203e3897054574f4be32d68abc352d366bba6"
     },
     {
       "id": "google-finance-search",

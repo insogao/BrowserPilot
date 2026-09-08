@@ -128,6 +128,16 @@
       "site": "DeepSeek Ask",
       "templateId": "deepseek-ask",
       "kind": "runtime"
+    },
+    {
+      "site": "Bilibili Favorites",
+      "templateId": "bilibili-favlist",
+      "kind": "runtime"
+    },
+    {
+      "site": "Bilibili User Videos",
+      "templateId": "bilibili-user-videos",
+      "kind": "runtime"
     }
   ],
   "runtimeOrder": [
@@ -156,7 +166,9 @@
     "jiuyangongshe-user-timeline",
     "cls-telegraph",
     "stock-announcements",
-    "deepseek-ask"
+    "deepseek-ask",
+    "bilibili-favlist",
+    "bilibili-user-videos"
   ],
   "builtinOrder": [],
   "builtinMigrationOrder": [
@@ -188,7 +200,9 @@
     "jiuyangongshe-user-timeline": "2026-09-07 macOS 真机创建：作者主页 /u/<hash> 文章流；uid hash 从文章页作者链接获取。",
     "cls-telegraph": "2026-09-07 macOS 真机创建：电报页 SPA 首屏慢（3.5s 等待），条目为工具类容器 .p-t-20.p-b-20（时间+【标题】+正文）；nodeapi 需签名故走 DOM。",
     "stock-announcements": "2026-09-07 macOS 真机创建：data.eastmoney.com/notices/stock/<code>.html，/notices/detail/ 行（标题/类型/日期）。",
-    "deepseek-ask": "2026-09-07 macOS 真机创建：核心 @write 新增 textarea 模式（native setter+input 事件），Enter 发送，最后一个 .ds-markdown 且 4s 稳定判定回复结束；需 DeepSeek 登录态。"
+    "deepseek-ask": "2026-09-07 macOS 真机创建：核心 @write 新增 textarea 模式（native setter+input 事件），Enter 发送，最后一个 .ds-markdown 且 4s 稳定判定回复结束；需 DeepSeek 登录态。",
+    "bilibili-favlist": "2026-09-08 macOS 真机创建：favlist 页 DOM 路线（收藏夹 API 需 wbi 签名故走 DOM），www 域拿 mid 后切 space 域滚动抓取。",
+    "bilibili-user-videos": "2026-09-08 macOS 真机创建：space /video 页滚动懒加载，BV 去重。"
   },
   "nonSiteStaticOnly": [
     "browserpilot-example-prompt"

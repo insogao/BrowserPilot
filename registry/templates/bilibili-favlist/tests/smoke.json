@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "bilibili-favlist",
+    "params": {
+      "limit": 10
+    }
+  },
+  "expect": {
+    "contains": "bilibili.com/video/BV"
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "id": "bilibili-favlist",
+  "name": "B站收藏夹列表",
+  "version": "1.0.3",
+  "description": "列出B站登录用户收藏夹中的视频（标题/BV号/链接），配合 bilibili-download-video 可批量下载自己收藏的内容。需要B站登录态。",
+  "category": "media",
+  "inputs": [
+    {
+      "name": "mid",
+      "type": "string",
+      "required": false,
+      "description": "B站用户 mid；不填则用当前登录账号"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 30,
+      "description": "最多条数"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "open_tab",
+      "args": {
+        "url": "https://www.bilibili.com/"
+      },
+      "note": "先落 www 域（拿登录 mid）"
+    },
+    {
+      "name": "js",
+      "args": {
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};let mid=want('$mid');if(!mid){let navr=null;for(let att=0;att<3&&!navr;att++){try{const r=await fetch('https://api.bilibili.com/x/web-interface/nav',{credentials:'include'}).then(x=>x.json());if(r.data&&r.data.mid)navr=String(r.data.mid);}catch{await new Promise(r=>setTimeout(r,800));}}mid=navr||'';}if(!mid)return {ok:false,error:'no-login',hint:'未获取到登录 mid（收藏夹需要B站登录态）'};if(location.href.indexOf('/'+mid+'/favlist')<0){location.href='https://space.bilibili.com/'+mid+'/favlist';const t0=Date.now();while(Date.now()-t0<20000&&!/favlist/.test(location.href))await new Promise(r=>setTimeout(r,400));}await new Promise(r=>setTimeout(r,2500));let byUrl=new Map();const start=Date.now();while(Date.now()-start<20000){for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}byUrl=new Map();for(const a of document.querySelectorAll('a[href*=\"/video/BV\"]')){const m=(a.getAttribute('href')||'').match(/BV[0-9A-Za-z]+/);if(!m)continue;const url='https://www.bilibili.com/video/'+m[0];const t=(a.textContent||'').replace(/\\s+/g,' ').trim();const prev=byUrl.get(url);if(!prev||t.length>prev.title.length)byUrl.set(url,{title:t.slice(0,120),bvid:m[0],url:url});}if(byUrl.size>=3)break;await new Promise(r=>setTimeout(r,800));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,400));return {ok:true,mid:mid,count:byUrl.size,videos:[...byUrl.values()].slice(0,Math.max(1,Math.min(Number('$limit')||30,60)))};})()"
+      },
+      "expectations": [
+        {
+          "path": "value.ok",
+          "equals": true
+        }
+      ],
+      "note": "导航到收藏夹页 → 滚动懒加载 → 按 BV 去重提取"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "bilibili.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "media.list",
+      "video.download"
+    ],
+    "keywords": [
+      "B站",
+      "收藏夹",
+      "favlist",
+      "批量下载"
+    ],
+    "outputs": [
+      {
+        "name": "videos",
+        "type": "array",
+        "description": "title/bvid/url"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "B站收藏",
+      "收藏夹下载"
+    ]
+  }
+}

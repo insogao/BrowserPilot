@@ -128,6 +128,13 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 条款与平台风险：YouTube ToS 明确禁止下载；Chrome Web Store 对 YouTube 下载扩展是重点下架对象——与本项目「上架商店」的目标直接冲突。
 - **决策：插件不内置 YouTube 视频下载。** 用户如需保存视频，正解是外部成熟工具（yt-dlp + 浏览器 cookie），属于外部 Agent 生态而非插件能力。YouTube 可作为信息源（标题/字幕/元数据）另行评估。
 
+## B站账号级下载链路（2026-09-08 第五批）
+
+- `bilibili-favlist` v1.0.3 / `bilibili-user-videos` v1.0.2：收藏夹列表 + 用户投稿列表（滚动懒加载+轮询等待渲染），smoke passed（favlist 39 条 / user-videos 40 条）。配合 `bilibili-download-video` 组成「列清单→逐个下载」的大V/收藏批量链路（批量节奏由外部 Agent 控制）。
+- **关键教训（用户抓出的低级错误）**：把雪球 UID 误当 B 站 UID 传入模板导致空间页 -404——跨平台 ID 严禁混用；另外 /upload/video 是 B站现行投稿列表路径（对他人空间公开），/video 会 301 到它。
+- js 表达式内导航必须带守卫（同 URL 重复赋值会触发无限 reload，eval 上下文反复销毁）；open_tab 负责导航、js 只抓取的原则再次生效。
+- X 视频下载待定：推文页播放器为 HLS/blob（无直接 mp4），TS 段拼接方案输出兼容性妥协，待用户确认格式妥协是否可接受。TikTok 未探测（可达性未知）。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。

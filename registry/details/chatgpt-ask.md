@@ -3,12 +3,12 @@
 > 向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。
 
 - ID: `chatgpt-ask`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `write`
 - 适用站点: `chatgpt.com`
 - Intents: `ai.chat`, `ask`, `question`
-- Capabilities: `click`, `js`, `open_tab`, `switch_tab`
-- 功能指纹: `sha256:563b4c985037c8982951e6e979228f999d8a2b9093318952348884509067e807`
+- Capabilities: `click`, `js`, `open_tab`, `switch_tab`, `wait_dom_idle`
+- 功能指纹: `sha256:8c56639757878494c5b64ce34d95e2b1ac998259943b3ef9825a7cbfeb5c08a1`
 
 ## 输入
 

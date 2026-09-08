@@ -3,12 +3,12 @@
 > 向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。需要浏览器已有 DeepSeek 登录态。
 
 - ID: `deepseek-ask`
-- 版本: `1.0.0`
+- 版本: `1.2.0`
 - 风险: `write`
 - 适用站点: `chat.deepseek.com`
 - Intents: `ai.ask`
-- Capabilities: `js`, `open_tab`, `press`, `waitForTimeout`
-- 功能指纹: `sha256:6bfc1ab95272e5e89d57f427d04feb960e40333338276b3f9ff4abc9326080fb`
+- Capabilities: `js`, `open_tab`, `press`, `waitForTimeout`, `wait_dom_idle`
+- 功能指纹: `sha256:4ce4284ff71cd100c101603ff45ba51b23e9aa829dd8592be1e99ce071ad1428`
 
 ## 输入
 

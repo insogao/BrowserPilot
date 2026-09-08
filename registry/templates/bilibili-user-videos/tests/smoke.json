@@ -1,0 +1,13 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "bilibili-user-videos",
+    "params": {
+      "uid": "21457626",
+      "limit": 10
+    }
+  },
+  "expect": {
+    "contains": "bilibili.com/video/BV"
+  }
+}
