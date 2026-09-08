@@ -162,7 +162,7 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 第 3 节改为「第 0 步（最高优先级）：先查模板库」，点名 AI/搜索/财经/下载四类关键模板 ID
 - 第 6 节模版条目点名全部已适配模板 ID
 - client 路径指针：npm run client 不可用时 node <项目>/native-host/client.mjs 直调
-export_guide 实拉验证 6/6 PASS。正确姿势演示：run_template deepseek-ask 头脑风暴一条命令返回 5 点（242 字符）。
+export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例命令补 authToken（逐字复制不再 auth 报错）、明确「内置即用仅 search/chatgpt-ask/gemini-ask，其余需 install_template」。共 5/5 PASS。正确姿势演示：run_template deepseek-ask 头脑风暴一条命令返回 5 点（242 字符）。
 
 ## 下一步优先级
 
