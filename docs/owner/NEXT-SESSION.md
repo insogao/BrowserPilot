@@ -178,6 +178,13 @@ export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例�
 - **URL 机制（用户指正）**：ChatGPT 每轮提问后 URL 更新为新地址（/c/<新id>）——Agent 应记录**每次返回的最新 url** 供下次 conversationUrl 使用。guide 第 0 步已补追问用法示例。
 - **DeepSeek 续问 bug 待查**：conversationUrl 导航后落在了新会话（url 337302a6 ≠ 目标 e34d48bd），上下文丢失——可能原因：会话页历史未加载完成即注入/发送，或导航后输入框定位到非会话输入区。已暂停 DeepSeek 续问（单轮对话可用），待 ChatGPT 链路稳定后回来修。
 
+## ChatGPT 续问链路有效验证完成（2026-09-09，用户指正验证方法后）
+
+- **v1.3.1**：@verifyConv 补 `expect: "__BP_CONV_OK__"` 断言（动态包自 Windows 时期就缺失此断言——校验形同虚设，续问静默落到新会话+全局记忆答对=假阳性 passed）。
+- **有效验证方法（用户指正）**：「回复正确」不能作为续问成功的判据——ChatGPT 全局记忆可跨会话答对。唯一有效判据：**追问所在会话页的消息列表必须包含第一轮问答**。实measured：会话页 4 条消息（暗号问答 + 追问问答）连续完整 ✓。
+- 双轮真机验证：首轮暗号（哈密瓜）→ conversationUrl 直跳 → 追问 → 同会话 4 消息 ✓。chatgpt-ask v1.3.1 已安装到浏览器。
+- **DeepSeek 续问 bug 仍在待查**（落新会话）——修复时同样必须用「会话页消息断言」法验证，禁止只看回答文本。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。

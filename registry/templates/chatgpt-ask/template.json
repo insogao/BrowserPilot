@@ -1,7 +1,7 @@
 {
   "id": "chatgpt-ask",
   "name": "ChatGPT 提问",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
   "category": "ai-chat",
   "inputs": [
@@ -72,7 +72,8 @@
         "expression": "@verifyConv",
         "expected": "$conversationUrl"
       },
-      "note": "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）"
+      "note": "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）",
+      "expect": "__BP_CONV_OK__"
     },
     {
       "name": "js",
