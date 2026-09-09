@@ -185,6 +185,12 @@ export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例�
 - 双轮真机验证：首轮暗号（哈密瓜）→ conversationUrl 直跳 → 追问 → 同会话 4 消息 ✓。chatgpt-ask v1.3.1 已安装到浏览器。
 - **DeepSeek 续问 bug 仍在待查**（落新会话）——修复时同样必须用「会话页消息断言」法验证，禁止只看回答文本。
 
+## Groq 语音转写交付（2026-09-09 完成，用户提供的 Groq Key 真机验证）
+
+- **groq-transcribe v1.1.1 smoke passed**：B站视频页 URL → SW 提取 __playinfo__ 音轨直链 → SW 拉音轨（仅 621KB，无需视频）→ FormData POST Groq whisper-large-v3-turbo → 392 字符中文转写 ✓。用户已在弹窗配置 Groq Key（chrome.storage.local）。
+- **路上修的三个坑**：① expectations path 错位（核心命令返回无 value 包装，与 js 步骤不同）；② language 占位符 $language 未传时被 Groq 拒绝 → SW 端正则过滤非法值；③ offscreen 音频管线方案弃用（createDocument 报 Page failed to load，根因未深究——SW 直连方案更简单且已够用：B站抽音轨后仅 621KB，无需压缩）。
+- 完整链路：`run_template groq-transcribe { url: "B站视频页" }` 一条命令出转写文本。TikTok/直链也支持（传媒体直链）。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。

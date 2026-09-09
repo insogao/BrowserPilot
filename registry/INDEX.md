@@ -43,7 +43,7 @@
 | `bilibili-download-video` | B站视频下载 | 1.0.2 | 下载当前/指定B站视频为单个 MP4 文件（音视频已合成，720P，落盘到浏览器下载目录）。仅下载你有权限访问的内容。 | download | [templates/bilibili-download-video/](templates/bilibili-download-video/) |
 | `bilibili-favlist` | B站收藏夹列表 | 1.0.3 | 列出B站登录用户收藏夹中的视频（标题/BV号/链接），配合 bilibili-download-video 可批量下载自己收藏的内容。需要B站登录态。 | read | [templates/bilibili-favlist/](templates/bilibili-favlist/) |
 | `bilibili-user-videos` | B站用户投稿列表 | 1.0.2 | 抓取某个B站用户空间的投稿视频列表（标题/BV号/链接），滚动加载。配合 bilibili-download-video 可逐个下载。 | read | [templates/bilibili-user-videos/](templates/bilibili-user-videos/) |
-| `groq-transcribe` | 视频语音转文本（Groq Whisper） | 1.0.0 | 下载媒体（MP4 直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写文本。需要先在插件弹窗配置 Groq API Key。 | read | [templates/groq-transcribe/](templates/groq-transcribe/) |
+| `groq-transcribe` | 视频语音转文本（Groq Whisper） | 1.1.1 | 转写视频的语音为文本（B站视频页链接或媒体直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写。需要先在插件弹窗配置 Groq API Key。 | read | [templates/groq-transcribe/](templates/groq-transcribe/) |
 | `tiktok-video-download` | TikTok 视频下载 | 1.0.0 | 下载一个 TikTok 视频为 MP4 文件（页面内拉流落盘到浏览器下载目录）。需要浏览器可访问 TikTok；受限视频返回结构化错误。 | download | [templates/tiktok-video-download/](templates/tiktok-video-download/) |
 
 ## search

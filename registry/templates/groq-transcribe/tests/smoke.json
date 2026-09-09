@@ -3,10 +3,10 @@
   "args": {
     "id": "groq-transcribe",
     "params": {
-      "url": "https://example.com/test.mp4"
+      "url": "https://www.bilibili.com/video/BV1Xjbu6WELJ"
     }
   },
   "expect": {
-    "minResults": 1
+    "contains": "transcribed"
   }
 }

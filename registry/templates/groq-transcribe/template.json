@@ -1,15 +1,15 @@
 {
   "id": "groq-transcribe",
   "name": "视频语音转文本（Groq Whisper）",
-  "version": "1.0.0",
-  "description": "下载媒体（MP4 直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写文本。需要先在插件弹窗配置 Groq API Key。",
+  "version": "1.1.1",
+  "description": "转写视频的语音为文本（B站视频页链接或媒体直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写。需要先在插件弹窗配置 Groq API Key。",
   "category": "media",
   "inputs": [
     {
       "name": "url",
       "type": "url",
       "required": true,
-      "description": "媒体直链（B站 playAddr / TikTok playAddr / 任意 MP4/MP3/WAV 直链）"
+      "description": "B站视频页链接（bilibili.com/video/BV...）或媒体直链；B站页会自动提取音轨"
     },
     {
       "name": "language",
@@ -35,11 +35,11 @@
       },
       "expectations": [
         {
-          "path": "value.transcribed",
+          "path": "transcribed",
           "equals": true
         }
       ],
-      "note": "SW 拉媒体 → offscreen 抽音轨压缩 → Groq 转写"
+      "note": "B站视频页 URL → SW 自动提取音轨直链 → 拉流 → offscreen 压缩 → Groq 转写"
     }
   ],
   "tokenStrategy": {

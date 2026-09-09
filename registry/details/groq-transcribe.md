@@ -1,9 +1,9 @@
 # 视频语音转文本（Groq Whisper）
 
-> 下载媒体（MP4 直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写文本。需要先在插件弹窗配置 Groq API Key。
+> 转写视频的语音为文本（B站视频页链接或媒体直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写。需要先在插件弹窗配置 Groq API Key。
 
 - ID: `groq-transcribe`
-- 版本: `1.0.0`
+- 版本: `1.1.1`
 - 风险: `read`
 - 适用站点: `bilibili.com`, `tiktok.com`, `youtube.com`
 - Intents: `audio.transcribe`, `video.transcript`
@@ -12,7 +12,7 @@
 
 ## 输入
 
-- `url` (url, required): 媒体直链（B站 playAddr / TikTok playAddr / 任意 MP4/MP3/WAV 直链）
+- `url` (url, required): B站视频页链接（bilibili.com/video/BV...）或媒体直链；B站页会自动提取音轨
 - `language` (string): 语言代码（zh/en/ja...），可选，通常自动检测即可
 - `model` (string): Groq Whisper 模型
 
