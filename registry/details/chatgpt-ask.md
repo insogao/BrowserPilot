@@ -3,7 +3,7 @@
 > 向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。
 
 - ID: `chatgpt-ask`
-- 版本: `1.3.0`
+- 版本: `1.3.1`
 - 风险: `write`
 - 适用站点: `chatgpt.com`
 - Intents: `ai.chat`, `ask`, `question`

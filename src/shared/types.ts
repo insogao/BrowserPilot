@@ -33,7 +33,9 @@ export type CommandName =
   | "waitForURL"
   | "waitForSelector"
   | "waitForTimeout"
-  | "wait_dom_idle" // {idleMs?,timeoutMs?,selector?} AI 聊天流式页静默等待（MutationObserver）
+  | "wait_dom_idle"
+  | "groq_transcribe" // {url, language?, model?} 拉媒体→抽音轨压缩→Groq Whisper 语音转文本
+ // {idleMs?,timeoutMs?,selector?} AI 聊天流式页静默等待（MutationObserver）
   | "pageInfo"
   | "drainEvents"
   | "tab_cdp_call" // {tabId?, method, params?} 任意底层 CDP 透传（交给外部 AI/CLI 全权使用）

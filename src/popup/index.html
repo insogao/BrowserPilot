@@ -80,6 +80,15 @@
       <button class="icon" id="manage" title="管理操作模板" aria-label="管理操作模板">⚙</button>
     </div>
 
+    <div class="card" id="groq-card">
+      <div class="row"><span class="k">Groq API Key（语音转文本）</span></div>
+      <div style="display:flex;gap:6px;margin-top:6px;">
+        <input id="groq-key" type="password" placeholder="gsk_..." style="flex:1;min-width:0;border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:12px;" />
+        <button id="save-groq-key" style="padding:6px 10px;">保存</button>
+      </div>
+      <div class="row" style="margin-top:4px;"><span class="k" id="groq-key-state">未配置</span></div>
+    </div>
+
     <div class="toast" id="toast"></div>
     <script src="index.js"></script>
   </body>

@@ -16,6 +16,7 @@ import { maskOn, maskOff, isHumanTakeover, hasTakeover, touchMaskActivity, endMa
 import { detach, detachAll, listAttachedTabs } from "./debugger-bridge";
 import * as tpl from "./templates";
 import { downloadResource } from "./download-resource";
+import { transcribeMedia } from "./groq";
 
 function getManifestVersion(): string {
   try {
@@ -100,6 +101,7 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   waitForSelector: async (cmd) => ev.waitForSelector(await resolveTargetTab(cmd), cmd.args ?? {}),
   waitForTimeout: async (cmd) => ev.waitForTimeout(await resolveTargetTab(cmd), cmd.args ?? {}),
   wait_dom_idle: async (cmd) => ev.waitDomIdle(await resolveTargetTab(cmd), cmd.args ?? {}),
+  groq_transcribe: async (cmd) => transcribeMedia((cmd.args ?? {}) as { url?: string; language?: string; model?: string }),
   pageInfo: async (cmd) => ev.pageInfo(await resolveTargetTab(cmd)),
 
   drainEvents: async (cmd) => {

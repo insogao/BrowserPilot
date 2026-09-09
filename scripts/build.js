@@ -16,6 +16,7 @@ const entries = [
   { src: "src/onboarding/index.ts", out: "onboarding/index.js" },
   { src: "src/kernel/kernel.ts", out: "kernel/kernel.js" },
   { src: "src/offscreen/offscreen.ts", out: "offscreen/offscreen.js" },
+  { src: "src/offscreen/audio.ts", out: "offscreen/audio.js" },
 ];
 
 function cleanDist() {

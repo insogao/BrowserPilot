@@ -1,0 +1,12 @@
+{
+  "command": "run_template",
+  "args": {
+    "id": "groq-transcribe",
+    "params": {
+      "url": "https://example.com/test.mp4"
+    }
+  },
+  "expect": {
+    "contains": "groq"
+  }
+}

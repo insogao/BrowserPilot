@@ -12,9 +12,12 @@
     "storage",
     "alarms",
     "downloads",
-    "nativeMessaging"
+    "nativeMessaging",
+    "offscreen"
   ],
-  "host_permissions": ["<all_urls>"],
+  "host_permissions": [
+    "<all_urls>"
+  ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
@@ -31,21 +34,29 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["content/bridge.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
       "run_at": "document_start",
       "all_frames": true
     }
   ],
   "commands": {
     "open-popup": {
-      "suggested_key": { "default": "Ctrl+Shift+Y" },
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
       "description": "打开 Agent 控制台"
     }
   },
   "options_page": "onboarding/index.html",
   "sandbox": {
-    "pages": ["kernel/kernel.html"]
+    "pages": [
+      "kernel/kernel.html"
+    ]
   },
   "content_security_policy": {
     "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-inline' 'unsafe-eval'"

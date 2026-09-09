@@ -143,6 +143,11 @@
       "site": "TikTok Video Download",
       "templateId": "tiktok-video-download",
       "kind": "runtime"
+    },
+    {
+      "site": "Groq Transcribe",
+      "templateId": "groq-transcribe",
+      "kind": "runtime"
     }
   ],
   "runtimeOrder": [
@@ -174,7 +179,8 @@
     "deepseek-ask",
     "bilibili-favlist",
     "bilibili-user-videos",
-    "tiktok-video-download"
+    "tiktok-video-download",
+    "groq-transcribe"
   ],
   "builtinOrder": [],
   "builtinMigrationOrder": [
@@ -209,7 +215,8 @@
     "deepseek-ask": "2026-09-07 macOS 真机创建：核心 @write 新增 textarea 模式（native setter+input 事件），Enter 发送，最后一个 .ds-markdown 且 4s 稳定判定回复结束；需 DeepSeek 登录态。",
     "bilibili-favlist": "2026-09-08 macOS 真机创建：favlist 页 DOM 路线（收藏夹 API 需 wbi 签名故走 DOM），www 域拿 mid 后切 space 域滚动抓取。",
     "bilibili-user-videos": "2026-09-08 macOS 真机创建：space /video 页滚动懒加载，BV 去重。",
-    "tiktok-video-download": "2026-09-09 macOS 真机创建：视频页 rehydration 数据（webapp.video-detail）含最高码率 playAddr，页面上下文带 cookie 拉流（Range 206 验证）。注意：@tiktok 等官方账号视频有区域限制（statusCode 10204），换普通用户视频即可；不做绕过。"
+    "tiktok-video-download": "2026-09-09 macOS 真机创建：视频页 rehydration 数据（webapp.video-detail）含最高码率 playAddr，页面上下文带 cookie 拉流（Range 206 验证）。注意：@tiktok 等官方账号视频有区域限制（statusCode 10204），换普通用户视频即可；不做绕过。",
+    "groq-transcribe": "2026-09-09 macOS 创建：媒体直链 → offscreen 抽音轨 MP3 48k → Groq Whisper。需弹窗配置 Groq API Key。25MB 上限。注意输入是媒体直链而非视频页。"
   },
   "nonSiteStaticOnly": [
     "browserpilot-example-prompt"

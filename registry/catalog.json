@@ -409,7 +409,7 @@
     {
       "id": "chatgpt-ask",
       "name": "ChatGPT 提问",
-      "version": "1.3.0",
+      "version": "1.3.1",
       "path": "registry/templates/chatgpt-ask/template.json",
       "detailsPath": "registry/details/chatgpt-ask.md",
       "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
@@ -828,6 +828,78 @@
       ],
       "deprecated": false,
       "fingerprint": "sha256:9fa51c12e99fd3086d7af638e547ef872f58a1cfe7bda25af5b8bb5d2f6a96bd"
+    },
+    {
+      "id": "groq-transcribe",
+      "name": "视频语音转文本（Groq Whisper）",
+      "version": "1.0.0",
+      "path": "registry/templates/groq-transcribe/template.json",
+      "detailsPath": "registry/details/groq-transcribe.md",
+      "description": "下载媒体（MP4 直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写文本。需要先在插件弹窗配置 Groq API Key。",
+      "category": "media",
+      "sites": [
+        "bilibili.com",
+        "tiktok.com",
+        "youtube.com"
+      ],
+      "intents": [
+        "audio.transcribe",
+        "video.transcript"
+      ],
+      "keywords": [
+        "语音转文字",
+        "转写",
+        "transcribe",
+        "whisper",
+        "groq",
+        "字幕"
+      ],
+      "capabilities": [
+        "groq_transcribe"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": true,
+          "description": "媒体直链（B站 playAddr / TikTok playAddr / 任意 MP4/MP3/WAV 直链）"
+        },
+        {
+          "name": "language",
+          "type": "string",
+          "required": false,
+          "description": "语言代码（zh/en/ja...），可选，通常自动检测即可"
+        },
+        {
+          "name": "model",
+          "type": "string",
+          "required": false,
+          "description": "Groq Whisper 模型"
+        }
+      ],
+      "outputs": [
+        {
+          "name": "text",
+          "type": "string",
+          "description": "完整转写文本"
+        },
+        {
+          "name": "durationSec",
+          "type": "number"
+        },
+        {
+          "name": "audioKB",
+          "type": "number"
+        }
+      ],
+      "risk": "read",
+      "aliases": [
+        "语音转文字",
+        "视频转文字",
+        "whisper 转写"
+      ],
+      "deprecated": false,
+      "fingerprint": "sha256:4fd2e2f05cb702e5f86930a267f854a67d0b48de2a90b378475760d583cef8f6"
     },
     {
       "id": "guba-article",

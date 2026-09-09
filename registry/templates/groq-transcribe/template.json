@@ -1,0 +1,90 @@
+{
+  "id": "groq-transcribe",
+  "name": "视频语音转文本（Groq Whisper）",
+  "version": "1.0.0",
+  "description": "下载媒体（MP4 直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写文本。需要先在插件弹窗配置 Groq API Key。",
+  "category": "media",
+  "inputs": [
+    {
+      "name": "url",
+      "type": "url",
+      "required": true,
+      "description": "媒体直链（B站 playAddr / TikTok playAddr / 任意 MP4/MP3/WAV 直链）"
+    },
+    {
+      "name": "language",
+      "type": "string",
+      "required": false,
+      "description": "语言代码（zh/en/ja...），可选，通常自动检测即可"
+    },
+    {
+      "name": "model",
+      "type": "string",
+      "required": false,
+      "default": "whisper-large-v3-turbo",
+      "description": "Groq Whisper 模型"
+    }
+  ],
+  "steps": "commands",
+  "body": [
+    {
+      "name": "groq_transcribe",
+      "args": {
+        "url": "$url",
+        "language": "$language"
+      },
+      "expectations": [
+        {
+          "path": "value.transcribed",
+          "equals": true
+        }
+      ],
+      "note": "SW 拉媒体 → offscreen 抽音轨压缩 → Groq 转写"
+    }
+  ],
+  "tokenStrategy": {
+    "defaultL0": true
+  },
+  "scope": {
+    "sites": [
+      "bilibili.com",
+      "tiktok.com",
+      "youtube.com"
+    ]
+  },
+  "discovery": {
+    "intents": [
+      "audio.transcribe",
+      "video.transcript"
+    ],
+    "keywords": [
+      "语音转文字",
+      "转写",
+      "transcribe",
+      "whisper",
+      "groq",
+      "字幕"
+    ],
+    "outputs": [
+      {
+        "name": "text",
+        "type": "string",
+        "description": "完整转写文本"
+      },
+      {
+        "name": "durationSec",
+        "type": "number"
+      },
+      {
+        "name": "audioKB",
+        "type": "number"
+      }
+    ],
+    "risk": "read",
+    "aliases": [
+      "语音转文字",
+      "视频转文字",
+      "whisper 转写"
+    ]
+  }
+}

@@ -56,5 +56,26 @@ $("manage").addEventListener("click", () => {
   void chrome.runtime.openOptionsPage();
 });
 
+// Groq API Key 设置（存 chrome.storage.local，用于 groq_transcribe 命令；不进日志/模板）
+const groqKeyInput = document.getElementById("groq-key") as HTMLInputElement;
+const groqKeyState = document.getElementById("groq-key-state")!;
+
+async function loadGroqKey(): Promise<void> {
+  const st = await chrome.storage.local.get("groqApiKey");
+  const v = (st.groqApiKey as string) || "";
+  groqKeyState.textContent = v ? "已配置" : "未配置";
+}
+
+document.getElementById("save-groq-key")!.addEventListener("click", async () => {
+  const v = groqKeyInput.value.trim();
+  if (!v) { toast("请输入 Groq API Key"); return; }
+  await chrome.storage.local.set({ groqApiKey: v });
+  groqKeyInput.value = "";
+  await loadGroqKey();
+  toast("Groq API Key 已保存");
+});
+
+void loadGroqKey();
+
 void refresh();
 setInterval(() => void refresh().catch(() => {}), 1000);

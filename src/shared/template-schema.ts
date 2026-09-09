@@ -141,7 +141,7 @@ export const TEMPLATE_STEP_COMMANDS = new Set<CommandName>([
   "selectOption", "check", "uncheck", "setChecked",
   "js", "waitForURL", "waitForSelector", "waitForTimeout", "wait_dom_idle", "drainEvents", "tab_cdp_call",
   "list_tabs", "open_tab", "close_tab", "switch_tab", "ensure_visible", "list_spaces",
-  "download_image", "download_resource", "start_mask", "stop_mask",
+  "download_image", "download_resource", "start_mask", "stop_mask", "groq_transcribe",
 ]);
 
 /** 校验并规整一个模版对象；不合法则抛错（带可读原因）。 */
