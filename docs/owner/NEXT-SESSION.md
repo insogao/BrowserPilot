@@ -191,6 +191,11 @@ export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例�
 - **路上修的三个坑**：① expectations path 错位（核心命令返回无 value 包装，与 js 步骤不同）；② language 占位符 $language 未传时被 Groq 拒绝 → SW 端正则过滤非法值；③ offscreen 音频管线方案弃用（createDocument 报 Page failed to load，根因未深究——SW 直连方案更简单且已够用：B站抽音轨后仅 621KB，无需压缩）。
 - 完整链路：`run_template groq-transcribe { url: "B站视频页" }` 一条命令出转写文本。TikTok/直链也支持（传媒体直链）。
 
+## Groq 转写稳定复验（2026-09-10）
+
+- groq-transcribe smoke 连续两次 passed（392 字中文转写，B站视频页 URL 输入）。 Copy Skill 新轻量引导（get_skill）+ SKILL.md 已推送并在 GitHub 可达。
+- 断链原因最终更正：host 断链的两次事件中一次为用户关闭浏览器、一次为 SW reload 后瞬态——均自愈/手动恢复，非代码缺陷。「SW 回收后重连可靠性」仍列待办。
+
 ## 下一步优先级
 
 1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。

@@ -438,5 +438,30 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
   ].join("\n");
 }
 
+/** Copy Skill 复制的轻量引导：GitHub 技能文件地址 + 本机实时连接信息。
+ *  完整使用文档以 skill/BrowserPilot/SKILL.md 为单一真源（随仓库分发）；
+ *  export_guide 保留为运行时详细参考（含动态端口/token 的完整版）。 */
+export function buildSkillBootstrap(profile: ProfileInfo | undefined, hostPort: number | undefined, hostToken?: string): string {
+  const repoSkill = "https://raw.githubusercontent.com/insogao/BrowserPilot/main/skill/BrowserPilot/SKILL.md";
+  const repoPage = "https://github.com/insogao/BrowserPilot/blob/main/skill/BrowserPilot/SKILL.md";
+  const auth = hostToken ?? "<从 BrowserPilot popup 重新 Copy Skill>";
+  const lines = [
+    "# BrowserPilot 技能安装（一次）",
+    "",
+    "1. 获取技能文件并保存到你的 Agent 技能目录（如 ~/.claude/skills/BrowserPilot/SKILL.md）：",
+    "   " + repoSkill,
+    "   （浏览: " + repoPage + "）",
+    "",
+    "# 本机连接信息（实时）",
+    "- 端口: " + (hostPort ?? "<未就绪，等插件 SW 启动后重新 Copy>"),
+    "- authToken: " + auth,
+    "- 快速验证（在 BrowserPilot 项目目录）: npm run client -- ping '{}' --no-launch",
+    "- client 直调: node <项目目录>/native-host/client.mjs <命令> '<args>' --no-launch",
+    "",
+    "连接成功后按 SKILL.md 指引使用。第 0 步：先 list_templates 查看已有能力（能一条命令就别手写）。",
+  ];
+  return lines.join("\n");
+}
+
 // 注入命令调度器给模版 runner（templates.ts 不 import commands.ts，避免循环依赖）。
 tpl.setCommandRunner(dispatch);

@@ -2,7 +2,7 @@
 // 对齐技术路径 M1（骨架/三入口/保活）+ M2（host 连接）。
 import { connectHost, isHostConnected } from "./native-bridge";
 import { loadState, patchState } from "./state";
-import { buildGuideFromCmd, dispatch } from "./commands";
+import { buildGuideFromCmd, buildSkillBootstrap, dispatch } from "./commands";
 import { registerMaskHandlers, requestTakeover, isHumanTakeover, maskOff } from "./mask";
 import { isAttached } from "./debugger-bridge";
 import type { PopupGuide, PopupRequest, PopupStatus } from "../shared/types";
@@ -104,6 +104,10 @@ async function handlePopup(msg: PopupRequest): Promise<unknown> {
       const s = await loadState();
       const guide = buildGuideFromCmd(s.profile, s.hostPort, s.hostToken);
       return { guide };
+    }
+    case "get_skill": {
+      const s = await loadState();
+      return { skill: buildSkillBootstrap(s.profile, s.hostPort, s.hostToken) };
     }
     case "template_command": {
       const allowed = new Set([
