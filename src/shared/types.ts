@@ -139,6 +139,7 @@ export interface PopupRequest {
     | "take_over" // 用户人工接管当前标签，暂停 Agent
     | "resume_agent" // 恢复 Agent 操作
     | "get_guide" // 返回使用文档 markdown（popup 负责写剪贴板）
+  | "get_skill" // 返回轻量技能引导（GitHub SKILL.md 地址 + 实时连接信息）
     | "template_command" // options 模板看板调用受限模板管理命令
     | "stop";
   name?: CommandName;

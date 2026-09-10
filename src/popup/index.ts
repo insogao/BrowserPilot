@@ -44,9 +44,9 @@ $("takeover").addEventListener("click", async () => {
 
 $("guide").addEventListener("click", async () => {
   try {
-    const g = (await send({ kind: "get_guide" })) as PopupGuide;
-    await navigator.clipboard.writeText(g.guide);
-    toast("BrowserPilot Skill 已复制");
+    const g = (await send({ kind: "get_skill" })) as unknown as { skill: string };
+    await navigator.clipboard.writeText(g.skill);
+    toast("技能安装引导已复制（含本机连接信息）");
   } catch (e) {
     toast("复制失败：" + (e instanceof Error ? e.message : String(e)));
   }
