@@ -48,14 +48,16 @@ const POSIX_BROWSERS = [
 ];
 
 export function argValue(cmd, flag) {
-  // 支持 --flag="value with spaces"、"--flag=value with spaces"（整参数带引号）与
-  // --flag=value（无引号时到空白截止，不吞后续旗标）。品牌化 Chrome for Testing
-  // 的 --user-data-dir=/tmp/profile --remote-debugging-port=51731 只应取值 /tmp/profile。
-  // 旗标前要求行首或空白，避免前导/内嵌误匹配。
+  // 支持 --flag="value with spaces"、"--flag=value with spaces"（整参数带引号，到闭引号截止）
+  // 与 --flag=value（无引号）。无引号值面向 ps 这类把 argv 摊平成一行、丢失参数边界的
+  // 命令文本：允许值内嵌空格，到下一个旗标 token（空白 + -/-- + 旗标名 + =/空白/行尾）
+  // 或行尾截止，不吞后续旗标，也不在普通路径文本处提前截断。旗标前要求行首或空白，
+  // 避免前导/内嵌误匹配。
   const name = flag.replace(/^-*/, "").replace(/=$/, "");
   const safe = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const nextFlag = "\\s+-{1,2}[A-Za-z][A-Za-z0-9_-]*(?:=|\\s|$)";
   const re = new RegExp(
-    "(?:^|\\s)(?:\"-{1,2}" + safe + "=([^\"]*)\"|-{1,2}" + safe + "=(?:\"([^\"]*)\"|([^\\s\"]*)))",
+    "(?:^|\\s)(?:\"-{1,2}" + safe + "=([^\"]*)\"|-{1,2}" + safe + "=(?:\"([^\"]*)\"|([\\s\\S]*?)(?=" + nextFlag + "|\\s*$)))",
     "i",
   );
   const m = cmd.match(re);

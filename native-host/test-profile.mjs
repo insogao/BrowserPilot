@@ -26,6 +26,11 @@ const cases = [
     expect: { browser: "chrome", udd: "C:\\Temp\\Chrome", profile: undefined, exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
   },
   {
+    name: "flattened unquoted user-data-dir keeps embedded spaces and stops at next flag",
+    cmd: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir=C:\\Users\\John Doe\\Chrome Profile --remote-debugging-port=9222',
+    expect: { browser: "chrome", udd: "C:\\Users\\John Doe\\Chrome Profile", profile: undefined, exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
+  },
+  {
     name: "whole-argument-quoted user-data-dir keeps spaces, stops at closing quote",
     cmd: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" "--user-data-dir=C:\\Users\\John Doe\\AppData\\Local\\Google\\Chrome\\User Data" --profile-directory="Profile 4"',
     expect: { browser: "chrome", udd: "C:\\Users\\John Doe\\AppData\\Local\\Google\\Chrome\\User Data", profile: "Profile 4", exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
@@ -38,6 +43,11 @@ const cases = [
   {
     name: "user-data-dir prefix flag is not matched",
     cmd: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --user-data-dir-extra=C:\\Fake',
+    expect: { browser: "chrome", udd: undefined, profile: undefined, exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
+  },
+  {
+    name: "user-data-dir-like token inside another flag value is not matched",
+    cmd: '"C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --other-flag=--user-data-dir=C:\\Fake --remote-debugging-port=9222',
     expect: { browser: "chrome", udd: undefined, profile: undefined, exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" },
   },
 ];
@@ -67,8 +77,8 @@ const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "browserpilot-profile-
 let posixPass = 0;
 let posixTotal = 0;
 try {
-  function makeBin(appName, binName = appName) {
-    const dir = path.join(fixtureRoot, `${appName}.app`, "Contents", "MacOS");
+  function makeBin(appName, binName = appName, root = fixtureRoot) {
+    const dir = path.join(root, `${appName}.app`, "Contents", "MacOS");
     fs.mkdirSync(dir, { recursive: true });
     const bin = path.join(dir, binName);
     fs.writeFileSync(bin, "");
@@ -78,7 +88,8 @@ try {
   const chromiumExe = makeBin("Chromium");
   const edgeExe = makeBin("Microsoft Edge");
   const braveExe = makeBin("Brave Browser");
-  const cftExe = makeBin("Backlight", "Google Chrome for Testing");
+  // 品牌化 Chrome for Testing 的真实安装布局带空格（…/Application Support/<brand>/apps/<brand>.app/…）。
+  const cftExe = makeBin("Backlight", "Google Chrome for Testing", path.join(fixtureRoot, "Application Support", "Backlight", "apps"));
   const cftBundleExe = makeBin("Google Chrome for Testing");
 
   const posixCases = [
@@ -107,6 +118,22 @@ try {
       cmd: `${cftExe} --user-data-dir=/tmp/bp-backlight-profile --remote-debugging-port=51731 --load-extension=/path/dist`,
       expect: { browser: "chrome", udd: "/tmp/bp-backlight-profile", profile: "Default", exe: cftExe },
       excludes: ["--remote-debugging-port", "--load-extension"],
+    },
+    {
+      name: "backlight-shaped default user-data-dir with Application Support and many following flags",
+      cmd: `${cftExe} --user-data-dir=/Users/jiangao/Library/Application Support/Backlight/spaces/default/profile --remote-debugging-port=51731 --load-extension=/Users/jiangao/work/browser/dist --no-first-run --no-default-browser-check --disable-background-networking`,
+      expect: { browser: "chrome", udd: "/Users/jiangao/Library/Application Support/Backlight/spaces/default/profile", profile: "Default", exe: cftExe },
+      excludes: ["--remote-debugging-port", "--load-extension", "--no-first-run"],
+    },
+    {
+      name: "flattened unquoted user-data-dir keeps hyphens, equals and spaces, stops at next flag",
+      cmd: `${chromeExe} --user-data-dir=/Users/me/Chrome Profile (v2)/data=x-y --no-first-run --remote-debugging-port=1`,
+      expect: { browser: "chrome", udd: "/Users/me/Chrome Profile (v2)/data=x-y", profile: "Default", exe: chromeExe },
+    },
+    {
+      name: "flattened unquoted user-data-dir at end of command",
+      cmd: `${chromeExe} --user-data-dir=/Users/me/Chrome Profile`,
+      expect: { browser: "chrome", udd: "/Users/me/Chrome Profile", profile: "Default", exe: chromeExe },
     },
     {
       name: "chrome for testing inside its own app bundle",

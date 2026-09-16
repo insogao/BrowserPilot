@@ -36,8 +36,9 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 
 ## Profile 兼容跟进（2026-09-16，macOS 已验证）
 
-- 9e36e6a 之后的 review 修复：`argValue` 恢复整参数带引号形态（`"--user-data-dir=C:\Users\John Doe\..."`）支持，同时保持无引号值到空白截止、前导/内嵌不误匹配；`test-profile.mjs` 在非 darwin 平台不再要求 `.app` fixture 命中 leading-`/` 的 mac 解析器，fixture 清理改 try/finally；实现注释产品中立（测试名保留 Backlight-shaped 形状描述）；README 去掉硬编码用例数。
-- mac 门禁：`test:profile`（7 纯字符串 + 10 macOS fixture 全过）、显式引号/误匹配探针 11/11、`typecheck`、`test:host`、`test:core`、`doctor`、`build` 全绿。
+- 9e36e6a + 851f70c：`argValue` 支持引号值、整参数带引号与无引号旗标；`posixExeFromCmd` 按具体优先识别 Chrome for Testing 且同族 marker 回退保持路径解析；`test-profile.mjs` 的 exe 断言仅 darwin，fixture 清理 try/finally。
+- 本轮修复（真实默认路径暴露）：`ps` 把 argv 摊平成一行且丢失引号，默认 user-data-dir（`…/Library/Application Support/…`）含空格，旧无引号解析在首个空白截断。无引号值现允许内嵌空格，到下一个旗标 token（空白 + -/-- + 旗标名 + =/空白/行尾）或行尾截止；引号形态与前导/内嵌误匹配保护不变；普通路径文本（含连字符/等号/空格）不提前截断。确定性用例新增：Application Support 默认形状 + 多个后续旗标、连字符/等号/空格路径、行尾无后续旗标、另一旗标值内的 lookalike 不误匹配。
+- mac 门禁：`test:profile` 全过（临时 `.app` fixture，含 Application Support 布局）；显式探针=真实安装的可执行路径 + 合成默认风格 UDD，另以真实 `ps -o command=` 输出复核摊平解析；`typecheck`、`test:host`、`test:core`、`doctor`、`build` 全绿。
 - **Windows 运行时/CI 未运行**：本跟进不构成 Windows 验证；真机/CI 验证列入下方后续计划。
 
 ## 2026-09-05 修复清单（全部已验证）
