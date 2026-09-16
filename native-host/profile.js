@@ -38,7 +38,9 @@ function queryProcessesPosix() {
   }
 }
 
+// marker 按“更具体优先”排序：Google Chrome for Testing 必须排在 Google Chrome 之前。
 const POSIX_BROWSERS = [
+  ["Google Chrome for Testing", "chrome"],
   ["Google Chrome", "chrome"],
   ["Chromium", "chromium"],
   ["Microsoft Edge", "edge"],
@@ -46,10 +48,15 @@ const POSIX_BROWSERS = [
 ];
 
 export function argValue(cmd, flag) {
-  // 匹配 --flag="value" 或 --flag=value；flag 含尾随 '='
-  const re = new RegExp("-{1,2}" + flag.replace(/^-*/, "") + "\"?([^\"]*)\"?", "i");
+  // 匹配 --flag="value"（可含空格）或 --flag=value（到空白截止）；flag 含尾随 '='。
+  // 无引号时不能贪婪吃到后续旗标，例如 Backlight 的
+  // --user-data-dir=/tmp/profile --remote-debugging-port=51731 只应取值 /tmp/profile。
+  const name = flag.replace(/^-*/, "").replace(/=$/, "");
+  const safe = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp("(?:^|\\s)-{1,2}" + safe + "=(?:\"([^\"]*)\"|([^\\s]*))", "i");
   const m = cmd.match(re);
-  return m ? m[1] : undefined;
+  if (!m) return undefined;
+  return m[1] !== undefined ? m[1] : m[2];
 }
 
 export function exeFromCmd(cmd) {
@@ -64,7 +71,7 @@ export function browserFromCmd(cmd) {
   return undefined;
 }
 
-// 以下两个导出供 test-profile.mjs 做纯字符串用例（不再伪造进程/应用包）。
+// 以下两个导出供 test-profile.mjs 做解析用例（不伪造进程；.app fixture 仅用于存在性检查）。
 export function posixBrowserFromCmd(cmd) {
   for (const [marker, browser] of POSIX_BROWSERS) {
     if (cmd.includes(marker)) return browser;
@@ -75,19 +82,22 @@ export function posixBrowserFromCmd(cmd) {
 /** mac 浏览器二进制路径含空格（…/Google Chrome.app/Contents/MacOS/Google Chrome），
  *  不能按空格切分，也不能按旗标位置截断（旗标前可能有位置参数）；用浏览器名 marker 定位：
  *  从每处 marker 出现点截前缀，要求形如 .app/Contents/MacOS/ 且真实存在
- *  （.app 目录名本身也含 marker，会因前缀不含 MacOS/ 或不存在而自动跳到下一处）。 */
+ *  （.app 目录名本身也含 marker，会因前缀不含 MacOS/ 或不存在而自动跳到下一处）。
+ *  同族可能有多个 marker（Google Chrome for Testing / Google Chrome），按具体优先逐个尝试。 */
 export function posixExeFromCmd(cmd) {
   const browser = posixBrowserFromCmd(cmd);
   if (!browser) return undefined;
-  const marker = POSIX_BROWSERS.find(([, b]) => b === browser)[0];
-  let from = 0;
-  for (;;) {
-    const at = cmd.indexOf(marker, from);
-    if (at < 0) return undefined;
-    const bin = cmd.slice(0, at + marker.length);
-    if (bin.startsWith("/") && bin.includes(".app/Contents/MacOS/") && fs.existsSync(bin)) return bin;
-    from = at + 1;
+  for (const [marker] of POSIX_BROWSERS.filter(([, b]) => b === browser)) {
+    let from = 0;
+    for (;;) {
+      const at = cmd.indexOf(marker, from);
+      if (at < 0) break;
+      const bin = cmd.slice(0, at + marker.length);
+      if (bin.startsWith("/") && bin.includes(".app/Contents/MacOS/") && fs.existsSync(bin)) return bin;
+      from = at + 1;
+    }
   }
+  return undefined;
 }
 
 export function detectProfile() {
