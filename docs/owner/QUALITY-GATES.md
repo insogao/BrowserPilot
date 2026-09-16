@@ -23,6 +23,7 @@ npm run test:host
 npm run test:host:exe
 ```
 
+涉及 macOS native host 注册（`scripts/register-host-mac.mjs`、Chrome for Testing / 自定义 user-data-dir 目标）时追加 `npm run test:register`。
 涉及 profile 探测时追加 `npm run test:profile`。涉及构建产物时追加 `npm run build` 和 `npm run build:host`。
 
 ## Registry 静态门禁

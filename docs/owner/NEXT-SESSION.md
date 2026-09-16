@@ -45,6 +45,14 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - mac 门禁：`test:profile` 全过（临时 `.app` fixture，含 Application Support 布局）；显式探针=真实安装的可执行路径 + 合成默认风格 UDD，另以真实 `ps -o command=` 输出复核摊平解析；`typecheck`、`test:host`、`test:core`、`doctor`、`build` 全绿。
 - **Windows 运行时/CI 未运行**：本跟进不构成 Windows 验证；真机/CI 验证列入下方后续计划。
 
+## Chrome for Testing native host 注册支持（2026-09-16，代码/测试完成，未安装到 live）
+
+- `scripts/register-host-mac.mjs` 目标发现加入 Chrome for Testing：官方 `~/Library/Application Support/Google/ChromeForTesting/NativeMessagingHosts/` 与品牌化产品目录 `Google/Chrome for Testing`（克隆/改名构建的产品目录即后者）。脚本保持通用，无 Backlight 依赖。
+- 新增 `--user-data-dir <path>`（可重复）：Chrome 的 `--user-data-dir` 会覆盖用户数据目录，用户级 host 从 `<user-data-dir>/NativeMessagingHosts/` 查找；任意 Chrome / Chrome for Testing 通用，脚本不扫描运行中的进程。
+- 幂等与安全：内容相同不重写（created/updated/unchanged）；写入前预检全部目标，遇到非 BrowserPilot manifest 或非本脚本 wrapper 默认拒绝且零写入（`--force` 才覆盖）；`--unregister` 只删除宿主名匹配的 manifest 与带生成标记的 wrapper；`--dry-run` 可先核对目标。
+- 门禁：`npm run test:register` 47/47（fake repo + 隔离 HOME + CLI e2e）；`doctor`、`typecheck`、`test:profile`、`test:host` 全绿。本任务未向 live BrowserPilot/Chrome/Chrome for Testing/Backlight 写入任何 host 文件。
+- 后续 live 集成命令（待用户确认后单独执行）：`node scripts/register-host-mac.mjs --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile"`；随后完整重启该 CfT，再 `npm run client -- ping '{}' --no-launch` 验证。
+
 ## 2026-09-05 修复清单（全部已验证）
 
 1. **debugger attach 自愈**（P1）：`attach()` catch "already attached" 后发探针命令区分自身遗留与外部调试器；SW 回收后动作命令不再永久失败。新增 core 测试。

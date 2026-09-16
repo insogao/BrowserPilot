@@ -20,6 +20,7 @@
     "test:core",
     "test:host",
     "test:host:exe",
+    "test:register",
     "registry:build",
     "registry:check",
     "smoke:template",

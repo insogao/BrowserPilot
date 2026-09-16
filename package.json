@@ -17,6 +17,7 @@
     "test:host": "node native-host/test-host.mjs",
     "test:host:exe": "node native-host/test-host-exe.mjs",
     "test:profile": "node native-host/test-profile.mjs",
+    "test:register": "node scripts/test-register-host-mac.mjs",
     "test:core": "node scripts/test-core.mjs",
     "test:live": "node native-host/test-live.mjs",
     "smoke:template": "node scripts/smoke-template.mjs",

@@ -51,8 +51,18 @@ npm run register-host       # Windows：注册 com.browserpilot.browseragent（H
 macOS 无需 build:host：注册脚本生成一个用本机 node 直跑 `host.js` 的 wrapper（token 与 client 共用 `auth.json`）：
 
 ```bash
-npm run register-host:mac   # 写 ~/Library/Application Support/<浏览器>/NativeMessagingHosts/
+npm run register-host:mac   # 自动发现已安装的 Chrome / Chrome for Testing / Chromium / Edge / Brave，写入其 NativeMessagingHosts/
 ```
+
+Chrome for Testing 与普通 Chrome 一样按用户数据目录查找用户级 host：带自定义 `--user-data-dir` 启动时（自动化、克隆浏览器等），manifest 必须放在 `<user-data-dir>/NativeMessagingHosts/`。用 `--user-data-dir` 显式声明目标即可，任意品牌通用，脚本不会扫描运行中的进程或写入其它 profile：
+
+```bash
+node scripts/register-host-mac.mjs --user-data-dir "/path/to/user data"
+npm run register-host:mac -- --dry-run        # 只打印将注册的目标，不写文件
+npm run register-host:mac -- --unregister     # 只清理由本脚本写入的 manifest/wrapper
+```
+
+> 重复执行是幂等的（内容相同不重写）；目标位置已存在不属于 BrowserPilot 的 manifest/wrapper 时默认拒绝写入，确认后才用 `--force` 覆盖。
 
 > 项目内 npm 可能需要走 Node 直调（本机 npm 是 shell shim，被 WSL 转译干扰）：
 > `node "<npm 目录>/node_modules/npm/bin/npm-cli.js" install`
@@ -90,6 +100,7 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 ```bash
 npm run typecheck          # tsc --noEmit
 npm run test:profile       # profile 参数解析 + macOS 可执行路径探测单测
+npm run test:register      # macOS native host 注册：目标发现/幂等/冲突拒绝/自定义 user-data-dir
 npm run test:host          # host.js：ready 帧 + TCP 命令转发
 npm run test:host:exe      # 打包后 exe：同上
 ```
