@@ -5,6 +5,6 @@
 - 文档总索引：[docs/README.md](docs/README.md)
 - 当前交接：[docs/owner/NEXT-SESSION.md](docs/owner/NEXT-SESSION.md)
 - 站点适配唯一规范：[registry/templates/README.md](registry/templates/README.md)
-- 模板一览（24 个，自动生成）：[registry/INDEX.md](registry/INDEX.md)
+- 模板一览（自动生成，数量以 INDEX 与 `registry/catalog.json` 为准）：[registry/INDEX.md](registry/INDEX.md)
 - 架构变更前必读：[docs/owner/ARCHITECTURE.md](docs/owner/ARCHITECTURE.md)
 
