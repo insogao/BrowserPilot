@@ -65,6 +65,15 @@ npm run register-host:mac -- --dry-run        # 只打印将注册的目标，�
 npm run register-host:mac -- --unregister     # 只清理由本脚本写入的 manifest/wrapper
 ```
 
+Backlight 默认 profile 的实测定向注册（只写该目录）：
+
+```bash
+npm run register-host:mac -- --only-user-data-dir \
+  --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile"
+```
+
+> **生效方式（2026-09-16 实测）**：native host 注册在目标 user-data-dir 上**不需要为生效而重启浏览器**——注册后扩展直接 `connectNative` 即可连通（Backlight 默认 profile 未重启即 `ping` 成功）。需要重载的是**扩展本身**：刚加载或更新 `dist/` 后在 `chrome://extensions` 点一次「重新加载」（或走 `npm run dev` 热更新流程）。首次安装（`onInstalled` reason=install）扩展会自动打开 onboarding/使用说明页。新 Backlight space 的 profile 需要单独定向注册，注册不会自动扩散。
+
 > 重复执行是幂等的（内容相同不重写）；目标位置已存在不属于 BrowserPilot 的 manifest/wrapper 时默认拒绝写入，确认后才用 `--force` 覆盖。
 
 > 项目内 npm 可能需要走 Node 直调（本机 npm 是 shell shim，被 WSL 转译干扰）：
@@ -94,7 +103,25 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 2. 点「加载已解压的扩展程序」，选本目录 `dist/`。
 3. 固定 ID：`manifest.json` 已带 `key`，扩展 ID 固定为 **`nnollghpaggbcdkkgoieneffnlijinio`**（与 `host.manifest.json` 的 `allowed_origins` 一致）。
    - 首次加载后可在 `chrome://extensions` 核对；若 ID 不一致，用实际 ID 重跑 `register-host`。
-4. 重启 Chrome（让 host 注册生效），然后点一次扩展图标，SW 会 `connectNative` 拉起 host，并缓存当前 profile，供官方 client 后续自动启动。
+4. 让连接生效：native host 注册在目标 user-data-dir 上**无需重启浏览器**（2026-09-16 实测）；若刚加载/更新了扩展代码，先在 `chrome://extensions` 重新加载扩展。然后点一次扩展图标，SW 会 `connectNative` 拉起 host，并缓存当前 profile，供官方 client 后续自动启动。首次安装会自动打开 onboarding 页。
+
+---
+
+## 当前安装与验证（2026-09-16 实测，macOS）
+
+- 宿主：Backlight 默认实例（daemon pid 2695 / `http://127.0.0.1:9333`；品牌 Chrome for Testing 153.0.8010.47），user-data-dir `/Users/jiangao/Library/Application Support/Backlight/spaces/default/profile`（当前唯一 space `default`）。
+- 扩展：本 worktree `dist/` 已被加载，ID `nnollghpaggbcdkkgoieneffnlijinio`、版本 0.1.0、runtime `enabled=true`（`curl -s http://127.0.0.1:9333/api/extensions`）；首次加载自动打开了 onboarding 页。
+- native host：定向注册在默认 profile 的 `NativeMessagingHosts/`，wrapper 指向本 worktree 的 `native-host/dist/host-mac.sh`；host 是品牌浏览器进程的直接子进程，监听 `127.0.0.1:47001`。
+- 验证（无浏览器启动）：`npm run client -- ping '{}' --no-launch` → `pong: true`；`npm run client -- list_templates '{}' --no-launch` 当前只返回 3 个编译内置（search、gemini-ask、chatgpt-ask），未安装动态包。注册与连接在浏览器未重启时生效。
+- 边界：新 Backlight space/profile 需重新定向注册；本 worktree 路径变化会同时破坏已加载扩展与 host wrapper 指向，迁移后需 `bl ext` reload + 重注册。
+
+## 验证顺序（macOS，保留登录态）
+
+1. 静态门禁（不启动浏览器）：`npm run doctor`、`npm run typecheck`、`npm run test:core`、`npm run test:host`、`npm run test:profile`、`npm run test:register`、`npm run registry:check`。
+2. 只读链路（host 离线时不会拉起浏览器）：`npm run client -- ping '{}' --no-launch`、`npm run client -- list_templates '{}' --no-launch`。
+3. 非登录模板 smoke（需用户授权；会操作 live 页面并可能写入动态包）：`npm run smoke:template -- <id>`；先用 list_templates 区分内置与动态包。
+4. 需登录站点仅在用户确认该 profile 已登录后测试；不得清 profile 或换临时 user-data-dir 重登。
+5. 写入/下载类测试单独授权、限定样本并清理产物；站点首次出现风控即全停。
 
 ---
 
@@ -150,7 +177,7 @@ Registry 使用 `browserpilot.templates.v2`，首次读取会自动迁移 v1 本
 | 阶段 | 状态 |
 |---|---|
 | M1 骨架（manifest/SW/popup/三入口） | ✅ |
-| M2 native host 通道 + profile 探测 | ✅（协议与 profile 已自测；待 Chrome 实测对接） |
+| M2 native host 通道 + profile 探测 | ✅（协议/profile 自测 + macOS 真机对接；2026-09-16 Backlight 默认 profile 实测） |
 | M3 L0 观测（markdown 树 + data-id） | ✅ |
 | M4 L1 attach + AX 快照 + @N | ⬜ |
 | M5 动作全集 + js()/waitFor + 导航版本 | ✅ |

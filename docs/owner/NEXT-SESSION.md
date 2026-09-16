@@ -11,10 +11,10 @@ stale_after: 2026-09-19
 
 ## 接手要点（给任何新接手的 AI / 人）
 
-1. **仓库位置与状态**：本目录 `/Users/gaoshizai/work/chrome/plugin-v1` 是权威工作树，git 历史接自 GitHub `insogao/BrowserPilot`（origin/main），**本地 main 领先远程 7 个提交且未推送**（macOS 适配 + 全部 review 修复 + 新模板都在这 7 个提交里）。若你在别的机器/GitHub 上看到的内容停留在 "fix: prevent legacy template resurrection"，先让用户推送或直接在本目录工作，不要用旧副本。
-2. **环境前提（不可迁移项）**：macOS + Chrome，扩展已由用户加载 `dist/`（开发者模式），native messaging 已注册（`npm run register-host:mac`，node 升级后需重跑）；**雪球/韭研公社/X/ChatGPT 的登录态绑定在这台机器的用户 Chrome profile 上**，换机器需要用户重新登录，缺失时对应模板如实报 blocked，不得绕过。
-3. **健康三查**：`npm run doctor`（结构）→ `npm run client -- ping '{}' --no-launch`（host+扩展链路）→ `git log origin/main..main`（确认提交状态）。
-4. 模板能力速查：[registry/INDEX.md](../INDEX.md)（24 个模板按分类）。
+1. **仓库位置与状态（2026-09-16 核对）**：主目录 `/Users/jiangao/work/browser/BrowserPilot`（`main` @ `7cddfc9`，与 `origin/main` 同步）；本轮工作树 `/Users/jiangao/work/browser/.worktrees/browserpilot-backlight-profile-compat`（分支 `codex/backlight-profile-compat` @ `24b3467`，领先 main 6 个提交，未 merge/push）。以本工作树为权威副本；旧文档中的 `/Users/gaoshizai/...` 路径已作废。若在别处看到停留在 "fix: prevent legacy template resurrection" 的旧副本，不要用它。
+2. **环境前提（不可迁移项）**：macOS + Backlight 默认实例（daemon pid 2695 / `http://127.0.0.1:9333`，品牌 Chrome for Testing，user-data-dir `~/Library/Application Support/Backlight/spaces/default/profile`，当前唯一 space `default`）。扩展已由用户加载本工作树 `dist/`（ID `nnollghpaggbcdkkgoieneffnlijinio`，runtime `enabled=true`；首次安装自动打开 onboarding 页）；native host 已按该 profile 定向注册，2026-09-16 实测无重启即生效（node 升级后需重跑注册）。**雪球/韭研公社/X/ChatGPT 的登录态绑定在这个 Backlight profile 上**，换机器需要用户重新登录，缺失时对应模板如实报 blocked，不得绕过。
+3. **健康三查**：`npm run doctor`（结构）→ `npm run client -- ping '{}' --no-launch` 与 `npm run client -- list_templates '{}' --no-launch`（host+扩展链路，不会拉起浏览器）→ `git status --short --branch`（工作树干净、分支领先数）。
+4. 模板能力速查：[registry/INDEX.md](../../registry/INDEX.md)（31 个模板按分类，自动生成）。
 
 ## 当前结论
 
@@ -34,6 +34,20 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 | `jiuyangongshe-search` / `jiuyangongshe-article` | passed | 新增 v1.0.0：固定 token 搜索路径 + .detail-container 正文；需微信登录态，积分内容只返回可见部分 |
 | `chatgpt-ask` / `gemini-ask` / `x-search` / `baidu-search` / `google-finance-search` / `google-scholar-search` | 未重测 | 上次真实证据仍以 2026-09-04（Windows）为准；scholar/gemini 保持 blocked |
 
+## 当前安装与验证（2026-09-16，macOS 真机实测）
+
+- 宿主：Backlight 默认实例（daemon pid 2695 / `http://127.0.0.1:9333`；品牌 Chrome for Testing 153.0.8010.47），user-data-dir `/Users/jiangao/Library/Application Support/Backlight/spaces/default/profile`（当前唯一 space `default`）。
+- 扩展：本 worktree `dist/` 已被 Backlight 加载，ID `nnollghpaggbcdkkgoieneffnlijinio`、版本 0.1.0、runtime `enabled=true`（`curl -s http://127.0.0.1:9333/api/extensions`）；首次安装（`onInstalled` reason=install）自动打开 onboarding/options 页。
+- native host：按 profile 定向注册（`--only-user-data-dir`），manifest 在默认 profile 的 `NativeMessagingHosts/`，wrapper 指向本 worktree `native-host/dist/host-mac.sh`；host 是品牌浏览器进程的直接子进程，监听 `127.0.0.1:47001`。
+- 验证（无启动、无重启）：`npm run client -- ping '{}' --no-launch` → `pong: true`；`npm run client -- list_templates '{}' --no-launch` → 3 个编译内置（search、gemini-ask、chatgpt-ask），未安装动态包。**native host 注册生效不需要重启浏览器**；需要重载的只是扩展本身（`chrome://extensions` reload 或 `npm run dev` 热更新）。
+- 复现/新目标定向注册命令（先 dry-run 核对，`--only-user-data-dir` 不写自动发现目录）：
+  ```bash
+  npm run register-host:mac -- --only-user-data-dir --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile" --dry-run
+  npm run register-host:mac -- --only-user-data-dir --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile"
+  ```
+- 缺口：host 注册按 user-data-dir 作用域，新 Backlight space 的 profile 需单独注册；本 worktree 路径变化会同时破坏扩展加载与 host wrapper 指向，迁移后需 reload + 重注册。
+- 安全测试顺序：① 静态门禁（`doctor`/`typecheck`/`test:core`/`test:host`/`test:profile`/`test:register`/`registry:check`）；② 只读探测（上面的 `--no-launch` ping/list_templates）；③ 非登录模板 smoke（`npm run smoke:template -- <id>`，需授权）；④ 需登录模板仅在用户确认登录后测；⑤ 写入/下载类单独授权、限定样本并清理产物，站点首次风控即全停。
+
 ## Profile 兼容跟进（2026-09-16，macOS 真机 smoke PASS）
 
 - **真实 macOS BrowserPilot × Backlight smoke（2026-09-16）PASS**：BrowserPilot HEAD `ea29c91`、Backlight accepted HEAD `2c17d7e`；隔离 `BACKLIGHT_HOME` 与克隆 app 路径均含空格；proxy 47883 / upstream 54828 / host 47001。
@@ -45,7 +59,7 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - mac 门禁：`test:profile` 全过（临时 `.app` fixture，含 Application Support 布局）；显式探针=真实安装的可执行路径 + 合成默认风格 UDD，另以真实 `ps -o command=` 输出复核摊平解析；`typecheck`、`test:host`、`test:core`、`doctor`、`build` 全绿。
 - **Windows 运行时/CI 未运行**：本跟进不构成 Windows 验证；真机/CI 验证列入下方后续计划。
 
-## Chrome for Testing native host 注册支持（2026-09-16，代码/测试完成，未安装到 live）
+## Chrome for Testing native host 注册支持（2026-09-16，已定向安装到 live 默认 profile）
 
 - `scripts/register-host-mac.mjs` 目标发现加入 Chrome for Testing：官方 `~/Library/Application Support/Google/ChromeForTesting/NativeMessagingHosts/` 与品牌化产品目录 `Google/Chrome for Testing`（克隆/改名构建的产品目录即后者）。脚本保持通用，无 Backlight 依赖。
 - 新增 `--user-data-dir <path>`（可重复）：Chrome 的 `--user-data-dir` 会覆盖用户数据目录，用户级 host 从 `<user-data-dir>/NativeMessagingHosts/` 查找；任意 Chrome / Chrome for Testing 通用，脚本不扫描运行中的进程。
@@ -53,7 +67,7 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 幂等与安全：内容相同不重写（created/updated/unchanged）；写入前预检全部目标，遇到非 BrowserPilot manifest 或非本脚本 wrapper 默认拒绝且零写入（`--force` 才覆盖）；`--unregister` 只删除宿主名匹配的 manifest 与带生成标记的 wrapper；`--dry-run` 可先核对目标。
 - Reviewer finding 修复：内容过期的本脚本 wrapper（0644）重写时 `writeFileSync` 的 mode 对已有文件不生效，会在写后显式 `chmod 0755`；内容相同但缺可执行位仍只补权限不重写。回归用例先证红（mode=644 失败）再证绿。
 - 门禁：`npm run test:register` 74/74（fake repo + 隔离 HOME + CLI e2e，新增 only 目标数/去重/dry-run/注册/注销/幂等/无关目录零写入/权限回归）；`doctor`、`typecheck`、`test:profile`、`test:host`、`test:core` 全绿。本任务未向 live BrowserPilot/Chrome/Chrome for Testing/Backlight 写入任何 host 文件。
-- 后续 live 集成命令（待用户确认后单独执行，先 dry-run 核对；`--only-user-data-dir` 保证不碰任何默认浏览器目录）：`node scripts/register-host-mac.mjs --only-user-data-dir --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile" --dry-run`，确认后去掉 `--dry-run` 执行；随后完整重启该 CfT，再 `npm run client -- ping '{}' --no-launch` 验证。
+- **live 集成（2026-09-16 已完成，无重启生效）**：已用 `--only-user-data-dir` 在 Backlight 默认 profile 完成定向注册，未触碰任何自动发现目录；随后未重启浏览器即 `ping`/`list_templates` PASS。当前状态、复现命令与新 space 缺口见上文“当前安装与验证”。旧口径“注册后需完整重启该 CfT 再验证”已作废：需要重载的是扩展本身，不是 host 注册。
 
 ## 2026-09-05 修复清单（全部已验证）
 
@@ -219,11 +233,12 @@ export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例�
 
 ## 下一步优先级
 
-1. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。Scholar/Gemini 保持 blocked，不得绕过。
-2. 若要回归扩展内置兜底版本：先 `uninstall_template` 对应动态包，再 `npm run smoke:template -- <id>`（见 QUALITY-GATES 说明），测完重装动态包。
-3. 完整回归 `npm run agents:regression`（opencode 外部 Agent 串行队列）——需要时再派发。
-4. Review 遗留低优先级：事件缓冲跨重启的游标协议（generation 已提供基础）、第三方模板安装的 UI 风险提示。
-5. Windows 真机/CI 验证 profile 探测（PowerShell 命令行形态、SEA host 端到端）；本机 macOS 无法覆盖，未运行前不得宣称 Windows 已验证。
+1. 先跑安全冒烟，确认链路健康再动 live 页面：静态门禁 → `ping --no-launch` / `list_templates --no-launch`（见上文“当前安装与验证”）。
+2. 其余动态站点在 mac 真机复测一轮（`npm run smoke:template -- baidu-search x-search google-finance-search`；chatgpt-ask 需登录态）。会导航 live 页面并可能安装动态包，需明确授权；Scholar/Gemini 保持 blocked，不得绕过。
+3. 若要回归扩展内置兜底版本：先 `uninstall_template` 对应动态包，再 `npm run smoke:template -- <id>`（见 QUALITY-GATES 说明），测完重装动态包。
+4. 完整回归 `npm run agents:regression`（opencode 外部 Agent 串行队列）——需要时再派发。
+5. Review 遗留低优先级：事件缓冲跨重启的游标协议（generation 已提供基础）、第三方模板安装的 UI 风险提示。
+6. Windows 真机/CI 验证 profile 探测（PowerShell 命令行形态、SEA host 端到端）；本机 macOS 无法覆盖，未运行前不得宣称 Windows 已验证。
 
 ## 已知风险
 
