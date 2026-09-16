@@ -11,7 +11,7 @@ stale_after: 2026-09-19
 
 ## 接手要点（给任何新接手的 AI / 人）
 
-1. **仓库位置与状态（2026-09-16 核对）**：主目录 `/Users/jiangao/work/browser/BrowserPilot`（`main` @ `7cddfc9`，与 `origin/main` 同步）；本轮工作树 `/Users/jiangao/work/browser/.worktrees/browserpilot-backlight-profile-compat`（分支 `codex/backlight-profile-compat` @ `24b3467`，领先 main 6 个提交，未 merge/push）。以本工作树为权威副本；旧文档中的 `/Users/gaoshizai/...` 路径已作废。若在别处看到停留在 "fix: prevent legacy template resurrection" 的旧副本，不要用它。
+1. **仓库位置与状态（2026-09-16 核对）**：主目录 `/Users/jiangao/work/browser/BrowserPilot`（`main` @ `7cddfc9`，与 `origin/main` 同步）；本轮工作树 `/Users/jiangao/work/browser/.worktrees/browserpilot-backlight-profile-compat`（分支 `codex/backlight-profile-compat`，代码 HEAD `24b3467`，另有文档提交；领先 main、未 merge/push）。以本工作树为权威副本；旧文档中的 `/Users/gaoshizai/...` 路径已作废。若在别处看到停留在 "fix: prevent legacy template resurrection" 的旧副本，不要用它。
 2. **环境前提（不可迁移项）**：macOS + Backlight 默认实例（daemon pid 2695 / `http://127.0.0.1:9333`，品牌 Chrome for Testing，user-data-dir `~/Library/Application Support/Backlight/spaces/default/profile`，当前唯一 space `default`）。扩展已由用户加载本工作树 `dist/`（ID `nnollghpaggbcdkkgoieneffnlijinio`，runtime `enabled=true`；首次安装自动打开 onboarding 页）；native host 已按该 profile 定向注册，2026-09-16 实测无重启即生效（node 升级后需重跑注册）。**雪球/韭研公社/X/ChatGPT 的登录态绑定在这个 Backlight profile 上**，换机器需要用户重新登录，缺失时对应模板如实报 blocked，不得绕过。
 3. **健康三查**：`npm run doctor`（结构）→ `npm run client -- ping '{}' --no-launch` 与 `npm run client -- list_templates '{}' --no-launch`（host+扩展链路，不会拉起浏览器）→ `git status --short --branch`（工作树干净、分支领先数）。
 4. 模板能力速查：[registry/INDEX.md](../../registry/INDEX.md)（31 个模板按分类，自动生成）。
