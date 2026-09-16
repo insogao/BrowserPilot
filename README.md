@@ -89,7 +89,7 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 
 ```bash
 npm run typecheck          # tsc --noEmit
-npm run test:profile       # profile 解析单测（3 例）
+npm run test:profile       # profile 参数解析 + macOS 可执行路径探测单测
 npm run test:host          # host.js：ready 帧 + TCP 命令转发
 npm run test:host:exe      # 打包后 exe：同上
 ```

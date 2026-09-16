@@ -48,15 +48,19 @@ const POSIX_BROWSERS = [
 ];
 
 export function argValue(cmd, flag) {
-  // 匹配 --flag="value"（可含空格）或 --flag=value（到空白截止）；flag 含尾随 '='。
-  // 无引号时不能贪婪吃到后续旗标，例如 Backlight 的
-  // --user-data-dir=/tmp/profile --remote-debugging-port=51731 只应取值 /tmp/profile。
+  // 支持 --flag="value with spaces"、"--flag=value with spaces"（整参数带引号）与
+  // --flag=value（无引号时到空白截止，不吞后续旗标）。品牌化 Chrome for Testing
+  // 的 --user-data-dir=/tmp/profile --remote-debugging-port=51731 只应取值 /tmp/profile。
+  // 旗标前要求行首或空白，避免前导/内嵌误匹配。
   const name = flag.replace(/^-*/, "").replace(/=$/, "");
   const safe = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp("(?:^|\\s)-{1,2}" + safe + "=(?:\"([^\"]*)\"|([^\\s]*))", "i");
+  const re = new RegExp(
+    "(?:^|\\s)(?:\"-{1,2}" + safe + "=([^\"]*)\"|-{1,2}" + safe + "=(?:\"([^\"]*)\"|([^\\s\"]*)))",
+    "i",
+  );
   const m = cmd.match(re);
   if (!m) return undefined;
-  return m[1] !== undefined ? m[1] : m[2];
+  return m[1] !== undefined ? m[1] : m[2] !== undefined ? m[2] : m[3];
 }
 
 export function exeFromCmd(cmd) {

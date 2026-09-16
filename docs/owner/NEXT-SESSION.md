@@ -34,6 +34,12 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 | `jiuyangongshe-search` / `jiuyangongshe-article` | passed | 新增 v1.0.0：固定 token 搜索路径 + .detail-container 正文；需微信登录态，积分内容只返回可见部分 |
 | `chatgpt-ask` / `gemini-ask` / `x-search` / `baidu-search` / `google-finance-search` / `google-scholar-search` | 未重测 | 上次真实证据仍以 2026-09-04（Windows）为准；scholar/gemini 保持 blocked |
 
+## Profile 兼容跟进（2026-09-16，macOS 已验证）
+
+- 9e36e6a 之后的 review 修复：`argValue` 恢复整参数带引号形态（`"--user-data-dir=C:\Users\John Doe\..."`）支持，同时保持无引号值到空白截止、前导/内嵌不误匹配；`test-profile.mjs` 在非 darwin 平台不再要求 `.app` fixture 命中 leading-`/` 的 mac 解析器，fixture 清理改 try/finally；实现注释产品中立（测试名保留 Backlight-shaped 形状描述）；README 去掉硬编码用例数。
+- mac 门禁：`test:profile`（7 纯字符串 + 10 macOS fixture 全过）、显式引号/误匹配探针 11/11、`typecheck`、`test:host`、`test:core`、`doctor`、`build` 全绿。
+- **Windows 运行时/CI 未运行**：本跟进不构成 Windows 验证；真机/CI 验证列入下方后续计划。
+
 ## 2026-09-05 修复清单（全部已验证）
 
 1. **debugger attach 自愈**（P1）：`attach()` catch "already attached" 后发探针命令区分自身遗留与外部调试器；SW 回收后动作命令不再永久失败。新增 core 测试。
@@ -54,7 +60,7 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 
 ## 门禁状态（2026-09-05 全绿）
 
-`doctor`、`typecheck`、`test:core`（12/12，含新增 4 项）、`test:host`、`test:profile`（6/6）、`registry:build` + `registry:check`。`dist/` 已重建并 reload 到运行中的扩展。
+`doctor`、`typecheck`、`test:core`（12/12，含新增 4 项）、`test:host`、`test:profile`、`registry:build` + `registry:check`。`dist/` 已重建并 reload 到运行中的扩展。
 
 ## B站适配（2026-09-05 追加）
 
@@ -202,6 +208,7 @@ export_guide 实拉验证 6/6 PASS；二次自查又补两处：第 0 步示例�
 2. 若要回归扩展内置兜底版本：先 `uninstall_template` 对应动态包，再 `npm run smoke:template -- <id>`（见 QUALITY-GATES 说明），测完重装动态包。
 3. 完整回归 `npm run agents:regression`（opencode 外部 Agent 串行队列）——需要时再派发。
 4. Review 遗留低优先级：事件缓冲跨重启的游标协议（generation 已提供基础）、第三方模板安装的 UI 风险提示。
+5. Windows 真机/CI 验证 profile 探测（PowerShell 命令行形态、SEA host 端到端）；本机 macOS 无法覆盖，未运行前不得宣称 Windows 已验证。
 
 ## 已知风险
 
