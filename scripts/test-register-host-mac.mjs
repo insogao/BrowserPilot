@@ -295,7 +295,148 @@ check("host.manifest.json 的 origins 与推导一致", registeredIdFromHostMani
   const bogus = spawnSync(process.execPath, [script, "--bogus"], { env, encoding: "utf8" });
   check("CLI 未知参数 exit 1", bogus.status === 1 && bogus.stderr.includes("未知参数"));
   const help = spawnSync(process.execPath, [script, "--help"], { env, encoding: "utf8" });
-  check("CLI --help exit 0 且含用法", help.status === 0 && help.stdout.includes("--user-data-dir"));
+  check("CLI --help exit 0 且含用法", help.status === 0 && help.stdout.includes("--user-data-dir") && help.stdout.includes("--only-user-data-dir"));
+}
+
+// 13. --only-user-data-dir：只注册显式目标，不发现也不写默认浏览器目录。
+{
+  const home = makeHome();
+  const repo = makeRepo();
+  const uddA = path.join(temp("browserpilot-only-a-"), "profile");
+  const uddB = path.join(temp("browserpilot-only-b-"), "profile");
+  fs.mkdirSync(uddA, { recursive: true });
+  fs.mkdirSync(uddB, { recursive: true });
+  const expected = [path.join(uddA, "NativeMessagingHosts"), path.join(uddB, "NativeMessagingHosts")].sort();
+  const browserDirs = ["Google/Chrome", "Google/ChromeForTesting", "Google/Chrome for Testing", "Chromium", "BraveSoftware/Brave-Browser"].map((relative) => nativeDir(home, relative));
+  const result = registerHost({ root: repo, home, userDataDirs: [uddA, uddB], onlyUserDataDirs: true, log: noop });
+  check(
+    "only 模式目标数等于显式 --user-data-dir 数",
+    JSON.stringify(result.targets.map((target) => target.dir).sort()) === JSON.stringify(expected),
+    JSON.stringify(result.targets.map((target) => target.dir)),
+  );
+  check("only 模式写入显式目标 manifest", expected.every((dir) => fs.existsSync(manifestFile(dir))));
+  check("only 模式生成 wrapper", fs.existsSync(path.join(repo, "native-host", "dist", "host-mac.sh")));
+  check("only 模式不写无关浏览器目录", browserDirs.every((dir) => !fs.existsSync(dir)));
+  const second = registerHost({ root: repo, home, userDataDirs: [uddA, uddB], onlyUserDataDirs: true, log: noop });
+  check("only 模式二次注册幂等", second.targets.every((target) => target.status === "unchanged") && second.wrapperStatus === "unchanged");
+  check("only 模式幂等后仍不写无关浏览器目录", browserDirs.every((dir) => !fs.existsSync(dir)));
+  const deduped = registerHost({ root: repo, home, userDataDirs: [uddA, uddA], onlyUserDataDirs: true, log: noop });
+  check("only 模式重复 --user-data-dir 去重", deduped.targets.length === 1 && deduped.targets[0].dir === path.join(uddA, "NativeMessagingHosts"));
+}
+
+// 14. --only-user-data-dir dry-run：报告 planned 状态且不落盘。
+{
+  const home = makeHome(["Google/Chrome", "Google/ChromeForTesting"]);
+  const repo = makeRepo();
+  const udd = path.join(temp("browserpilot-only-dry-"), "profile");
+  fs.mkdirSync(udd, { recursive: true });
+  const result = registerHost({ root: repo, home, userDataDirs: [udd], onlyUserDataDirs: true, dryRun: true, log: noop });
+  check(
+    "only dry-run 只报告一个显式目标",
+    result.dryRun === true && result.targets.length === 1 && result.targets[0].status === "created" && result.targets[0].dir === path.join(udd, "NativeMessagingHosts"),
+  );
+  check(
+    "only dry-run 不写 manifest/wrapper 与默认目录",
+    !fs.existsSync(path.join(udd, "NativeMessagingHosts")) &&
+      !fs.existsSync(path.join(repo, "native-host", "dist", "host-mac.sh")) &&
+      !fs.existsSync(nativeDir(home, "Google/Chrome")) &&
+      !fs.existsSync(nativeDir(home, "Google/ChromeForTesting")),
+  );
+}
+
+// 15. --only-user-data-dir 注销：只清显式目标，保留自动发现目录的 manifest。
+{
+  const home = makeHome(["Google/Chrome", "Google/ChromeForTesting"]);
+  const repo = makeRepo();
+  const udd = path.join(temp("browserpilot-only-unreg-"), "profile");
+  fs.mkdirSync(udd, { recursive: true });
+  registerHost({ root: repo, home, userDataDirs: [udd], log: noop });
+  const chromeFile = manifestFile(nativeDir(home, "Google/Chrome"));
+  const cftFile = manifestFile(nativeDir(home, "Google/ChromeForTesting"));
+  const customFile = manifestFile(path.join(udd, "NativeMessagingHosts"));
+  check("前置：显式与自动发现目标都已注册", [chromeFile, cftFile, customFile].every((file) => fs.existsSync(file)));
+  const result = unregisterHost({ root: repo, home, userDataDirs: [udd], onlyUserDataDirs: true, log: noop });
+  check("only 注销只处理显式目标", result.targets.length === 1 && result.targets[0].status === "removed" && !fs.existsSync(customFile));
+  check("only 注销保留自动发现 manifest", fs.existsSync(chromeFile) && fs.existsSync(cftFile));
+  check("only 注销删除 wrapper", !fs.existsSync(path.join(repo, "native-host", "dist", "host-mac.sh")));
+}
+
+// 16. --only-user-data-dir 要求至少一个 --user-data-dir；parseArgs 与 CLI 行为。
+{
+  const home = makeHome(["Google/Chrome"]);
+  const repo = makeRepo();
+  const wrapperPath = path.join(repo, "native-host", "dist", "host-mac.sh");
+  let registerError;
+  try {
+    registerHost({ root: repo, home, onlyUserDataDirs: true, log: noop });
+  } catch (caught) {
+    registerError = caught;
+  }
+  let unregisterError;
+  try {
+    unregisterHost({ root: repo, home, onlyUserDataDirs: true, log: noop });
+  } catch (caught) {
+    unregisterError = caught;
+  }
+  check("registerHost only 模式无目标报错", Boolean(registerError) && /至少一个 --user-data-dir/.test(registerError.message), registerError?.message);
+  check("unregisterHost only 模式无目标报错", Boolean(unregisterError) && /至少一个 --user-data-dir/.test(unregisterError.message), unregisterError?.message);
+  check("only 模式无目标时不写文件", !fs.existsSync(manifestFile(nativeDir(home, "Google/Chrome"))) && !fs.existsSync(wrapperPath));
+
+  const parsed = parseArgs(["--only-user-data-dir", "--user-data-dir", "/tmp/a"]);
+  check("parseArgs 解析 --only-user-data-dir", parsed.onlyUserDataDirs === true && parsed.userDataDirs.length === 1);
+  check("parseArgs 默认不是 only 模式", parseArgs([]).onlyUserDataDirs === false);
+
+  const cliRepo = makeRepo();
+  fs.mkdirSync(path.join(cliRepo, "scripts"), { recursive: true });
+  const script = path.join(cliRepo, "scripts", "register-host-mac.mjs");
+  fs.copyFileSync(path.join(root, "scripts", "register-host-mac.mjs"), script);
+  const cliHome = makeHome(["Google/Chrome", "Google/ChromeForTesting"]);
+  const udd = path.join(temp("browserpilot-cli-only-"), "profile");
+  fs.mkdirSync(udd, { recursive: true });
+  const env = { ...process.env, HOME: cliHome };
+  const cliRegister = spawnSync(process.execPath, [script, "--only-user-data-dir", "--user-data-dir", udd], { env, encoding: "utf8" });
+  check("CLI only 注册 exit 0", cliRegister.status === 0, cliRegister.stderr);
+  check(
+    "CLI only 注册只写显式目标",
+    fs.existsSync(manifestFile(path.join(udd, "NativeMessagingHosts"))) &&
+      !fs.existsSync(nativeDir(cliHome, "Google/Chrome")) &&
+      !fs.existsSync(nativeDir(cliHome, "Google/ChromeForTesting")),
+  );
+  const cliUnregister = spawnSync(process.execPath, [script, "--unregister", "--only-user-data-dir", "--user-data-dir", udd], { env, encoding: "utf8" });
+  check(
+    "CLI only 注销 exit 0 且只清显式目标",
+    cliUnregister.status === 0 &&
+      !fs.existsSync(manifestFile(path.join(udd, "NativeMessagingHosts"))) &&
+      !fs.existsSync(nativeDir(cliHome, "Google/Chrome")) &&
+      !fs.existsSync(nativeDir(cliHome, "Google/ChromeForTesting")),
+    cliUnregister.stderr,
+  );
+  const cliMissing = spawnSync(process.execPath, [script, "--only-user-data-dir"], { env, encoding: "utf8" });
+  check("CLI only 模式无 --user-data-dir exit 1", cliMissing.status === 1 && /至少一个 --user-data-dir/.test(cliMissing.stderr), cliMissing.stderr);
+  const cliMissingUnregister = spawnSync(process.execPath, [script, "--unregister", "--only-user-data-dir"], { env, encoding: "utf8" });
+  check("CLI only 注销无 --user-data-dir exit 1", cliMissingUnregister.status === 1 && /至少一个 --user-data-dir/.test(cliMissingUnregister.stderr), cliMissingUnregister.stderr);
+}
+
+// 17. wrapper 权限回归：内容过期的 0644 wrapper 重写后必须恢复可执行位；内容相同的只补权限不重写。
+{
+  const home = makeHome(["Google/Chrome"]);
+  const repo = makeRepo();
+  const wrapperPath = path.join(repo, "native-host", "dist", "host-mac.sh");
+  registerHost({ root: repo, home, nodePath: "/old node/bin/node", log: noop });
+  fs.chmodSync(wrapperPath, 0o644);
+  const stale = registerHost({ root: repo, home, nodePath: "/new node/bin/node", log: noop });
+  check(
+    "过期 wrapper 判定 updated 且恢复可执行位",
+    stale.wrapperStatus === "updated" && (fs.statSync(wrapperPath).mode & 0o111) !== 0,
+    "mode=" + (fs.statSync(wrapperPath).mode & 0o777).toString(8),
+  );
+  check("过期 wrapper 内容已更新为当前 node", fs.readFileSync(wrapperPath, "utf8").includes('"/new node/bin/node"'));
+
+  const before = fs.readFileSync(wrapperPath, "utf8");
+  fs.chmodSync(wrapperPath, 0o644);
+  const same = registerHost({ root: repo, home, nodePath: "/new node/bin/node", log: noop });
+  check("unchanged 0644 wrapper 只补可执行位", same.wrapperStatus === "unchanged" && (fs.statSync(wrapperPath).mode & 0o111) !== 0);
+  check("unchanged wrapper 内容未被重写", fs.readFileSync(wrapperPath, "utf8") === before);
 }
 
 cleanup();

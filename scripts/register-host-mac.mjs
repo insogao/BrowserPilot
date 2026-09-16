@@ -3,8 +3,8 @@
 // 放进浏览器的 NativeMessagingHosts 目录，path 指向一个用本机 node 直跑 host.js 的 wrapper。
 //
 // 用法：
-//   node scripts/register-host-mac.mjs [--user-data-dir <path>]... [--dry-run] [--force]
-//   node scripts/register-host-mac.mjs --unregister [--user-data-dir <path>]...
+//   node scripts/register-host-mac.mjs [--user-data-dir <path>]... [--only-user-data-dir] [--dry-run] [--force]
+//   node scripts/register-host-mac.mjs --unregister [--user-data-dir <path>]... [--only-user-data-dir]
 //
 // 目标发现（只注册父目录已存在的浏览器）：
 //   Google Chrome / Chrome for Testing / Chromium / Microsoft Edge / Brave Browser。
@@ -12,6 +12,8 @@
 // 自定义 user-data-dir：Chrome 的 --user-data-dir 会覆盖用户数据目录，用户级 host 从
 //   <user-data-dir>/NativeMessagingHosts/ 查找；任何品牌的 Chrome / Chrome for Testing 通用，
 //   --user-data-dir 显式声明目标，脚本不扫描运行中的进程。
+//   --only-user-data-dir 只处理显式给出的 --user-data-dir，不发现也不写入默认浏览器目录；
+//   使用它时必须至少给出一个 --user-data-dir。
 //
 // 安全：写入前先检查全部目标；若目标位置已存在不属于 BrowserPilot 的 manifest/wrapper，
 // 默认拒绝且不写任何文件（--force 才覆盖）。注销永远只清理宿主名匹配的 manifest 与带生成标记的 wrapper。
@@ -29,8 +31,8 @@ const USAGE = [
   "macOS 注册 BrowserPilot native messaging host（" + HOST_NAME + "）",
   "",
   "用法：",
-  "  node scripts/register-host-mac.mjs [--user-data-dir <path>]... [--dry-run] [--force]",
-  "  node scripts/register-host-mac.mjs --unregister [--user-data-dir <path>]...",
+  "  node scripts/register-host-mac.mjs [--user-data-dir <path>]... [--only-user-data-dir] [--dry-run] [--force]",
+  "  node scripts/register-host-mac.mjs --unregister [--user-data-dir <path>]... [--only-user-data-dir]",
   "",
   "自动发现并注册到父目录已存在的浏览器用户级 NativeMessagingHosts：",
   "  Google Chrome / Chrome for Testing / Chromium / Microsoft Edge / Brave Browser。",
@@ -38,8 +40,10 @@ const USAGE = [
   "  Chrome 用 <user-data-dir>/NativeMessagingHosts/ 查找用户级 host；",
   "  例如 node scripts/register-host-mac.mjs --user-data-dir \"/path/to/user data\"",
   "",
-  "--dry-run  只检查并打印将执行的动作，不写文件",
-  "--force    覆盖目标位置已存在的非 BrowserPilot manifest/wrapper",
+  "--only-user-data-dir  只处理显式给出的 --user-data-dir 目标，不发现也不写入",
+  "                      默认浏览器目录；必须至少给出一个 --user-data-dir",
+  "--dry-run             只检查并打印将执行的动作，不写文件",
+  "--force               覆盖目标位置已存在的非 BrowserPilot manifest/wrapper",
 ].join("\n");
 
 // 扩展 ID 由 manifest.json 的 key 固定（任何机器加载都得到同一 ID）：
@@ -79,8 +83,11 @@ export function browserTargets(home = os.homedir()) {
   return installed.length ? installed : [["Google Chrome", candidates[0][1]]];
 }
 
-export function collectTargets({ home = os.homedir(), userDataDirs = [] } = {}) {
-  const targets = browserTargets(home).map(([label, dir]) => ({ label, dir, kind: "browser" }));
+export function collectTargets({ home = os.homedir(), userDataDirs = [], onlyUserDataDirs = false } = {}) {
+  if (onlyUserDataDirs && userDataDirs.length === 0) {
+    throw new Error("--only-user-data-dir 需要至少一个 --user-data-dir 目标");
+  }
+  const targets = onlyUserDataDirs ? [] : browserTargets(home).map(([label, dir]) => ({ label, dir, kind: "browser" }));
   for (const raw of userDataDirs) {
     const userDataDir = path.resolve(raw);
     targets.push({
@@ -150,6 +157,7 @@ export function registerHost({
   root,
   home = os.homedir(),
   userDataDirs = [],
+  onlyUserDataDirs = false,
   nodePath = process.execPath,
   force = false,
   dryRun = false,
@@ -167,7 +175,7 @@ export function registerHost({
   const manifestText = JSON.stringify(buildNativeManifest({ extensionId, wrapperPath }), null, 2) + "\n";
   const wrapperText = buildWrapperContent({ nodePath, hostEntry });
 
-  const targets = collectTargets({ home, userDataDirs });
+  const targets = collectTargets({ home, userDataDirs, onlyUserDataDirs });
   const wrapperState = inspectWrapper(wrapperPath);
   const manifestStates = new Map();
   const problems = [];
@@ -199,6 +207,7 @@ export function registerHost({
     if (wrapperStatus !== "unchanged") {
       fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
       fs.writeFileSync(wrapperPath, wrapperText, { mode: 0o755 });
+      fs.chmodSync(wrapperPath, 0o755);
     } else if ((fs.statSync(wrapperPath).mode & 0o111) === 0) {
       fs.chmodSync(wrapperPath, 0o755);
     }
@@ -225,10 +234,11 @@ export function unregisterHost({
   root,
   home = os.homedir(),
   userDataDirs = [],
+  onlyUserDataDirs = false,
   dryRun = false,
   log = console.log,
 } = {}) {
-  const targets = collectTargets({ home, userDataDirs });
+  const targets = collectTargets({ home, userDataDirs, onlyUserDataDirs });
   const results = [];
   for (const target of targets) {
     const file = path.join(target.dir, HOST_NAME + ".json");
@@ -258,12 +268,13 @@ export function unregisterHost({
 }
 
 export function parseArgs(argv) {
-  const options = { unregister: false, force: false, dryRun: false, help: false, userDataDirs: [] };
+  const options = { unregister: false, force: false, dryRun: false, onlyUserDataDirs: false, help: false, userDataDirs: [] };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--unregister") options.unregister = true;
     else if (arg === "--force") options.force = true;
     else if (arg === "--dry-run") options.dryRun = true;
+    else if (arg === "--only-user-data-dir") options.onlyUserDataDirs = true;
     else if (arg === "--help" || arg === "-h") options.help = true;
     else if (arg === "--user-data-dir") {
       if (i + 1 >= argv.length) throw new Error("--user-data-dir 缺少路径参数");
@@ -291,11 +302,11 @@ function main(argv = process.argv.slice(2)) {
   }
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   if (options.unregister) {
-    const result = unregisterHost({ root, userDataDirs: options.userDataDirs, dryRun: options.dryRun });
+    const result = unregisterHost({ root, userDataDirs: options.userDataDirs, onlyUserDataDirs: options.onlyUserDataDirs, dryRun: options.dryRun });
     console.log("done.");
     return result;
   }
-  const result = registerHost({ root, userDataDirs: options.userDataDirs, force: options.force, dryRun: options.dryRun });
+  const result = registerHost({ root, userDataDirs: options.userDataDirs, onlyUserDataDirs: options.onlyUserDataDirs, force: options.force, dryRun: options.dryRun });
   console.log(JSON.stringify({ extensionId: result.extensionId, wrapper: result.wrapperPath, node: process.execPath, dryRun: result.dryRun, targets: result.targets.map((target) => target.dir) }, null, 2));
   if (result.dryRun) {
     console.log("dry-run：未写入任何文件。");

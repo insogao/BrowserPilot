@@ -7,7 +7,7 @@ stale_after: 2026-09-19
 
 # 下一会话交接
 
-更新时间：2026-09-05 02:30 +08:00
+更新时间：2026-09-16
 
 ## 接手要点（给任何新接手的 AI / 人）
 
@@ -49,9 +49,11 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 
 - `scripts/register-host-mac.mjs` 目标发现加入 Chrome for Testing：官方 `~/Library/Application Support/Google/ChromeForTesting/NativeMessagingHosts/` 与品牌化产品目录 `Google/Chrome for Testing`（克隆/改名构建的产品目录即后者）。脚本保持通用，无 Backlight 依赖。
 - 新增 `--user-data-dir <path>`（可重复）：Chrome 的 `--user-data-dir` 会覆盖用户数据目录，用户级 host 从 `<user-data-dir>/NativeMessagingHosts/` 查找；任意 Chrome / Chrome for Testing 通用，脚本不扫描运行中的进程。
+- 新增 `--only-user-data-dir`：只注册显式给出的 `--user-data-dir`（去重后精确目标数），不发现也不写自动浏览器目录；必须至少给出一个 `--user-data-dir`，否则 register/unregister 均报错且零写入。未加该旗标时行为与之前完全一致（自动发现 + 追加显式目标）。
 - 幂等与安全：内容相同不重写（created/updated/unchanged）；写入前预检全部目标，遇到非 BrowserPilot manifest 或非本脚本 wrapper 默认拒绝且零写入（`--force` 才覆盖）；`--unregister` 只删除宿主名匹配的 manifest 与带生成标记的 wrapper；`--dry-run` 可先核对目标。
-- 门禁：`npm run test:register` 47/47（fake repo + 隔离 HOME + CLI e2e）；`doctor`、`typecheck`、`test:profile`、`test:host` 全绿。本任务未向 live BrowserPilot/Chrome/Chrome for Testing/Backlight 写入任何 host 文件。
-- 后续 live 集成命令（待用户确认后单独执行）：`node scripts/register-host-mac.mjs --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile"`；随后完整重启该 CfT，再 `npm run client -- ping '{}' --no-launch` 验证。
+- Reviewer finding 修复：内容过期的本脚本 wrapper（0644）重写时 `writeFileSync` 的 mode 对已有文件不生效，会在写后显式 `chmod 0755`；内容相同但缺可执行位仍只补权限不重写。回归用例先证红（mode=644 失败）再证绿。
+- 门禁：`npm run test:register` 74/74（fake repo + 隔离 HOME + CLI e2e，新增 only 目标数/去重/dry-run/注册/注销/幂等/无关目录零写入/权限回归）；`doctor`、`typecheck`、`test:profile`、`test:host`、`test:core` 全绿。本任务未向 live BrowserPilot/Chrome/Chrome for Testing/Backlight 写入任何 host 文件。
+- 后续 live 集成命令（待用户确认后单独执行，先 dry-run 核对；`--only-user-data-dir` 保证不碰任何默认浏览器目录）：`node scripts/register-host-mac.mjs --only-user-data-dir --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile" --dry-run`，确认后去掉 `--dry-run` 执行；随后完整重启该 CfT，再 `npm run client -- ping '{}' --no-launch` 验证。
 
 ## 2026-09-05 修复清单（全部已验证）
 

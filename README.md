@@ -54,10 +54,13 @@ macOS 无需 build:host：注册脚本生成一个用本机 node 直跑 `host.js
 npm run register-host:mac   # 自动发现已安装的 Chrome / Chrome for Testing / Chromium / Edge / Brave，写入其 NativeMessagingHosts/
 ```
 
-Chrome for Testing 与普通 Chrome 一样按用户数据目录查找用户级 host：带自定义 `--user-data-dir` 启动时（自动化、克隆浏览器等），manifest 必须放在 `<user-data-dir>/NativeMessagingHosts/`。用 `--user-data-dir` 显式声明目标即可，任意品牌通用，脚本不会扫描运行中的进程或写入其它 profile：
+Chrome for Testing 与普通 Chrome 一样按用户数据目录查找用户级 host：带自定义 `--user-data-dir` 启动时（自动化、克隆浏览器等），manifest 必须放在 `<user-data-dir>/NativeMessagingHosts/`。用 `--user-data-dir` 显式声明目标即可，任意品牌通用，脚本不会扫描运行中的进程或写入其它 profile。默认它是**追加**目标（同时注册自动发现的浏览器目录）；加 `--only-user-data-dir` 则只注册给出的目录，绝不触碰自动发现目录，且必须至少给出一个 `--user-data-dir`：
 
 ```bash
 node scripts/register-host-mac.mjs --user-data-dir "/path/to/user data"
+node scripts/register-host-mac.mjs --only-user-data-dir --user-data-dir "/path/to/user data"   # 只写该目录
+npm run register-host:mac -- --only-user-data-dir --user-data-dir "/path/to/user data" --dry-run
+npm run register-host:mac -- --unregister --only-user-data-dir --user-data-dir "/path/to/user data"
 npm run register-host:mac -- --dry-run        # 只打印将注册的目标，不写文件
 npm run register-host:mac -- --unregister     # 只清理由本脚本写入的 manifest/wrapper
 ```
@@ -100,7 +103,7 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 ```bash
 npm run typecheck          # tsc --noEmit
 npm run test:profile       # profile 参数解析 + macOS 可执行路径探测单测
-npm run test:register      # macOS native host 注册：目标发现/幂等/冲突拒绝/自定义 user-data-dir
+npm run test:register      # macOS native host 注册：目标发现/幂等/冲突拒绝/自定义 user-data-dir/仅显式目标
 npm run test:host          # host.js：ready 帧 + TCP 命令转发
 npm run test:host:exe      # 打包后 exe：同上
 ```
