@@ -34,8 +34,12 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 | `jiuyangongshe-search` / `jiuyangongshe-article` | passed | 新增 v1.0.0：固定 token 搜索路径 + .detail-container 正文；需微信登录态，积分内容只返回可见部分 |
 | `chatgpt-ask` / `gemini-ask` / `x-search` / `baidu-search` / `google-finance-search` / `google-scholar-search` | 未重测 | 上次真实证据仍以 2026-09-04（Windows）为准；scholar/gemini 保持 blocked |
 
-## Profile 兼容跟进（2026-09-16，macOS 已验证）
+## Profile 兼容跟进（2026-09-16，macOS 真机 smoke PASS）
 
+- **真实 macOS BrowserPilot × Backlight smoke（2026-09-16）PASS**：BrowserPilot HEAD `ea29c91`、Backlight accepted HEAD `2c17d7e`；隔离 `BACKLIGHT_HOME` 与克隆 app 路径均含空格；proxy 47883 / upstream 54828 / host 47001。
+- 扩展 ID/SW `nnollghpaggbcdkkgoieneffnlijinio`；browser pid 23488 直接子进程为 native host pid 23511；`ping` PASS，`list_templates` PASS（search、gemini-ask、chatgpt-ask）。
+- `get_profile` 与 profile-cache 精确等值断言 PASS：browser=chrome、profileDir=Default、chromeExe=克隆的 Google Chrome for Testing 二进制、userDataDir=隔离 `<BACKLIGHT_HOME>/spaces/default/profile`（含空格、无后续旗标泄漏）；原始 `ps` 行证明摊平的无引号 UDD 后紧跟 remote-debugging-port/throttle 旗标。
+- 清理 PASS（pid 消失、端口释放、scratch 删除、两个 worktree 干净）；fallback 自动拉起未测，属独立归属决策。BrowserPilot 保持独立扩展，未新增对 Backlight 的硬依赖。
 - 9e36e6a + 851f70c：`argValue` 支持引号值、整参数带引号与无引号旗标；`posixExeFromCmd` 按具体优先识别 Chrome for Testing 且同族 marker 回退保持路径解析；`test-profile.mjs` 的 exe 断言仅 darwin，fixture 清理 try/finally。
 - 本轮修复（真实默认路径暴露）：`ps` 把 argv 摊平成一行且丢失引号，默认 user-data-dir（`…/Library/Application Support/…`）含空格，旧无引号解析在首个空白截断。无引号值现允许内嵌空格，到下一个旗标 token（空白 + -/-- + 旗标名 + =/空白/行尾）或行尾截止；引号形态与前导/内嵌误匹配保护不变；普通路径文本（含连字符/等号/空格）不提前截断。确定性用例新增：Application Support 默认形状 + 多个后续旗标、连字符/等号/空格路径、行尾无后续旗标、另一旗标值内的 lookalike 不误匹配。
 - mac 门禁：`test:profile` 全过（临时 `.app` fixture，含 Application Support 布局）；显式探针=真实安装的可执行路径 + 合成默认风格 UDD，另以真实 `ps -o command=` 输出复核摊平解析；`typecheck`、`test:host`、`test:core`、`doctor`、`build` 全绿。
