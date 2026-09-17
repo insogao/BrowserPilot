@@ -21,6 +21,7 @@ stale_after: 2026-12-03
 | 全部 Registry 模板在 `registry:build` 时打进扩展（`dist/templates.bundle.json`），开箱即用；GitHub Registry 仅用于发现更新/新增，安装后以动态包覆盖同名模板 | `src/background/bundled.ts`、`src/background/templates.ts`、`scripts/build-registry.mjs` |
 | 可见性默认“不抢焦点但可见”：`open_space`/`open_tab`/`switch_tab`/`run_template` 默认把窗口建为 normal 可见、不聚焦、不激活到最前（窗口内 Agent 标签保持 active 以正常渲染）；只有显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才前台最大化。后台运行**完全不触碰**已有窗口状态 | `src/background/spaces.ts`、`src/background/templates.ts` |
 | 单 profile 可见浏览器工作串行；仓库 lease 是开发保护，扩展 lease 是产品权限 | `scripts/browser-lease*.mjs`、`foreground-lease.ts` |
+| Space 窗口被关闭（含 `onRemoved` 未及时处理的竞态）不会复活：`use_space`/命令入口用 `windows.get` 惰性探测，窗口消失即置 inactive、清活动路由，调用方重新 `open_space`。`smoke:template` 跨轮复用同一专用 `BrowserPilot Smoke` 窗口只增删 tab（`--visible` 置前、`--fresh` 关窗、`open_tab{newWindow}` 是显式例外）；smoke 选取 fail-closed：枚举/复用/置前失败一律不新建窗口，仅“枚举成功且无专用候选”或“明确 `SPACE_INACTIVE`（窗口已被探测为消失）”才重建；确定性用例锁定。**该统一窗口保证仅在同一扩展生命周期内成立**：`storage.session` 在扩展 reload/update 时清空，孤儿窗口无法在现有命令边界内认领（见 NEXT-SESSION 下一步方案） | `src/background/spaces.ts`、`scripts/smoke-space-lib.mjs`、`scripts/test-core.mjs` |
 | Adapter 自动队列串行启动外部 Agent，并应以语义结果而非退出码判定 | `scripts/run-adapter-agent-queue.mjs` |
 
 ## 架构不变量
@@ -28,7 +29,7 @@ stale_after: 2026-12-03
 - 运行时模板和插件核心分离；普通站点适配不得要求重编译扩展。
 - Host 才能注入内部 `_clientId` 和 foreground token；外部输入不得伪造。
 - 任一 tab 页面操作必须通过调用者拥有且活动的 Space。
-- Agent 新建的 Space 默认“可见但不抢焦点”（normal、不激活到最前），不得抢占用户桌面前台；只有显式可见请求才允许前台最大化，且可见性恢复不得把已最大化窗口降回普通小窗口。后台运行不得恢复/改变已有窗口状态（曾观察到「恢复最小化窗口」与「弹窗」同时发生，该改动尚待验证）。
+- Agent 新建的 Space 默认“可见但不抢焦点”（normal、不激活到最前），不得抢占用户桌面前台；只有显式可见请求才允许前台最大化，且可见性恢复不得把已最大化窗口降回普通小窗口。后台运行不得恢复/改变已有窗口状态。**后台弹前台的因果链尚未闭环**：曾观察到「恢复最小化窗口」与「弹窗」同时发生、也与 Backlight capture keep-alive 时间同步，但均未证明因果，不得把责任完全归给任一侧。
 - 页面能力差异（滚动/惰性加载/按 `visibilityState` 分流 UI）不得以“弹窗到前台”为默认代价：后台空间内保持 Agent 标签在窗口内 active，使页面按可见态渲染。
 - 用户接管优先于 Agent；用户拥有的 Space 不自动清理。
 - 同 profile 的可见浏览器动作只能有一个执行者。

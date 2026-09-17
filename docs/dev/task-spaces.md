@@ -32,6 +32,8 @@ An `agentId` is a routing identity, not a second authentication secret. The buil
 
 For compatibility, the first scoped command from an Agent with no active space adopts the currently focused unowned window. If another Agent already owns that window, the command fails instead of silently stealing it.
 
+A Space whose window no longer exists is retired lazily (`use_space` / `ensureCommandSpace` probe `windows.get`, independent of `windows.onRemoved` timing): it is marked inactive and the caller must `open_space` again. Commands never reuse or silently adopt a window for a dead Space. Space state lives in `storage.session`, which Chrome clears on extension reload/update; a window that outlives a reload becomes untracked and cannot be reclaimed through the current commands (see the reclaim options in `docs/owner/NEXT-SESSION.md`).
+
 ## Enforced Errors
 
 - `SPACE_NOT_FOUND`

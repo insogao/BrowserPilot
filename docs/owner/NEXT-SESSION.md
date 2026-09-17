@@ -21,10 +21,28 @@ stale_after: 2026-09-19
 - **模板全量随扩展发布**：`npm run registry:build` 生成 `registry/bundle.json` → `npm run build` 打进 `dist/templates.bundle.json`；`list_templates` 默认返回全部 31 个 bundled 模板（不再只有 3 个编译内置）；GitHub Registry 只用于「检查更新/新增」。
 - **公共 Tag**：schema 强校验 7 个 Tag（search/finance/video/social/ai/download/news），31 个模板全部声明；onboarding 看板支持 Tag 筛选 + 本地搜索 + 「检查更新（GitHub）」勾选安装；新增命令 `check_registry_updates`。
 - **limit / 自动翻页**：搜索类均支持 `limit`（默认 10 或 15，上限 100）与 `maxPages`；`@results` 支持 `nextSelector`/`nextText` 自动 fetch 后续页（1.5s+ 抖动礼貌间隔、去重、封顶）；B站/股吧同源翻页；X/B站/雪球/财联社/韭研滚动收敛到 limit 或连续无增长。19 个模板升版本并记 CHANGELOG。
-- **后台默认（重要行为反转，待验证）**：`open_space`/`open_tab`/`switch_tab`/`run_template`/`smoke:template` 默认“可见但不抢焦点”（normal、不激活到最前）；显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才前台最大化。后台运行已改为**不触碰已有窗口状态**（此前会注入 ensure_visible 恢复最小化窗口）。**该改动尚待验证**（11:28/11:31 仍出现弹窗事件，证据指向 capture keep-alive，见下）。窗口内 Agent 标签保持 active，页面按可见态渲染（Baidu 必须如此）。AI 聊天模板显式声明 `visible:true`（前台渲染需求）。`smoke:template` 复用常驻 `BrowserPilot Smoke` 窗口开标签页（`--fresh` 关闭、`--visible` 置前）。
-- **弹窗证据（2026-09-17，未验证结论）**：两次弹出（11:28/11:31）与 Backlight capture keep-alive 的 `capture-page created` 时间同步（`bl-capture` 页进入 Agent 窗口并成为 active 标签）；daemon 未发出 `window-restore`。完整时间线、代码位置与待验证假设见 `/Users/jiangao/work/browser/BROWSER-BG-REPORT-2026-09-17.md`（按用户指定 Bug 分条列出，未写"已修复"）。
+- **后台默认（重要行为反转，待验证）**：`open_space`/`open_tab`/`switch_tab`/`run_template`/`smoke:template` 默认“可见但不抢焦点”（normal、不激活到最前）；显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才前台最大化。后台运行已改为**不触碰已有窗口状态**（此前会注入 ensure_visible 恢复最小化窗口）。**该改动尚待验证**（11:28/11:31 仍出现弹窗事件；与 Backlight capture keep-alive 的 `capture-page created` 仅是时间相关，因果关系未验证——**后台弹前台的因果链尚未闭环，不能把责任完全归给 Backlight，也不能排除本仓库自身路径**）。窗口内 Agent 标签保持 active，页面按可见态渲染（Baidu 必须如此）。AI 聊天模板显式声明 `visible:true`（前台渲染需求）。`smoke:template` 复用常驻 `BrowserPilot Smoke` 窗口开标签页（`--fresh` 关闭、`--visible` 置前）。
+- **弹窗现场记录（2026-09-17，未验证/未闭环）**：两次弹出（11:28/11:31）与 Backlight capture keep-alive 的 `capture-page created` 时间同步（`bl-capture` 页进入 Agent 窗口并成为 active 标签）；daemon 未发出 `window-restore`。时间相关不等于因果，且 BrowserPilot 侧后台路径未做反向排除实验。完整时间线、代码位置与待验证假设见 `/Users/jiangao/work/browser/BROWSER-BG-REPORT-2026-09-17.md`（按用户指定 Bug 分条列出，未写"已修复"）。
 - **真机后台验证**：Google/Bing/Baidu/B站搜索/股吧搜索/股吧列表/公告/财联社/B站投稿列表/雪球搜索 全部 PASS（daemon state-log 无任何显式可见性事件）；X 因该 profile 未登录 BLOCKED。Baidu 隐藏标签渲染差异与浏览器侧建议见 `/Users/jiangao/work/browser/BROWSER-BG-REPORT-2026-09-17.md`。
 - **未验证**：韭研公社（微信登录）、雪球文章/评论、ChatGPT/DeepSeek/Gemini（写操作）在后台模式下的表现；X 登录后需复测 x-search / x-user-timeline。
+
+## 2026-09-17 补：窗口复用 fail-closed + 确定性验证（真机未复验）
+
+- **现状核对（未无谓重写）**：`267a530` 的 smoke 复用逻辑在连续多轮确实只建一窗（用例 `consecutive smoke rounds reuse one window...` 用同一份复用逻辑 + 真实 `spaces.ts` 驱动，PASS）；U4「每次新开窗口」的脚本路径该提交已覆盖。
+- **核心修复**：
+  1. `src/background/spaces.ts`：`use_space` / `ensureCommandSpace` 用 `chrome.windows.get` **惰性探测窗口存活**（不依赖 `onRemoved` 时序）。窗口已消失时把 Space 置 inactive、清所有指向它的活动路由并报 `SPACE_INACTIVE`；所有权/人工接管检查顺序不变，不会改绑用户窗口。
+  2. `scripts/smoke-space-lib.mjs`（新增，复用逻辑抽离并可注入假 client）**fail-closed**：
+     - `list_spaces` 失败/数据异常 → 抛错，**不新建窗口**（此前会被当成“没有窗口”而 open_space）；
+     - 只有 `list_spaces` 成功且确认没有可复用的专用 Smoke Space，或 `use_space`/`list_tabs` 明确回报 `SPACE_INACTIVE`（扩展已用 `windows.get` 确认窗口消失并退休）才允许 `open_space`；
+     - `use_space`/`list_tabs`/`ensure_visible` 的其他失败一律抛错；`--visible` 置前失败如实失败，绝不报告 `reused`；
+     - 只选取 `name === "BrowserPilot Smoke"` 的专用 Space（不复用同 Agent 其他用途窗口）；候选按序尝试，某个候选已退休时换下一个存活候选而不是重建；专用 Space 被用户接管（`user`）时拒绝另开窗口。
+  3. `spaces.ts ensure_visible`：`space.tabId` 指向已关闭标签（`close_tab` 不重绑）时回退窗口内活动标签，不再 `TAB_OUTSIDE_SPACE`。
+  4. `scripts/smoke-template.mjs`：运行前 `list_tabs` 失败即中断该模板（`blocked`，不 install/run，避免开 tab 后无法归因清理）；收尾 `list_tabs` 失败则报 `cleanup_unverified` 并置 failed（不关未知标签、不报告 passed）。
+- **新确定性用例**（`scripts/test-core.mjs`，chrome mock 补齐窗口注册表/focus 计数/close 邻居激活/错误码透传）：跨两轮同 `spaceId`/`windowId` 且零新建窗口、每轮只增删 tab、真实关窗后恰好重建一次并退休旧 space、后台全程零窗口聚焦、`--visible` 置前、`open_tab {newWindow:true}` 显式例外、**list_spaces 失败/数据异常/use_space 瞬态失败/list_tabs 瞬态失败/ensure_visible 失败均零新建**、专用名过滤、多候选跳过退休者、用户接管拒建。`npm run test:core` 全绿。
+- **统一窗口保证的边界（重要，不能宣称无条件成立）**：Space 存 `chrome.storage.session`，Chrome 文档明确扩展 disabled/reload/update 与浏览器重启时清空（https://developer.chrome.com/docs/extensions/reference/api/storage）。**同一扩展生命周期内**，上述 fail-closed 逻辑保证跨轮复用同一窗口、不重复建窗。**扩展被 reload/update 后**（含 dev 期 dist 变化触发的 Backlight 热重载），旧 `BrowserPilot Smoke` 窗口会失去 space 记录；现有命令无法枚举/认领一个未登记窗口（`ensureCommandSpace` 的首次绑定只认前台窗口，认领未聚焦的孤儿窗既不可靠也不安全），因此**无法在当前边界内可靠恢复**，此时下一次 smoke 会新建窗口、与旧窗并存。
+  - **下一步方案（待 Owner 决策，涉及新 primitive/状态架构）**：① 最小方案：给 smoke 窗口一个可识别标记（base tab 用扩展自有页面 + 唯一 `claim` key），claim 记录落 `chrome.storage.local`；SW 启动或首个命令时，若 session spaces 为空则用 `chrome.windows.getAll({populate:true})` 按标记精确匹配并重建该 Space（按内容标记而非 windowId，规避跨会话 ID 复用误绑；窗口被用户关闭时清理 claim）；② 备选：全部 Space 落 `storage.local` + 同样按内容校验，影响面更大；③ 最低限度：明确文档化“统一窗口仅在扩展生命周期内成立”，dev 热重载后手工关闭遗留 Smoke 窗口。
+- **未验证**：真机连续多轮/关闭重建/多模板批次未复验（本轮约束不触碰 live Backlight/profile/扩展重载），确定性测试不等于视觉验收；本轮未跑 `npm run build`（避免 live 热重载）。
+- **弹窗归因更正**：U1/U2/U3 的后台弹前台现象**未闭环**；「指向 Backlight capture keep-alive」只是时间相关性的未验证假设，不应表述为已归因。
 
 ## 当前结论
 

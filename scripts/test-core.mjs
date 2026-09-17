@@ -92,20 +92,39 @@ let nextWindowId = 2;
 let nextTabId = 22;
 let lastCreatedWindowState;
 let lastCreatedWindowFocused;
+let createdWindowCount = 0;
+const focusedWindowIds = [];
+const mockWindows = new Map([
+  [1, { id: 1, state: "normal", focused: false }],
+  [2, { id: 2, state: "normal", focused: false }],
+]);
 Object.assign(globalThis.chrome, {
   windows: {
     async getLastFocused() { return { id: 1 }; },
     async create({ url, state, focused }) {
+      createdWindowCount += 1;
       lastCreatedWindowState = state;
       lastCreatedWindowFocused = focused;
       const windowId = ++nextWindowId;
-      const tab = { id: ++nextTabId, windowId, index: 0, active: focused !== false, title: "new", url };
+      mockWindows.set(windowId, { id: windowId, state: state ?? "normal", focused: focused === true });
+      // Chrome 语义：新窗口首个标签在窗口内 active，与窗口是否 focused 无关。
+      const tab = { id: ++nextTabId, windowId, index: 0, active: true, title: "new", url };
       mockTabs.set(tab.id, tab);
       return { id: windowId, tabs: [tab] };
     },
-    async update(windowId) { return { id: windowId, state: "normal", focused: true }; },
-    async get(windowId) { return { id: windowId, state: "normal", focused: true }; },
+    async update(windowId, patch = {}) {
+      if (patch.focused === true) focusedWindowIds.push(windowId);
+      const win = mockWindows.get(windowId);
+      if (win) Object.assign(win, patch);
+      return win ?? { id: windowId, ...patch };
+    },
+    async get(windowId) {
+      const win = mockWindows.get(windowId);
+      if (!win) throw new Error("No window with id: " + windowId);
+      return win;
+    },
     async remove(windowId) {
+      mockWindows.delete(windowId);
       for (const [id, tab] of mockTabs) if (tab.windowId === windowId) mockTabs.delete(id);
     },
     onRemoved: { addListener() {} },
@@ -122,16 +141,29 @@ Object.assign(globalThis.chrome, {
       return tab;
     },
     async create({ windowId, url, active }) {
-      const tab = { id: ++nextTabId, windowId, index: 1, active, title: "created", url };
+      if (!mockWindows.has(windowId)) throw new Error("No window with id: " + windowId);
+      if (active) for (const tab of mockTabs.values()) if (tab.windowId === windowId) tab.active = false;
+      const tab = { id: ++nextTabId, windowId, index: 1, active: active === true, title: "created", url };
       mockTabs.set(tab.id, tab);
       return tab;
     },
     async update(tabId, patch) {
+      if (patch.active === true) {
+        const target = mockTabs.get(tabId);
+        if (target) for (const tab of mockTabs.values()) if (tab.windowId === target.windowId) tab.active = false;
+      }
       const tab = { ...mockTabs.get(tabId), ...patch };
       mockTabs.set(tabId, tab);
       return tab;
     },
-    async remove(tabId) { mockTabs.delete(tabId); },
+    async remove(tabId) {
+      const removed = mockTabs.get(tabId);
+      mockTabs.delete(tabId);
+      if (removed?.active) {
+        const neighbor = [...mockTabs.values()].find((tab) => tab.windowId === removed.windowId);
+        if (neighbor) neighbor.active = true;
+      }
+    },
   },
 });
 
@@ -167,6 +199,159 @@ const stateAfterComplete = storedSession["browserpilot.state.v1"];
 assert.equal(stateAfterComplete.activeSpaceIds?.["agent:c"], undefined, "completed space remained active for its agent");
 assert.equal(stateAfterComplete.activeSpaceId === cSpace.spaceId, false, "completed space remained globally active");
 console.log("PASS core: completing a task space clears stale active routing");
+
+// ---------- smoke:template 常驻窗口复用：跨轮同一 windowId，每轮只增删 tab ----------
+const smokeLib = await import("./smoke-space-lib.mjs");
+let smokeRequest = 0;
+const smokeClient = "agent:smoke-template";
+// 模拟 host/client 的错误码透传（native-bridge 会把 TaskSpaceError.code 放进 errorCode）。
+const makeSmokeCall = (clientId) => (command, args = {}) =>
+  spaces[command]({ type: "command", name: command, requestId: "smoke-" + (++smokeRequest), args, _clientId: clientId }).then(
+    (data) => ({ ok: true, parsed: { ok: true, data } }),
+    (error) => {
+      const message = error?.message ?? String(error);
+      return { ok: false, stderr: message, parsed: { ok: false, error: message, ...(error?.code ? { errorCode: error.code } : {}) } };
+    },
+  );
+const smokeCall = makeSmokeCall(smokeClient);
+const smokeTabs = async () => (await spaces.list_tabs({ type: "command", name: "list_tabs", requestId: "smoke-tabs", _clientId: smokeClient })).tabs;
+
+const round1 = await smokeLib.ensureSmokeSpace(smokeCall);
+assert.equal(round1.spaceMode, "created", "first smoke round must create the persistent window");
+const windowsAfterCreate = createdWindowCount;
+const smokeWindowId = (await smokeTabs())[0].windowId;
+assert.ok(Number.isFinite(smokeWindowId), "smoke space must be bound to a real window");
+assert.deepEqual(focusedWindowIds, [], "creating the background smoke window must not raise it");
+const baseTabId = (await smokeTabs())[0].tabId;
+
+const round2 = await smokeLib.ensureSmokeSpace(smokeCall);
+assert.equal(round2.spaceMode, "reused", "second smoke round must reuse the persistent window");
+assert.equal(round2.spaceId, round1.spaceId, "second smoke round must keep the same space");
+assert.equal(createdWindowCount, windowsAfterCreate, "second smoke round must not create another window");
+
+const openedTab = await spaces.open_tab({ type: "command", name: "open_tab", requestId: "smoke-open", _clientId: smokeClient, args: { url: "https://example.test" } });
+assert.equal(openedTab.windowId, smokeWindowId, "open_tab must open inside the reused window");
+assert.equal(createdWindowCount, windowsAfterCreate, "open_tab must never create a window");
+assert.deepEqual(focusedWindowIds, [], "background open_tab must not focus the window");
+await spaces.close_tab({ type: "command", name: "close_tab", requestId: "smoke-close", _clientId: smokeClient, args: { tabId: openedTab.tabId } });
+assert.deepEqual((await smokeTabs()).map((tab) => tab.tabId), [baseTabId], "after a round only the persistent base tab may remain");
+assert.equal(createdWindowCount, windowsAfterCreate, "tab churn must never create windows");
+console.log("PASS core: consecutive smoke rounds reuse one window and only add/remove tabs");
+
+// 用户关闭 smoke 窗口但扩展尚未处理 onRemoved（竞态）：状态仍挂着旧 windowId 时必须重建而不是复用死窗口。
+// 重建的前提是 use_space 明确回报 SPACE_INACTIVE（扩展已用 windows.get 确认窗口消失并退休该 Space）。
+await chrome.windows.remove(smokeWindowId);
+const round3 = await smokeLib.ensureSmokeSpace(smokeCall);
+assert.equal(round3.spaceMode, "created", "a closed smoke window must be rebuilt, not reused");
+assert.equal(createdWindowCount, windowsAfterCreate + 1, "rebuild must create exactly one new window");
+assert.notEqual(round3.spaceId, round1.spaceId, "rebuild must not resurrect the stale space");
+const rebuiltWindowId = (await smokeTabs())[0].windowId;
+assert.ok(Number.isFinite(rebuiltWindowId) && rebuiltWindowId !== smokeWindowId, "rebuild must bind a fresh window");
+const retired = (await spaces.list_spaces({ type: "command", name: "list_spaces", requestId: "smoke-list", _clientId: smokeClient }))
+  .find((space) => space.spaceId === round1.spaceId);
+assert.equal(retired?.ownership, "inactive", "the stale space must be retired so later rounds never reuse it");
+console.log("PASS core: a closed smoke window is retired and rebuilt exactly once");
+
+// space.tabId 可能指向已关闭的模板标签：--visible 复用常驻窗口仍须置前（显式前台例外）。
+const churnTab = await spaces.open_tab({ type: "command", name: "open_tab", requestId: "smoke-churn", _clientId: smokeClient, args: { url: "https://example.test/2" } });
+await spaces.close_tab({ type: "command", name: "close_tab", requestId: "smoke-churn-close", _clientId: smokeClient, args: { tabId: churnTab.tabId } });
+focusedWindowIds.length = 0;
+const visibleRound = await smokeLib.ensureSmokeSpace(smokeCall, { visible: true });
+assert.equal(visibleRound.spaceMode, "reused", "--visible must reuse the persistent window instead of creating one");
+assert.equal(visibleRound.spaceId, round3.spaceId, "--visible must not swap spaces");
+assert.deepEqual(focusedWindowIds, [rebuiltWindowId], "--visible must raise the reused window to the front");
+console.log("PASS core: --visible raises the reused smoke window without recreating it");
+
+// open_tab {newWindow:true} 是保留的显式例外：确实新建窗口，默认仍然不聚焦。
+const nwBefore = createdWindowCount;
+focusedWindowIds.length = 0;
+const newWindowTab = await spaces.open_tab({ type: "command", name: "open_tab", requestId: "smoke-nw", _clientId: "agent:explicit-new-window", args: { newWindow: true, url: "about:blank" } });
+assert.equal(createdWindowCount, nwBefore + 1, "explicit newWindow must create a new window");
+assert.notEqual(newWindowTab.windowId, rebuiltWindowId, "explicit newWindow must not reuse the smoke window");
+assert.deepEqual(focusedWindowIds, [], "explicit newWindow without focus:true must stay in the background");
+console.log("PASS core: explicit open_tab newWindow remains a deliberate exception");
+
+// fail-closed 负面用例：list_spaces/use_space/list_tabs/ensure_visible 的瞬态失败绝不能被解释为“没有窗口”而新建。
+{
+  const countBefore = createdWindowCount;
+  const failCall = (failures) => {
+    const base = makeSmokeCall(smokeClient);
+    return (command, args, timeoutMs) => (failures[command] ? Promise.resolve(failures[command]) : base(command, args, timeoutMs));
+  };
+  const cases = [
+    ["list_spaces 返回失败", { list_spaces: { ok: false, stderr: "host unreachable", parsed: { ok: false, error: "host unreachable" } } }, {}],
+    ["list_spaces 数据异常", { list_spaces: { ok: true, parsed: { ok: true, data: {} } } }, {}],
+    ["use_space 瞬态失败", { use_space: { ok: false, stderr: "boom", parsed: { ok: false, error: "boom" } } }, {}],
+    ["list_tabs 瞬态失败", { list_tabs: { ok: false, stderr: "boom", parsed: { ok: false, error: "boom" } } }, {}],
+    ["ensure_visible 置前失败", { ensure_visible: { ok: false, stderr: "cannot raise", parsed: { ok: false, error: "cannot raise" } } }, { visible: true }],
+  ];
+  for (const [label, failures, options] of cases) {
+    await assert.rejects(
+      () => smokeLib.ensureSmokeSpace(failCall(failures), options),
+      /拒绝新建窗口|置前失败/,
+      label,
+    );
+    assert.equal(createdWindowCount, countBefore, label + " must not create a window");
+  }
+  console.log("PASS core: smoke fail-closed on transient list_spaces/use_space/list_tabs/ensure_visible failures");
+}
+
+// 专用 Space 过滤：同 Agent 下其他用途窗口不被复用；没有专用 Space 时新建专用的，并持续复用它。
+{
+  const namedClient = "agent:smoke-dedicated";
+  const namedCall = makeSmokeCall(namedClient);
+  const other = await spaces.open_space({ type: "command", name: "open_space", requestId: "other-purpose", _clientId: namedClient, args: { name: "Other-purpose" } });
+  const countBefore = createdWindowCount;
+  const dedicated = await smokeLib.ensureSmokeSpace(namedCall);
+  assert.equal(dedicated.spaceMode, "created", "missing dedicated smoke space must be created");
+  assert.equal(createdWindowCount, countBefore + 1, "creating the dedicated space must create exactly one window");
+  assert.notEqual(dedicated.spaceId, other.spaceId, "must not reuse a same-agent window created for other purposes");
+  const dedicatedRecord = (await spaces.list_spaces({ type: "command", name: "list_spaces", requestId: "dedicated-list", _clientId: namedClient }))
+    .find((space) => space.spaceId === dedicated.spaceId);
+  assert.equal(dedicatedRecord?.name, "BrowserPilot Smoke", "dedicated space must carry the smoke name");
+  const again = await smokeLib.ensureSmokeSpace(namedCall);
+  assert.equal(again.spaceMode, "reused", "second round must reuse the dedicated smoke space");
+  assert.equal(again.spaceId, dedicated.spaceId, "second round must keep the dedicated space");
+  assert.equal(createdWindowCount, countBefore + 1, "second round must not create another window");
+  console.log("PASS core: smoke selects only the dedicated BrowserPilot Smoke space");
+}
+
+// 多个专用 Space 候选时：第一个候选窗口已消失应改用仍存活的候选，而不是新建（避免并存第二个窗口）。
+{
+  const multiClient = "agent:smoke-multi-candidate";
+  const multiCall = makeSmokeCall(multiClient);
+  const first = await smokeLib.ensureSmokeSpace(multiCall);
+  const second = await spaces.open_space({ type: "command", name: "open_space", requestId: "multi-second", _clientId: multiClient, args: { name: "BrowserPilot Smoke" } });
+  const firstWindowId = (await spaces.list_spaces({ type: "command", name: "list_spaces", requestId: "multi-list", _clientId: multiClient }))
+    .find((space) => space.spaceId === first.spaceId)?.windowId;
+  await chrome.windows.remove(firstWindowId);
+  const countBefore = createdWindowCount;
+  const ensured = await smokeLib.ensureSmokeSpace(multiCall);
+  assert.equal(ensured.spaceMode, "reused", "a retired candidate must not force a rebuild while another candidate lives");
+  assert.equal(ensured.spaceId, second.spaceId, "must fall through to the live dedicated candidate");
+  assert.equal(createdWindowCount, countBefore, "skipping a retired candidate must not create a window");
+  console.log("PASS core: smoke skips a retired candidate and reuses a live dedicated space");
+}
+
+// 专用 Smoke Space 被用户接管（ownership=user）时不得另开窗口绕过接管（人工接管语义优先）。
+{
+  const heldClient = "agent:smoke-user-held";
+  const heldCall = makeSmokeCall(heldClient);
+  const created = await smokeLib.ensureSmokeSpace(heldCall);
+  await spaces.handoff_space({ type: "command", name: "handoff_space", requestId: "held", _clientId: heldClient, space: created.spaceId });
+  const countBefore = createdWindowCount;
+  await assert.rejects(() => smokeLib.ensureSmokeSpace(heldCall), /用户接管/, "user-held dedicated space must block creation");
+  assert.equal(createdWindowCount, countBefore, "user-held dedicated space must not trigger a new window");
+  console.log("PASS core: a user-held dedicated smoke space blocks window creation");
+}
+
+// smoke 脚本的关闭保护用源码断言锁定：运行前清单失败即中断（blocked），收尾清单失败必须如实 failed。
+const smokeSource = fs.readFileSync("scripts/smoke-template.mjs", "utf8");
+assert.match(smokeSource, /if \(!before\.ok\) \{[\s\S]*?item\.status = "blocked";[\s\S]*?continue;\s*\}/, "smoke must abort the template when the pre-run tab listing failed");
+assert.match(smokeSource, /cleanup_unverified/, "smoke must report unverifiable cleanup instead of passed");
+assert.match(smokeSource, /if \(!closed\.ok\) failedCloses\.push\(tabId\)/, "smoke must report failed tab closes instead of silently leaking them");
+assert.match(smokeSource, /import \{ ensureSmokeSpace \} from "\.\/smoke-space-lib\.mjs";/, "smoke must use the shared reusable-space lib");
+console.log("PASS core: smoke aborts without an attributable tab baseline and reports unverifiable cleanup");
 
 const foreground = await importTs("src/background/foreground-lease.ts");
 const outer = { type: "command", name: "open_space", requestId: "lease-a", _clientId: "agent:a" };

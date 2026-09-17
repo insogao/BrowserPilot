@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { acquireBrowserLease, releaseBrowserLease } from "./browser-lease-lib.mjs";
+import { ensureSmokeSpace } from "./smoke-space-lib.mjs";
 
 const root = process.cwd();
 const rawArgs = process.argv.slice(2);
@@ -15,8 +16,6 @@ if (!ids.length) {
   console.error("Usage: npm run smoke:template -- [--visible] [--fresh] <template-id> [template-id...]");
   process.exit(2);
 }
-
-const SMOKE_SPACE_NAME = "BrowserPilot Smoke";
 
 function templateDir(id) {
   return path.join(root, "registry", "templates", id);
@@ -120,32 +119,6 @@ let smokeSpaceId;
 let spaceMode = "unknown";
 let fatalError = null;
 
-async function ensureSmokeSpace() {
-  // 1) 复用已有常驻 smoke 空间（同一窗口）
-  const spaces = await client("list_spaces", {}, lease.token, 15_000);
-  const mine = Array.isArray(spaces.parsed?.data) ? spaces.parsed.data : [];
-  const reusable = mine.find((s) => s.windowId !== undefined && s.ownership === "agent");
-  if (reusable) {
-    const used = await client("use_space", { spaceId: reusable.spaceId }, lease.token, 15_000);
-    if (used.ok) {
-      const probe = await client("list_tabs", {}, lease.token, 15_000);
-      if (probe.ok) {
-        spaceMode = "reused";
-        return reusable.spaceId;
-      }
-    }
-  }
-  // 2) 没有可用空间才新建（默认不聚焦、窗口可见但不抢前台）
-  const openSpaceArgs = { name: SMOKE_SPACE_NAME, url: "about:blank" };
-  if (visible) openSpaceArgs.focus = true;
-  const opened = await client("open_space", openSpaceArgs, lease.token, 30_000);
-  if (opened.ok && typeof opened.parsed?.data?.spaceId === "string") {
-    spaceMode = "created";
-    return opened.parsed.data.spaceId;
-  }
-  throw new Error((opened.stderr || opened.stdout || "open_space failed").trim());
-}
-
 try {
   lease = acquireBrowserLease("smoke-template", ids.join(","));
   let setupError;
@@ -154,7 +127,12 @@ try {
     setupError = (setupPing.stderr || setupPing.stdout || "BrowserPilot host unavailable").trim();
   } else {
     try {
-      smokeSpaceId = await ensureSmokeSpace();
+      const ensured = await ensureSmokeSpace(
+        (command, args, timeoutMs) => client(command, args, lease.token, timeoutMs),
+        { visible },
+      );
+      smokeSpaceId = ensured.spaceId;
+      spaceMode = ensured.spaceMode;
     } catch (e) {
       setupError = e instanceof Error ? e.message : String(e);
     }
@@ -179,13 +157,29 @@ try {
       continue;
     }
 
+    // 运行前拿不到标签清单就无法归因本轮新标签：此时继续跑会在结束后无法清理（可能泄漏），
+    // 直接中断该模板（blocked），不 install/不 run。
     const before = await client("list_tabs", {}, lease.token, 15_000);
+    if (!before.ok) {
+      item.status = "blocked";
+      item.error = "setup: list_tabs 失败，无法归因标签清单，拒绝运行: " + (before.stderr || before.stdout || "").trim();
+      continue;
+    }
     const beforeIds = new Set(tabIdsOf(before));
     const closeOpenedTabs = async () => {
       const after = await client("list_tabs", {}, lease.token, 15_000);
+      // 收尾清单也失败时无法知道哪些标签是本轮新开的：不关（避免误关常驻 about:blank 导致窗口消失），
+      // 但必须如实上报 cleanup_unverified，不能报告 passed。
+      if (!after.ok) return { unverified: true, error: (after.stderr || after.stdout || "list_tabs failed").trim() };
       const opened = tabIdsOf(after).filter((tabId) => !beforeIds.has(tabId));
-      for (const tabId of opened) await client("close_tab", { tabId }, lease.token, 15_000).catch(() => undefined);
+      const failedCloses = [];
+      for (const tabId of opened) {
+        const closed = await client("close_tab", { tabId }, lease.token, 15_000);
+        if (!closed.ok) failedCloses.push(tabId);
+      }
       item.tabsOpened = opened.length;
+      if (failedCloses.length) return { unverified: true, error: "close_tab 失败: " + failedCloses.join(",") };
+      return { unverified: false, tabs: opened.length };
     };
 
     const isRuntimePackage = fs.existsSync(templateFile);
@@ -198,7 +192,8 @@ try {
     if (!install.ok) {
       item.status = "failed";
       item.error = (install.stderr || install.stdout || installCommand + " failed").trim();
-      await closeOpenedTabs();
+      const cleanup = await closeOpenedTabs();
+      if (cleanup.unverified) item.error += "; cleanup_unverified: " + cleanup.error;
       continue;
     }
 
@@ -208,10 +203,16 @@ try {
     // 外层先杀会让 Adapter 拿不到真实失败现场（只剩 "timeout"）。
     const run = await client("run_template", runArgs, lease.token, 600_000);
     item.commands.push({ command: "run_template", ok: run.ok, error: run.stderr.trim() || undefined });
-    await closeOpenedTabs();
+    const cleanup = await closeOpenedTabs();
     if (!run.ok) {
       item.status = "failed";
       item.error = (run.stderr || run.stdout || "run_template failed").trim();
+      if (cleanup.unverified) item.error += "; cleanup_unverified: " + cleanup.error;
+      continue;
+    }
+    if (cleanup.unverified) {
+      item.status = "failed";
+      item.error = "cleanup_unverified: " + cleanup.error;
       continue;
     }
     const rawData = run.parsed?.data;

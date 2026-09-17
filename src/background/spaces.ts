@@ -62,6 +62,24 @@ async function activate(clientId: string, spaceId: string): Promise<void> {
   });
 }
 
+/** 窗口是否仍存在。windowId 失效时 tabs.query 只会返回空数组，因此必须以 windows.get 为准。 */
+async function spaceWindowAlive(windowId: number | undefined): Promise<boolean> {
+  if (windowId === undefined) return false;
+  return (await chrome.windows.get(windowId).catch(() => undefined)) !== undefined;
+}
+
+/** 窗口已被用户关闭（onRemoved 尚未处理或 SW 未唤醒时状态会残留 windowId）：置为 inactive 并清理活动路由，
+ *  避免后续命令复用不存在的窗口；调用方据此重建或报错。 */
+async function retireClosedWindow(space: SpaceState): Promise<void> {
+  await patchSpace(space.spaceId, { ownership: "inactive", windowId: undefined, tabId: undefined, attached: false });
+  await mutateState((state) => {
+    for (const [clientId, activeId] of Object.entries(state.activeSpaceIds ?? {})) {
+      if (activeId === space.spaceId) delete state.activeSpaceIds?.[clientId];
+    }
+    if (state.activeSpaceId === space.spaceId) delete state.activeSpaceId;
+  });
+}
+
 async function bindFocusedWindow(clientId: string): Promise<SpaceState> {
   const focused = await chrome.windows.getLastFocused({ windowTypes: ["normal"] });
   if (focused.id === undefined) throw new TaskSpaceError("SPACE_NOT_FOUND", "没有可绑定的普通浏览器窗口");
@@ -110,6 +128,10 @@ export async function ensureCommandSpace(cmd: Command): Promise<SpaceState> {
   const space = requested ? findSpace(state.spaces, requested) : activeId ? state.spaces[activeId] : undefined;
   if (space) {
     assertOwnership(space, clientId);
+    if (!(await spaceWindowAlive(space.windowId))) {
+      await retireClosedWindow(space);
+      throw new TaskSpaceError("SPACE_INACTIVE", "Task Space 窗口已关闭，需要重新 open_space: " + space.spaceId);
+    }
     cmd.space = space.spaceId;
     if (activeId !== space.spaceId) await activate(clientId, space.spaceId);
     return space;
@@ -214,6 +236,10 @@ export async function use_space(cmd: Command): Promise<SpaceState> {
   if (!space) throw new TaskSpaceError("SPACE_NOT_FOUND", "Task Space 不存在: " + requested);
   const clientId = commandClientId(cmd);
   assertOwnership(space, clientId);
+  if (!(await spaceWindowAlive(space.windowId))) {
+    await retireClosedWindow(space);
+    throw new TaskSpaceError("SPACE_INACTIVE", "Task Space 窗口已关闭，需要重新 open_space: " + space.spaceId);
+  }
   await activate(clientId, space.spaceId);
   return space;
 }
@@ -299,10 +325,20 @@ export async function switch_tab(cmd: Command): Promise<{ tabId: number; windowI
 
 export async function ensure_visible(cmd: Command): Promise<{ tabId: number; windowId: number; state?: string; focused?: boolean }> {
   const space = await ensureCommandSpace(cmd);
-  let tabId = Number(cmd.args?.tabId ?? space.tabId);
-  if (!Number.isFinite(tabId) && space.windowId !== undefined) {
-    const [activeTab] = await chrome.tabs.query({ active: true, windowId: space.windowId });
-    tabId = Number(activeTab?.id);
+  const explicit = cmd.args?.tabId;
+  let tabId = explicit === undefined || explicit === null ? NaN : Number(explicit);
+  // 显式 tabId 仍然严格校验（无效值报错，不回退）；省略时才允许空间绑定/活动标签兜底。
+  if (!Number.isFinite(tabId) && (explicit === undefined || explicit === null)) {
+    // space.tabId 可能指向已关闭的标签（close_tab 不重绑）；失效时回退到窗口内活动标签。
+    const bound = Number(space.tabId);
+    if (Number.isFinite(bound)) {
+      const tab = await chrome.tabs.get(bound).catch(() => undefined);
+      if (tab && tab.windowId === space.windowId) tabId = bound;
+    }
+    if (!Number.isFinite(tabId) && space.windowId !== undefined) {
+      const [activeTab] = await chrome.tabs.query({ active: true, windowId: space.windowId });
+      tabId = Number(activeTab?.id);
+    }
   }
   if (!Number.isFinite(tabId)) throw new Error("ensure_visible 未找到当前 Task Space 的活动 tab");
   await assertTabInCommandSpace(cmd, tabId);

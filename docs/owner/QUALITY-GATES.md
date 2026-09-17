@@ -44,7 +44,7 @@ npm run smoke:template -- <template-id>
 npm run smoke:template -- --visible <template-id>   # 仅在用户明确要看、或排查渲染差异时使用
 ```
 
-`smoke:template` 默认**后台运行**：复用同一个常驻 `BrowserPilot Smoke` 窗口（可见但不聚焦、不弹到前台；窗口内 Agent 标签保持 active 以正常渲染），每个模板在同一窗口开标签页、测完自动关闭；`--visible` 才把窗口激活到最前，`--fresh` 跑完关闭窗口。
+`smoke:template` 默认**后台运行**：复用同一个常驻专用 `BrowserPilot Smoke` 窗口（可见但不聚焦、不弹到前台；窗口内 Agent 标签保持 active 以正常渲染），每个模板在同一窗口开标签页、测完自动关闭；`--visible` 才把窗口激活到最前，`--fresh` 跑完关闭窗口。选取是 fail-closed：枚举/复用/置前失败时直接报错、**不新建窗口**；只有枚举成功且无专用候选、或扩展明确回报 `SPACE_INACTIVE`（窗口已被确认为消失）才重建窗口。
 
 通过证据必须同时具备：
 
