@@ -4,6 +4,9 @@
   "version": "1.1.0",
   "description": "把输入主题整理为一个不执行网页动作的示例提示词。",
   "category": "generic",
+  "tags": [
+    "ai"
+  ],
   "inputs": [
     {
       "name": "topic",
@@ -18,8 +21,16 @@
     "sites": []
   },
   "discovery": {
-    "intents": ["prompt.compose", "registry.verify"],
-    "keywords": ["示例", "prompt", "模板", "registry"],
+    "intents": [
+      "prompt.compose",
+      "registry.verify"
+    ],
+    "keywords": [
+      "示例",
+      "prompt",
+      "模板",
+      "registry"
+    ],
     "outputs": [
       {
         "name": "prompt",
@@ -28,7 +39,9 @@
       }
     ],
     "risk": "read",
-    "aliases": ["example-prompt"],
+    "aliases": [
+      "example-prompt"
+    ],
     "browserpilot": ">=0.1.0"
   }
 }

@@ -1,27 +1,50 @@
 {
   "id": "bing-search",
   "name": "必应搜索",
-  "version": "1.2.2",
-  "description": "在必应搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。",
+  "version": "1.3.0",
+  "description": "在必应搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。",
   "category": "search",
+  "tags": [
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
       "type": "string",
       "required": true,
       "description": "搜索关键词"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "返回结果条数（默认 10，最多 100）"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
   "body": [
     {
       "name": "open_tab",
-      "args": { "url": "https://www.bing.com" },
+      "args": {
+        "url": "https://www.bing.com"
+      },
       "note": "打开必应首页"
     },
     {
       "name": "waitForSelector",
-      "args": { "selector": "#sb_form_q", "visible": true, "timeoutMs": 20000 },
+      "args": {
+        "selector": "#sb_form_q",
+        "visible": true,
+        "timeoutMs": 20000
+      },
       "note": "等待搜索框出现"
     },
     {
@@ -34,51 +57,94 @@
     },
     {
       "name": "type",
-      "args": { "value": "$query", "typingDelayMs": 30 },
+      "args": {
+        "value": "$query",
+        "typingDelayMs": 30
+      },
       "note": "逐字输入关键词"
     },
     {
       "name": "waitForTimeout",
-      "args": { "ms": 500 },
+      "args": {
+        "ms": 500
+      },
       "note": "等待输入事件处理"
     },
     {
       "name": "press",
-      "args": { "key": "Enter" },
+      "args": {
+        "key": "Enter"
+      },
       "note": "提交搜索"
     },
     {
       "name": "waitForURL",
-      "args": { "pattern": "bing.com/search", "partial": true, "timeoutMs": 20000 },
+      "args": {
+        "pattern": "bing.com/search",
+        "partial": true,
+        "timeoutMs": 20000
+      },
       "note": "等待结果页加载"
     },
     {
       "name": "js",
       "args": {
         "expression": "@results",
-        "rootSelectors": ["#b_results"],
+        "rootSelectors": [
+          "#b_results"
+        ],
         "linkSelector": "li.b_algo h2 a",
         "minResults": 3,
-        "limit": 10,
-        "textLimit": 6000
+        "limit": "$limit",
+        "textLimit": 6000,
+        "maxPages": "$maxPages",
+        "nextSelector": "a.sb_pagN"
       },
       "note": "抓取搜索结果"
     }
   ],
-  "tokenStrategy": { "defaultL0": true },
+  "tokenStrategy": {
+    "defaultL0": true
+  },
   "scope": {
-    "sites": ["bing.com"]
+    "sites": [
+      "bing.com"
+    ]
   },
   "discovery": {
-    "intents": ["search", "web.search"],
-    "keywords": ["必应", "bing", "搜索", "search", "microsoft"],
+    "intents": [
+      "search",
+      "web.search"
+    ],
+    "keywords": [
+      "必应",
+      "bing",
+      "搜索",
+      "search",
+      "microsoft"
+    ],
     "outputs": [
-      { "name": "count", "type": "number", "description": "返回结果条数" },
-      { "name": "links", "type": "array", "description": "搜索结果列表，每项含title和url" },
-      { "name": "text", "type": "string", "description": "结果页纯文本摘要" }
+      {
+        "name": "count",
+        "type": "number",
+        "description": "返回结果条数"
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "搜索结果列表，每项含title和url"
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "结果页纯文本摘要"
+      }
     ],
     "risk": "read",
-    "aliases": ["bing", "ms-search"],
+    "aliases": [
+      "bing",
+      "ms-search"
+    ],
     "browserpilot": ">=0.1.0"
   }
 }

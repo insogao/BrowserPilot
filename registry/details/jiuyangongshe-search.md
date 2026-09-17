@@ -1,19 +1,20 @@
 # 韭研公社搜索
 
-> 在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。
+> 在韭研公社搜索关键词，返回指定条数文章（标题+链接，默认 15，最多 100）。需要微信登录态。
 
 - ID: `jiuyangongshe-search`
-- 版本: `1.2.0`
+- 版本: `1.3.0`
 - 风险: `read`
 - 适用站点: `jiuyangongshe.com`
 - Intents: `search`, `finance.research`
 - Capabilities: `js`, `open_tab`, `waitForTimeout`
-- 功能指纹: `sha256:7e9bab852b6c50a078af95cee8089059c5c3d7208dddd3971ea2c300d5e10862`
+- 功能指纹: `sha256:79527342e74833821f89ce89683c9e717738310744c0ae0214ba826a954cbe44`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词
 - `sort` (string): 排序：latest=按时间；留空=按热度
+- `limit` (number): 返回文章条数（默认 15，最多 100）
 
 ## 输出
 

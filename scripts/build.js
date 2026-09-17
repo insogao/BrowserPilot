@@ -51,6 +51,12 @@ function copyAllStatic() {
   copyStatic("src/kernel/kernel.html", "kernel/kernel.html");
   copyStatic("src/offscreen/offscreen.html", "offscreen/offscreen.html");
   copyStatic("assets/icons", "icons");
+  // 随扩展发布的模板包：默认全量模板（由 scripts/build-registry.mjs 生成）
+  const bundle = path.join(root, "registry", "bundle.json");
+  if (!fs.existsSync(bundle)) {
+    throw new Error("缺少 registry/bundle.json：先运行 npm run registry:build");
+  }
+  copyStatic("registry/bundle.json", "templates.bundle.json");
 }
 
 function buildOnce(overrides = {}) {

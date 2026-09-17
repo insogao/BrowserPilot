@@ -1,0 +1,3357 @@
+{
+  "schemaVersion": 1,
+  "generatorVersion": 1,
+  "templates": [
+    {
+      "id": "baidu-search",
+      "name": "百度搜索",
+      "version": "1.3.0",
+      "description": "在百度搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。",
+      "category": "search",
+      "tags": [
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回结果条数（默认 10，最多 100）"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 5,
+          "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.baidu.com"
+          },
+          "note": "打开百度首页"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@focus",
+            "selectors": [
+              "#chat-textarea",
+              "textarea[name=wd]",
+              "#kw"
+            ]
+          },
+          "expect": "true",
+          "note": "等待并聚焦搜索框"
+        },
+        {
+          "name": "fill",
+          "args": {
+            "selector": "[data-bp-focus]",
+            "value": "$query"
+          },
+          "note": "填入关键词"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const f=document.querySelector('#form');if(f){f.submit();return true;}return false;})()"
+          },
+          "expect": "true",
+          "note": "提交表单（#chat-textarea 在 #form 外，press Enter 不可靠）"
+        },
+        {
+          "name": "waitForURL",
+          "args": {
+            "pattern": "baidu.com/s",
+            "partial": true,
+            "timeoutMs": 20000
+          },
+          "note": "等待结果页加载"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@results",
+            "rootSelectors": [
+              "#content_left",
+              ".result",
+              ".c-container"
+            ],
+            "linkSelector": "h3 a,.t a",
+            "minResults": 3,
+            "limit": "$limit",
+            "textLimit": 6000,
+            "maxPages": "$maxPages",
+            "nextSelector": "#page a.n",
+            "nextText": "下一页"
+          },
+          "note": "抓取搜索结果"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "baidu.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "web.search"
+        ],
+        "keywords": [
+          "百度",
+          "baidu",
+          "搜索",
+          "search"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number",
+            "description": "返回结果条数"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "搜索结果列表，每项含title和url"
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "结果页纯文本摘要"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "baidu",
+          "bd-search"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "bilibili-download-video",
+      "name": "B站视频下载",
+      "version": "1.0.2",
+      "description": "下载当前/指定B站视频为单个 MP4 文件（音视频已合成，720P，落盘到浏览器下载目录）。仅下载你有权限访问的内容。",
+      "category": "media",
+      "tags": [
+        "video",
+        "download"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "视频页链接（bilibili.com/video/BV...）；不填则在当前标签页上下载"
+        },
+        {
+          "name": "page",
+          "type": "number",
+          "required": false,
+          "default": 1,
+          "description": "分P序号，默认 P1"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isVideo=()=>/bilibili\\.com\\/video\\/BV/.test(location.href);if(target&&!(isVideo()&&location.href.indexOf(target.split('?')[0])>=0)){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isVideo())await new Promise(r=>setTimeout(r,400));}if(!isVideo())return {ok:false,error:'not-on-video-page',hint:'当前标签不在B站视频页（bilibili.com/video/BV...）；请先打开视频页再运行本模板，或通过 params.url 传入视频链接。'};await new Promise(r=>setTimeout(r,1500));const bvid=(location.href.match(/BV[0-9A-Za-z]+/)||[])[0];if(!bvid)return {ok:false,error:'no-bvid'};const pl=await fetch('https://api.bilibili.com/x/player/pagelist?bvid='+bvid,{credentials:'include'}).then(r=>r.json());if(pl.code!==0||!pl.data||!pl.data.length)return {ok:false,error:'pagelist-failed',detail:pl.message||('code '+pl.code)};const page=Math.max(1,Math.min(Number('$page')||1,pl.data.length));const cid=pl.data[page-1].cid;const api='https://api.bilibili.com/x/player/playurl?bvid='+bvid+'&cid='+cid+'&qn=116&platform=html5&high_quality=1';const pj=await fetch(api,{credentials:'include'}).then(r=>r.json());if(pj.code!==0||!pj.data||!pj.data.durl||!pj.data.durl[0])return {ok:false,error:'playurl-failed',detail:pj.message||('code '+pj.code),hint:'该视频可能不支持HTML5单文件导出（互动视频/充电专属/版权限制等）'};const du=pj.data.durl[0];if(du.size>2147483648)return {ok:false,error:'too-large',sizeMB:Math.round(du.size/1048576),hint:'超过2GB上限，请选择更短的视频或分P'};const blob=await fetch(du.url).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob();});const title=(document.title.replace(/_哔哩哔哩[_ ]?bilibili.*$/i,'').replace(/[\\\\/:*?\"<>|]/g,'_').trim())||bvid;const QMAP={16:'360P',32:'480P',64:'720P',74:'720P60',80:'1080P',112:'1080P+'};const q=QMAP[pj.data.quality]||((pj.data.format||'mp4').replace(/^mp4/,'')+'P');const filename=title+'_'+q+'.mp4';const objUrl=URL.createObjectURL(blob);const a=document.createElement('a');a.href=objUrl;a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(objUrl);},120000);return {ok:true,downloaded:true,filename:filename,sizeMB:Math.round(blob.size/1048576*10)/10,quality:pj.data.quality,page:page,bvid:bvid,title:title};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.downloaded",
+              "equals": true
+            }
+          ],
+          "note": "解析 bvid/cid → playurl(HTML5 单文件) → 页面内拉流 → 浏览器另存"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "bilibili.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "download",
+          "video.download"
+        ],
+        "keywords": [
+          "bilibili",
+          "B站",
+          "b站",
+          "下载视频",
+          "视频下载",
+          "download video"
+        ],
+        "outputs": [
+          {
+            "name": "filename",
+            "type": "string",
+            "description": "落盘文件名（浏览器下载目录）"
+          },
+          {
+            "name": "sizeMB",
+            "type": "number",
+            "description": "文件大小"
+          },
+          {
+            "name": "quality",
+            "type": "number",
+            "description": "清晰度代号（64=720P）"
+          }
+        ],
+        "risk": "download",
+        "aliases": [
+          "B站下载",
+          "bilibili 下载",
+          "下载B站视频"
+        ]
+      }
+    },
+    {
+      "id": "bilibili-favlist",
+      "name": "B站收藏夹列表",
+      "version": "1.1.0",
+      "description": "列出B站登录用户收藏夹中的视频，返回指定条数（默认 30，最多 100；滚动加载）。需要B站登录态。",
+      "category": "media",
+      "tags": [
+        "video"
+      ],
+      "inputs": [
+        {
+          "name": "mid",
+          "type": "string",
+          "required": false,
+          "description": "B站用户 mid；不填则用当前登录账号"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 30,
+          "description": "最多条数"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.bilibili.com/"
+          },
+          "note": "先落 www 域（拿登录 mid）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));let mid=want('$mid');if(!mid){let navr=null;for(let att=0;att<3&&!navr;att++){try{const r=await fetch('https://api.bilibili.com/x/web-interface/nav',{credentials:'include'}).then(x=>x.json());if(r.data&&r.data.mid)navr=String(r.data.mid);}catch{await sleep(800);}}mid=navr||'';}if(!mid)return {ok:false,error:'no-login',hint:'未获取到登录 mid（收藏夹需要B站登录态）'};if(location.href.indexOf('/'+mid+'/favlist')<0){location.href='https://space.bilibili.com/'+mid+'/favlist';const t0=Date.now();while(Date.now()-t0<20000&&!/favlist/.test(location.href))await sleep(400);}await sleep(2500);const lim=Math.max(1,Math.min(Number(want('$limit'))||30,100));const collect=()=>{const byUrl=new Map();for(const a of document.querySelectorAll('a[href*=\"/video/BV\"]')){const m=(a.getAttribute('href')||'').match(/BV[0-9A-Za-z]+/);if(!m)continue;const url='https://www.bilibili.com/video/'+m[0];const t=(a.textContent||'').replace(/\\s+/g,' ').trim();const prev=byUrl.get(url);if(!prev||t.length>prev.title.length)byUrl.set(url,{title:t.slice(0,120),bvid:m[0],url:url});}return byUrl;};let byUrl=collect();const maxRounds=Math.max(4,Math.min(20,Math.ceil(lim/10)+3));for(let i=0;i<maxRounds&&byUrl.size<lim;i++){const before=byUrl.size;for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await sleep(150);}await sleep(900+Math.floor(Math.random()*300));byUrl=collect();if(byUrl.size>=lim)break;if(byUrl.size===before&&i>1)break;}window.scrollTo(0,0);await sleep(400);return {ok:true,mid:mid,count:byUrl.size,videos:[...byUrl.values()].slice(0,lim)};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "导航到收藏夹页 → 滚动懒加载 → 按 BV 去重提取"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "bilibili.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "media.list",
+          "video.download"
+        ],
+        "keywords": [
+          "B站",
+          "收藏夹",
+          "favlist",
+          "批量下载"
+        ],
+        "outputs": [
+          {
+            "name": "videos",
+            "type": "array",
+            "description": "title/bvid/url"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "B站收藏",
+          "收藏夹下载"
+        ]
+      }
+    },
+    {
+      "id": "bilibili-search",
+      "name": "B站搜索",
+      "version": "1.1.0",
+      "description": "在B站搜索关键词，返回指定条数视频结果（标题/作者/链接，默认 10，最多 100；不足时自动翻页）。",
+      "category": "search",
+      "tags": [
+        "video",
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回视频条数（默认 10，最多 100）"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 3,
+          "description": "最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://search.bilibili.com/all?keyword=$query"
+          },
+          "note": "直接打开B站搜索结果页（比首页输入框更稳，不受首页改版影响）"
+        },
+        {
+          "name": "waitForSelector",
+          "args": {
+            "selector": ".bili-video-card",
+            "visible": true,
+            "timeoutMs": 20000
+          },
+          "note": "等待结果卡片渲染完成"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const keyword=want('$query');const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const maxP=Math.max(1,Math.min(Number(want('$maxPages'))||3,5));const isCover=(t)=>/^稍后再看/.test(t)||/\\d{1,2}:\\d{2}/.test(t);const extract=(root)=>{const out=[];const seen=new Set();for(const c of root.querySelectorAll('.bili-video-card')){const links=[...c.querySelectorAll(\"a[href*='/video/BV']\")];if(!links.length)continue;let href=links[0].getAttribute('href')||'';let url=href.startsWith('//')?('https:'+href):href;try{url=new URL(url,location.href).href;}catch{}if(seen.has(url))continue;const titEl=c.querySelector('.bili-video-card__info--tit');let title=titEl?(titEl.textContent||'').trim():'';if(!title){const t=links.map(x=>(x.textContent||'').trim()).find(x=>x.length>2&&!isCover(x));title=t||'';}if(!title||title.length<2)continue;seen.add(url);const owner=c.querySelector('.bili-video-card__info--owner');const author=owner?(owner.textContent||'').split('·')[0].trim().slice(0,40):'';out.push({title:title.slice(0,150),url:url,author:author});}return out;};const start=Date.now();let links=[];while(Date.now()-start<12000){links=extract(document);if(links.length>=3)break;await sleep(400);}let pages=1;const base='https://search.bilibili.com/all?keyword='+encodeURIComponent(keyword||'');while(links.length<lim&&pages<maxP){const next=base+'&page='+(pages+1);await sleep(1400+Math.floor(Math.random()*800));let html=null;try{const r=await fetch(next,{credentials:'include'});if(!r.ok)break;html=await r.text();}catch{break;}if(!html||html.length<500)break;let doc=null;try{doc=new DOMParser().parseFromString(html,'text/html');}catch{break;}const seen=new Set(links.map(x=>x.url));const added=extract(doc);let grew=0;for(const it of added){if(links.length>=lim)break;if(!seen.has(it.url)){links.push(it);grew++;}}pages++;if(!grew)break;}return {count:links.length,links:links.slice(0,lim),pages:pages,text:(document.body.innerText||'').slice(0,6000).trim()};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.count",
+              "min": 3
+            }
+          ],
+          "note": "卡片级抓取：标题优先 .bili-video-card__info--tit，兜底滤掉封面文本（稍后再看/播放量+弹幕+时长粘连）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "bilibili.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "video.search"
+        ],
+        "keywords": [
+          "bilibili",
+          "B站",
+          "b站",
+          "视频搜索",
+          "bilibili search"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number",
+            "description": "结果条数"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "标题+链接+作者列表"
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "页面文本摘要"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "B站视频搜索",
+          "bilibili 搜索"
+        ]
+      }
+    },
+    {
+      "id": "bilibili-user-videos",
+      "name": "B站用户投稿列表",
+      "version": "1.1.0",
+      "description": "抓取B站用户空间的投稿视频，返回指定条数（默认 30，最多 100；滚动加载）。配合 bilibili-download-video 可逐个下载。",
+      "category": "media",
+      "tags": [
+        "video"
+      ],
+      "inputs": [
+        {
+          "name": "uid",
+          "type": "string",
+          "required": true,
+          "description": "B站用户 UID（space.bilibili.com/<uid> 的数字）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 30,
+          "description": "最多条数（1-60）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://space.bilibili.com/$uid/video"
+          },
+          "note": "打开用户空间投稿页"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 3000
+          },
+          "note": "渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const uid=want('$uid');if(!/\\d+/.test(uid))return {ok:false,error:'no-uid',hint:'请传入B站用户 UID（space.bilibili.com/<uid> 的数字）'};const target='https://space.bilibili.com/'+uid+'/video';if(location.href.indexOf(uid)<0){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&location.href.indexOf('/video')<0)await sleep(400);}await sleep(2000);const lim=Math.max(1,Math.min(Number(want('$limit'))||30,100));const collect=()=>{const byUrl=new Map();for(const a of document.querySelectorAll('a[href*=\"/video/BV\"]')){const m=(a.getAttribute('href')||'').match(/BV[0-9A-Za-z]+/);if(!m)continue;const url='https://www.bilibili.com/video/'+m[0];const t=(a.textContent||'').replace(/\\s+/g,' ').trim();const prev=byUrl.get(url);if(!prev||t.length>prev.title.length)byUrl.set(url,{title:t.slice(0,120),bvid:m[0],url:url});}return byUrl;};let byUrl=collect();const maxRounds=Math.max(4,Math.min(20,Math.ceil(lim/10)+3));for(let i=0;i<maxRounds&&byUrl.size<lim;i++){const before=byUrl.size;for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await sleep(150);}await sleep(900+Math.floor(Math.random()*300));byUrl=collect();if(byUrl.size>=lim)break;if(byUrl.size===before&&i>1)break;}window.scrollTo(0,0);await sleep(400);return {ok:true,uid:uid,count:byUrl.size,videos:[...byUrl.values()].slice(0,lim)};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "滚动懒加载后按 BV 去重提取"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "bilibili.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "media.list",
+          "account.watch"
+        ],
+        "keywords": [
+          "B站",
+          "用户空间",
+          "投稿",
+          "UP主",
+          "时间线"
+        ],
+        "outputs": [
+          {
+            "name": "videos",
+            "type": "array",
+            "description": "title/bvid/url"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "B站UP主",
+          "空间投稿"
+        ]
+      }
+    },
+    {
+      "id": "bing-search",
+      "name": "必应搜索",
+      "version": "1.3.0",
+      "description": "在必应搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。",
+      "category": "search",
+      "tags": [
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回结果条数（默认 10，最多 100）"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 5,
+          "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.bing.com"
+          },
+          "note": "打开必应首页"
+        },
+        {
+          "name": "waitForSelector",
+          "args": {
+            "selector": "#sb_form_q",
+            "visible": true,
+            "timeoutMs": 20000
+          },
+          "note": "等待搜索框出现"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const deadline=Date.now()+15000;while(Date.now()<deadline&&document.readyState!==\"complete\")await new Promise(r=>setTimeout(r,200));const sels=[\"#sb_form_q\",\"input[name=q]\",\"input[type=search]\"];const start=Date.now();while(Date.now()-start<10000){let el=null;for(const s of sels){const c=document.querySelector(s);if(c&&c.offsetParent!==null){el=c;break;}}if(!el){const all=document.querySelectorAll(\"input[type=text],input[type=search],textarea,[contenteditable=true]\");for(const c of all){if(c.offsetParent!==null){el=c;break;}}}if(el){el.focus();el.setAttribute(\"data-bp-focus\",\"1\");return true;}await new Promise(r=>setTimeout(r,400));}return false;})()"
+          },
+          "expect": "true",
+          "note": "等待页面就绪后聚焦搜索框"
+        },
+        {
+          "name": "type",
+          "args": {
+            "value": "$query",
+            "typingDelayMs": 30
+          },
+          "note": "逐字输入关键词"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 500
+          },
+          "note": "等待输入事件处理"
+        },
+        {
+          "name": "press",
+          "args": {
+            "key": "Enter"
+          },
+          "note": "提交搜索"
+        },
+        {
+          "name": "waitForURL",
+          "args": {
+            "pattern": "bing.com/search",
+            "partial": true,
+            "timeoutMs": 20000
+          },
+          "note": "等待结果页加载"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@results",
+            "rootSelectors": [
+              "#b_results"
+            ],
+            "linkSelector": "li.b_algo h2 a",
+            "minResults": 3,
+            "limit": "$limit",
+            "textLimit": 6000,
+            "maxPages": "$maxPages",
+            "nextSelector": "a.sb_pagN"
+          },
+          "note": "抓取搜索结果"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "bing.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "web.search"
+        ],
+        "keywords": [
+          "必应",
+          "bing",
+          "搜索",
+          "search",
+          "microsoft"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number",
+            "description": "返回结果条数"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "搜索结果列表，每项含title和url"
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "结果页纯文本摘要"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "bing",
+          "ms-search"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "browserpilot-example-prompt",
+      "name": "示例 Prompt 模板",
+      "version": "1.1.0",
+      "description": "把输入主题整理为一个不执行网页动作的示例提示词。",
+      "category": "generic",
+      "tags": [
+        "ai"
+      ],
+      "inputs": [
+        {
+          "name": "topic",
+          "type": "string",
+          "required": true,
+          "description": "要处理的主题"
+        }
+      ],
+      "steps": "prompt",
+      "body": "请围绕以下主题继续处理：$topic",
+      "scope": {
+        "sites": []
+      },
+      "discovery": {
+        "intents": [
+          "prompt.compose",
+          "registry.verify"
+        ],
+        "keywords": [
+          "示例",
+          "prompt",
+          "模板",
+          "registry"
+        ],
+        "outputs": [
+          {
+            "name": "prompt",
+            "type": "string",
+            "description": "拼装后的提示词"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "example-prompt"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "chatgpt-ask",
+      "name": "ChatGPT 提问",
+      "version": "1.3.1",
+      "description": "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。需要登录 ChatGPT 账号。",
+      "category": "ai-chat",
+      "tags": [
+        "ai"
+      ],
+      "inputs": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true,
+          "description": "要问的问题"
+        },
+        {
+          "name": "tabId",
+          "type": "number",
+          "required": false,
+          "description": "已打开的 ChatGPT 标签；提供则复用，不再新开"
+        },
+        {
+          "name": "responseSelector",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "回复容器 CSS 选择器；留空则取整页文本"
+        },
+        {
+          "name": "conversationUrl",
+          "type": "url",
+          "required": false,
+          "description": "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://chatgpt.com/"
+          },
+          "skipWhenParam": "tabId",
+          "note": "打开 ChatGPT（新对话；续问场景下下一步会直跳 conversationUrl）"
+        },
+        {
+          "name": "switch_tab",
+          "args": {
+            "visible": true
+          },
+          "note": "激活目标标签（流式回复需要前台渲染；该步显式请求可见）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$conversationUrl');if(!target)return {ok:true,skipped:'fresh-chat'};if(!location.href.startsWith(target)){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!location.href.startsWith(target))await new Promise(r=>setTimeout(r,400));}await new Promise(r=>setTimeout(r,3000));return {ok:true,navigated:true,url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "会话直跳：传入 conversationUrl 时直接导航到该会话（不走新建提问路径）；URL 随回合更新，每次追问后记录返回的最新 url"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{for(let i=0;i<40;i++){const pm=document.querySelector('.ProseMirror[contenteditable=\"true\"]')||document.querySelector('#prompt-textarea .ProseMirror');if(pm&&pm.offsetParent){return {ok:true,ready:true};}await new Promise(r=>setTimeout(r,500));}return {ok:false,reason:'editor_not_found'};})()"
+          },
+          "note": "等待 ProseMirror 编辑器就绪（最多 20s）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@verifyConv",
+            "expected": "$conversationUrl"
+          },
+          "note": "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）",
+          "expect": "__BP_CONV_OK__"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@write",
+            "mode": "chatgpt"
+          },
+          "note": "写入问题并记录回复基线（ProseMirror）"
+        },
+        {
+          "name": "press",
+          "args": {
+            "key": "Enter"
+          },
+          "note": "发送：@write 后 ProseMirror 仍聚焦，Enter 直接触发发送（CDP 坐标点击在新版页面被遮挡层拦截，已弃用）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const t0=Date.now();let cleared=false;while(Date.now()-t0<12000){const pm=document.querySelector('.ProseMirror[contenteditable=\"true\"]');const len=pm?(pm.textContent||'').trim().length:null;if(len===0){cleared=true;break;}await new Promise(r=>setTimeout(r,500));}if(!cleared)return {ok:false,error:'send-failed',hint:'点击发送后 12s 输入框未清空——消息可能未发出，不要继续收集回复'};return {ok:true,cleared:true};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "ChatGPT 发送验证：输入框清空=发送成功；12s 未清空快速失败（防静默无效发送）"
+        },
+        {
+          "name": "wait_dom_idle",
+          "args": {
+            "idleMs": 4000,
+            "timeoutMs": 180000
+          },
+          "note": "流式输出静默等待（MutationObserver）；idle:false=超时仍有变化"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@chatCollect",
+            "mode": "chatgpt"
+          },
+          "note": "回收回复文本"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "chatgpt.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "ai.chat",
+          "ask",
+          "question"
+        ],
+        "keywords": [
+          "ChatGPT",
+          "AI",
+          "聊天",
+          "提问",
+          "chat",
+          "ask",
+          "GPT"
+        ],
+        "outputs": [
+          {
+            "name": "text",
+            "type": "string",
+            "description": "ChatGPT 回复文本"
+          },
+          {
+            "name": "images",
+            "type": "array",
+            "description": "回复中的图片 URL 列表"
+          },
+          {
+            "name": "url",
+            "type": "string",
+            "description": "当前会话 URL（可用于续问）"
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "description": "页面标题"
+          }
+        ],
+        "risk": "write",
+        "aliases": [
+          "chatgpt-ask",
+          "chatgpt-chat"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "cls-telegraph",
+      "name": "财联社电报",
+      "version": "1.1.0",
+      "description": "抓取财联社电报页最新快讯（时间/标题/正文），返回指定条数（默认 20，最多 100；滚动加载）。无需登录。",
+      "category": "finance",
+      "tags": [
+        "finance",
+        "news"
+      ],
+      "inputs": [
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 20,
+          "description": "最多条数（1-50）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.cls.cn/telegraph"
+          },
+          "note": "打开财联社电报页"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 3500
+          },
+          "note": "SPA 渲染等待（首屏较慢）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{await new Promise(r=>setTimeout(r,1500));const lim=Math.max(1,Math.min(Number('$limit')||20,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const extract=()=>[...document.querySelectorAll('.p-t-20.p-b-20')].map(it=>{const t=(it.innerText||'').replace(/\\n+/g,' ').trim();const tm=t.match(/^(\\d{2}:\\d{2}:\\d{2})/);const tiM=t.match(/【([^】]+)】/);return {time:tm?tm[1]:null,title:tiM?tiM[1]:null,content:t.slice(0,500)};}).filter(x=>x.time);let list=extract();for(let i=0;i<15&&list.length<lim;i++){const before=list.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));list=extract();if(list.length>=lim)break;if(list.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {ok:true,count:list.length,items:list.slice(0,lim),loaded:list.length};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.count",
+              "min": 5
+            }
+          ],
+          "note": "抓取电报条目（.p-t-20.p-b-20，时间+【标题】+正文）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "cls.cn"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "finance.flash",
+          "news.flash"
+        ],
+        "keywords": [
+          "财联社",
+          "cls",
+          "电报",
+          "快讯",
+          "flash news"
+        ],
+        "outputs": [
+          {
+            "name": "items",
+            "type": "array",
+            "description": "time/title/content"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "财联社快讯",
+          "cls 电报"
+        ]
+      }
+    },
+    {
+      "id": "deepseek-ask",
+      "name": "DeepSeek 提问",
+      "version": "1.3.1",
+      "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。支持 conversationUrl 续问（同一会话多轮）。需要浏览器已有 DeepSeek 登录态。",
+      "category": "ai-chat",
+      "tags": [
+        "ai"
+      ],
+      "inputs": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true,
+          "description": "要问的问题"
+        },
+        {
+          "name": "conversationUrl",
+          "type": "url",
+          "required": false,
+          "description": "会话地址（上一次返回的 url）；传入则在同一会话中续问，不传则开新对话"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://chat.deepseek.com/"
+          },
+          "note": "打开 DeepSeek（新对话；续问场景下下一步会跳到 conversationUrl）"
+        },
+        {
+          "name": "switch_tab",
+          "args": {
+            "visible": true
+          },
+          "note": "激活 DeepSeek 标签（流式回复需要前台渲染；该步显式请求可见）"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 3000
+          },
+          "note": "应用加载等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$conversationUrl');if(!target)return {ok:true,skipped:'new-conversation'};if(!/a\\/chat\\/s\\//.test(location.href)){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!/a\\/chat\\/s\\//.test(location.href))await new Promise(r=>setTimeout(r,400));}let rendered=false;const t1=Date.now();while(Date.now()-t1<15000){if(document.querySelectorAll('.ds-markdown').length>0){rendered=true;break;}await new Promise(r=>setTimeout(r,500));}await new Promise(r=>setTimeout(r,1500));return {ok:true,navigated:true,url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "续问导航：跳转 conversationUrl 并等会话内容渲染（.ds-markdown 出现）后才允许写入——3s 内写入会被 DeepSeek 当成新对话"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@write",
+            "mode": "textarea"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "textarea 原语写入 prompt（React native setter + input 事件）"
+        },
+        {
+          "name": "press",
+          "args": {
+            "key": "Enter"
+          },
+          "note": "发送（textarea 聚焦状态）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const t0=Date.now();let cleared=false;while(Date.now()-t0<12000){const ta=document.querySelector('textarea');const len=ta?(ta.value||'').length:null;if(len===0){cleared=true;break;}await new Promise(r=>setTimeout(r,500));}if(!cleared)return {ok:false,error:'send-failed',hint:'Enter 后 12s 输入框未清空——消息可能未发出'};return {ok:true,cleared:true};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "发送验证：Enter 后输入框清空才算发出；12s 未清空快速失败"
+        },
+        {
+          "name": "wait_dom_idle",
+          "args": {
+            "idleMs": 4000,
+            "timeoutMs": 120000
+          },
+          "note": "流式输出静默等待（MutationObserver）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const base=window.__bpMdCount||0;const getText=()=>{const md=[...document.querySelectorAll('.ds-markdown')];return md.length>base?((md[md.length-1].textContent||'').trim()):'';};let last=getText();let stable=0;const start=Date.now();while(Date.now()-start<90000){await new Promise(r=>setTimeout(r,1500));const cur=getText();if(cur&&cur===last){stable+=1500;if(stable>=6000)break;}else{last=cur;stable=0;}}const ta=document.querySelector('textarea');if(!last)return {ok:false,error:'send-failed',hint:'回复未开始渲染（消息可能未发出）'};return {ok:true,text:last.slice(0,8000),len:last.length,inputCleared:ta?(ta.value||'').length===0:null,url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "提取 + 文本稳定复核（6s 无增长才算完）：wait_dom_idle 可能被流中停顿提前触发，此步兜底防截断"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "chat.deepseek.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "ai.ask"
+        ],
+        "keywords": [
+          "deepseek",
+          "AI",
+          "提问",
+          "对话"
+        ],
+        "outputs": [
+          {
+            "name": "text",
+            "type": "string",
+            "description": "回复文本（≤8000 字符）"
+          },
+          {
+            "name": "url",
+            "type": "url",
+            "description": "对话地址（可用于续问上下文）"
+          }
+        ],
+        "risk": "write",
+        "aliases": [
+          "DeepSeek 对话",
+          "ds 提问"
+        ]
+      }
+    },
+    {
+      "id": "gemini-ask",
+      "name": "Gemini 提问",
+      "version": "1.1.0",
+      "description": "向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。需要登录 Google 账号，且所在地区需支持 Gemini 聊天功能。",
+      "category": "ai-chat",
+      "tags": [
+        "ai"
+      ],
+      "inputs": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true,
+          "description": "要问的问题"
+        },
+        {
+          "name": "tabId",
+          "type": "number",
+          "required": false,
+          "description": "已打开的 Gemini 标签；提供则复用，不再新开"
+        },
+        {
+          "name": "responseSelector",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "回复容器 CSS 选择器；留空则取整页文本"
+        },
+        {
+          "name": "conversationUrl",
+          "type": "url",
+          "required": false,
+          "description": "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://gemini.google.com/app"
+          },
+          "skipWhenParam": "tabId",
+          "note": "打开 Gemini"
+        },
+        {
+          "name": "switch_tab",
+          "args": {
+            "visible": true
+          },
+          "note": "激活目标标签（流式回复需要前台渲染；该步显式请求可见）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{for(let i=0;i<40;i++){const ed=document.querySelector('rich-textarea .ql-editor')||document.querySelector('.ql-editor[contenteditable=\"true\"]')||document.querySelector('.ql-editor')||document.querySelector('[contenteditable=true][role=\"textbox\"]');if(ed&&ed.offsetParent){return {ok:true,ready:true};}await new Promise(r=>setTimeout(r,500));}return {ok:false,reason:'editor_not_found'};})()"
+          },
+          "note": "等待 Quill 编辑器就绪（最多 20s）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@verifyConv",
+            "expected": "$conversationUrl"
+          },
+          "expect": "__BP_CONV_OK__",
+          "note": "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@write",
+            "mode": "gemini"
+          },
+          "note": "写入问题并记录回复基线（Quill API）"
+        },
+        {
+          "name": "click",
+          "args": {
+            "selector": "button[aria-label='Send message']"
+          },
+          "note": "点击发送按钮"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const t0=Date.now();let cleared=false;while(Date.now()-t0<12000){const ed=document.querySelector('.ql-editor');const len=ed?(ed.textContent||'').trim().length:null;if(len===0){cleared=true;break;}await new Promise(r=>setTimeout(r,500));}if(!cleared)return {ok:false,error:'send-failed',hint:'点击发送后 12s 输入框未清空——消息可能未发出，不要继续收集回复'};return {ok:true,cleared:true};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "Gemini 发送验证：输入框清空=发送成功；12s 未清空快速失败（防静默无效发送）"
+        },
+        {
+          "name": "wait_dom_idle",
+          "args": {
+            "idleMs": 4000,
+            "timeoutMs": 180000
+          },
+          "note": "流式输出静默等待（MutationObserver）；idle:false=超时仍有变化"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@chatCollect",
+            "mode": "gemini"
+          },
+          "note": "回收回复文本（取基线后新增的最后一条回复）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "gemini.google.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "ai.chat",
+          "ask",
+          "question"
+        ],
+        "keywords": [
+          "Gemini",
+          "AI",
+          "聊天",
+          "提问",
+          "chat",
+          "ask",
+          "Google"
+        ],
+        "outputs": [
+          {
+            "name": "text",
+            "type": "string",
+            "description": "Gemini 回复文本"
+          },
+          {
+            "name": "images",
+            "type": "array",
+            "description": "回复中的图片 URL 列表"
+          },
+          {
+            "name": "url",
+            "type": "string",
+            "description": "当前会话 URL（可用于续问）"
+          },
+          {
+            "name": "title",
+            "type": "string",
+            "description": "页面标题"
+          }
+        ],
+        "risk": "write",
+        "aliases": [
+          "gemini-ask",
+          "gemini-chat"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "google-finance-search",
+      "name": "Google Finance Search",
+      "version": "1.1.0",
+      "description": "Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.",
+      "category": "finance",
+      "tags": [
+        "finance",
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Ticker symbol (e.g. AAPL) or company name (e.g. Apple)"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.google.com/finance"
+          },
+          "note": "Open Google Finance home page."
+        },
+        {
+          "name": "waitForSelector",
+          "args": {
+            "selector": "div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]",
+            "timeoutMs": 15000
+          },
+          "note": "Wait for the search launcher button to appear."
+        },
+        {
+          "name": "click",
+          "args": {
+            "selector": "div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]"
+          },
+          "note": "Click the search launcher to reveal the search textarea."
+        },
+        {
+          "name": "waitForSelector",
+          "args": {
+            "selector": "textarea[aria-label=\"Ask about this or search\"]",
+            "timeoutMs": 10000
+          },
+          "note": "Wait for the search textarea to become visible."
+        },
+        {
+          "name": "fill",
+          "args": {
+            "selector": "textarea[aria-label=\"Ask about this or search\"]",
+            "value": "$query"
+          },
+          "note": "Fill the search query."
+        },
+        {
+          "name": "press",
+          "args": {
+            "key": "Enter",
+            "selector": "textarea[aria-label=\"Ask about this or search\"]"
+          },
+          "note": "Submit the search query."
+        },
+        {
+          "name": "waitForURL",
+          "args": {
+            "pattern": "finance/beta/quote",
+            "partial": true,
+            "timeoutMs": 20000
+          },
+          "note": "Wait for navigation to a quote-result route (must not already match the homepage)."
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "timeoutMs": 2000
+          },
+          "note": "Wait for quote page content to render after navigation."
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(function(){var t=document.title||\"\";var u=window.location.href;var text=(document.body.innerText||\"\").slice(0,6000).trim();var ticker=null;var company=null;var price=null;var change=null;var um=u.match(/\\/quote\\/([A-Z]+):([A-Z]+)/);if(um)ticker=um[1];var pm=text.match(/\\$([\\d,]+\\.\\d{2})\\narrow_upward\\n\\+([\\d.]+)%/);if(pm){price=\"$\"+pm[1];change=\"+\"+pm[2]+\"%\";}else{var pd=text.match(/\\$([\\d,]+\\.\\d{2})\\narrow_downward\\n-([\\d.]+)%/);if(pd){price=\"$\"+pd[1];change=\"-\"+pd[2]+\"%\";}}var lines=text.split(\"\\n\");for(var i=0;i<lines.length;i++){if(lines[i].trim()===price&&i>0){company=lines[i-1].trim();break;}}var results=[];var links=[];if(ticker){results.push({ticker:ticker,company:company,price:price,change:change,url:u});links.push(u);}return {count:results.length,results:results,links:links,text:text};})()"
+          },
+          "note": "Extract the current stock quote from the page title and URL."
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "google.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "finance.search",
+          "finance.quote",
+          "finance.lookup"
+        ],
+        "keywords": [
+          "google finance",
+          "stock",
+          "ticker",
+          "quote",
+          "finance",
+          "investing"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number",
+            "description": "Number of quote results returned."
+          },
+          {
+            "name": "results",
+            "type": "array",
+            "description": "Quote results, each with ticker, company, price, change, and url."
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "Visible text from the results page (max 6000 chars)."
+          }
+        ],
+        "risk": "read",
+        "alternatives": [],
+        "replaces": [],
+        "aliases": [
+          "gfinance",
+          "google-finance",
+          "stock-search"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "google-scholar-search",
+      "name": "Google Scholar Search",
+      "version": "1.3.0",
+      "description": "Search Google Scholar for academic papers and return a specified number of results (default 10, up to 100; auto-paginates with polite delays).",
+      "category": "search",
+      "tags": [
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Academic search query (paper title, keywords, author, etc.)"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "Number of results to return (default 10, max 100)"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 5,
+          "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://scholar.google.com"
+          },
+          "note": "Open Google Scholar home page."
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@focus",
+            "selectors": [
+              "#gs_hdr_tsi",
+              "input[name=q]",
+              "input[type=text]"
+            ]
+          },
+          "expect": "true",
+          "note": "Focus the search input and mark it as [data-bp-focus]."
+        },
+        {
+          "name": "fill",
+          "args": {
+            "selector": "[data-bp-focus]",
+            "value": "$query"
+          },
+          "note": "Fill the academic search query."
+        },
+        {
+          "name": "press",
+          "args": {
+            "key": "Enter"
+          },
+          "note": "Submit the search."
+        },
+        {
+          "name": "waitForURL",
+          "args": {
+            "pattern": "scholar.google.com/scholar",
+            "partial": true,
+            "timeoutMs": 20000
+          },
+          "note": "Wait for the result page URL."
+        },
+        {
+          "name": "screenshot",
+          "args": {
+            "format": "jpeg"
+          },
+          "note": "Visual verification of results page state."
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@results",
+            "rootSelectors": [
+              "#gs_res_ccl",
+              "#gs_res_ccl_mid"
+            ],
+            "linkSelector": ".gs_rt a",
+            "minResults": 3,
+            "limit": "$limit",
+            "textLimit": 6000,
+            "maxPages": "$maxPages",
+            "nextSelector": "a:has(.gs_ico_nav_next)"
+          },
+          "note": "Collect academic result links and page text."
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "scholar.google.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search.academic",
+          "search.scholar",
+          "search.web"
+        ],
+        "keywords": [
+          "google scholar",
+          "academic",
+          "paper",
+          "research",
+          "scholar",
+          "citation",
+          "journal",
+          "search"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number",
+            "description": "Number of results returned."
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "Search results with title and url."
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "Visible text from the results container, including snippets."
+          }
+        ],
+        "risk": "read",
+        "replaces": [
+          "search-demo"
+        ],
+        "aliases": [
+          "scholar",
+          "gs-search",
+          "academic-search"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "groq-transcribe",
+      "name": "视频语音转文本（Groq Whisper）",
+      "version": "1.1.1",
+      "description": "转写视频的语音为文本（B站视频页链接或媒体直链）→ 抽音轨压缩为 48kbps 单声道 MP3 → Groq Whisper 转写。需要先在插件弹窗配置 Groq API Key。",
+      "category": "media",
+      "tags": [
+        "video",
+        "ai"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": true,
+          "description": "B站视频页链接（bilibili.com/video/BV...）或媒体直链；B站页会自动提取音轨"
+        },
+        {
+          "name": "language",
+          "type": "string",
+          "required": false,
+          "description": "语言代码（zh/en/ja...），可选，通常自动检测即可"
+        },
+        {
+          "name": "model",
+          "type": "string",
+          "required": false,
+          "default": "whisper-large-v3-turbo",
+          "description": "Groq Whisper 模型"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "groq_transcribe",
+          "args": {
+            "url": "$url",
+            "language": "$language"
+          },
+          "expectations": [
+            {
+              "path": "transcribed",
+              "equals": true
+            }
+          ],
+          "note": "B站视频页 URL → SW 自动提取音轨直链 → 拉流 → offscreen 压缩 → Groq 转写"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "bilibili.com",
+          "tiktok.com",
+          "youtube.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "audio.transcribe",
+          "video.transcript"
+        ],
+        "keywords": [
+          "语音转文字",
+          "转写",
+          "transcribe",
+          "whisper",
+          "groq",
+          "字幕"
+        ],
+        "outputs": [
+          {
+            "name": "text",
+            "type": "string",
+            "description": "完整转写文本"
+          },
+          {
+            "name": "durationSec",
+            "type": "number"
+          },
+          {
+            "name": "audioKB",
+            "type": "number"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "语音转文字",
+          "视频转文字",
+          "whisper 转写"
+        ]
+      }
+    },
+    {
+      "id": "guba-article",
+      "name": "股吧帖子爬取",
+      "version": "1.1.0",
+      "description": "爬取一篇股吧帖子的正文（标题+内容，最多8000字符）。无需登录。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "股吧帖子链接（guba.eastmoney.com/news,代码,帖子id.html）；不填则在当前标签页爬取"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/guba\\.eastmoney\\.com\\/news,/.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-post-page',hint:'请传入股吧帖子链接（guba.eastmoney.com/news,代码,帖子id.html）'};await new Promise(r=>setTimeout(r,1500));const body=document.querySelector('#newscontent')||document.querySelector('.newspage');if(!body)return {ok:false,error:'no-content',hint:'正文未渲染或帖子已被删除'};const t=document.querySelector('.news_title')||document.querySelector('h1');const postTime=(document.body.innerText.match(/\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}/)||[''])[0];const replyM=(document.body.innerText.match(/(?:全部回复|共\\s*)(\\d+)\\s*(?:条|条回复|回复)/)||[]);return {ok:true,title:((t?t.textContent.trim():'')||document.title.split('_')[0].trim()),postTime:postTime||null,replies:replyM?parseInt(replyM[1]):null,content:body.innerText.replace(/\\s+\\n/g,'\\n').trim().slice(0,8000),url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "提取正文 + 发帖时间 + 回复数（页面可见数字，尽力而为）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "guba.eastmoney.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "crawl",
+          "finance.forum"
+        ],
+        "keywords": [
+          "股吧",
+          "guba",
+          "帖子正文",
+          "爬取"
+        ],
+        "outputs": [
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "content",
+            "type": "string"
+          },
+          {
+            "name": "url",
+            "type": "url"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "股吧帖子",
+          "股吧正文"
+        ]
+      }
+    },
+    {
+      "id": "guba-list",
+      "name": "个股吧帖子流",
+      "version": "1.1.0",
+      "description": "按股票代码打开个股吧列表页，返回指定条数（默认 30，最多 100）。无需登录。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "code",
+          "type": "string",
+          "required": true,
+          "description": "6 位股票代码（如 600519）；或用 params.url 传含代码的链接"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 30,
+          "description": "最多条数"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 3,
+          "description": "最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "http://guba.eastmoney.com/list,$code.html"
+          },
+          "note": "打开个股吧列表页（默认按时间）"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 2500
+          },
+          "note": "列表渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const code=(want('$code')||(want('$url').match(/(\\d{6})/)||[])[1]||'');if(!code)return {ok:false,error:'no-code',hint:'请传 6 位股票代码（params.code）'};const lim=Math.max(1,Math.min(Number(want('$limit'))||30,100));const maxP=Math.max(1,Math.min(Number(want('$maxPages'))||3,5));const extract=(root)=>{const seen=new Set();return [...root.querySelectorAll('.listitem, tr[class*=listitem], [id*=tr_]')].map(r=>{const a=r.querySelector('a[href*=news],a[href*=caifuhao],a[href]');const nums=(r.innerText||'').match(/[\\d.]+\\s*[万]?/g)||[];const timeM=(r.textContent||'').match(/\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}/);return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100),url:a.href.startsWith('//')?'https:'+a.href:a.href,reads:nums[0]||null,replies:nums[1]||null,time:timeM?timeM[0]:null}:null;}).filter(x=>x&&x.url&&!seen.has(x.url)&&seen.add(x.url));};await sleep(800);let posts=[];const start=Date.now();while(Date.now()-start<12000){posts=extract(document);if(posts.length>=3)break;await sleep(500);}let pages=1;while(posts.length<lim&&pages<maxP){const next='https://guba.eastmoney.com/list,'+code+'_'+(pages+1)+'.html';await sleep(1400+Math.floor(Math.random()*700));let html=null;try{const r=await fetch(next,{credentials:'include'});if(!r.ok)break;html=await r.text();}catch{break;}if(!html||html.length<500)break;let doc=null;try{doc=new DOMParser().parseFromString(html,'text/html');}catch{break;}const seen=new Set(posts.map(x=>x.url));const added=extract(doc);let grew=0;for(const it of added){if(posts.length>=lim)break;if(!seen.has(it.url)){posts.push(it);grew++;}}pages++;if(!grew)break;}return {ok:true,code:code,count:posts.length,posts:posts.slice(0,lim),pages:pages,sort:'time'};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "列表行解析：标题/链接/阅读/评论/时间"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "guba.eastmoney.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "finance.forum",
+          "stock.posts"
+        ],
+        "keywords": [
+          "股吧",
+          "个股吧",
+          "帖子列表",
+          "最新帖"
+        ],
+        "outputs": [
+          {
+            "name": "posts",
+            "type": "array",
+            "description": "title/url/reads/replies/time"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "股吧列表",
+          "个股吧"
+        ]
+      }
+    },
+    {
+      "id": "guba-search",
+      "name": "股吧搜索",
+      "version": "1.2.0",
+      "description": "在东方财富股吧搜索关键词，返回指定条数帖子（标题+链接+摘要，默认 15，最多 100）。无需登录。",
+      "category": "finance",
+      "tags": [
+        "finance",
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词（股票名/话题）"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "排序：latest=按时间；留空=默认（相关度）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 15,
+          "description": "返回帖子条数（默认 15，最多 100）"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 3,
+          "description": "最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://so.eastmoney.com/tiezi/s?keyword=$query"
+          },
+          "note": "打开股吧帖子搜索（so.eastmoney.com/tiezi）"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 2500
+          },
+          "note": "渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const keyword=want('$query');const lim=Math.max(1,Math.min(Number(want('$limit'))||15,100));const maxP=Math.max(1,Math.min(Number(want('$maxPages'))||3,5));const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){for(let att=0;att<6&&!sorted;att++){const t=[...document.querySelectorAll('a')].find(a=>/按时间排序/.test(a.textContent||''));if(t){t.click();sorted=true;await sleep(2500);}else{await sleep(800);}}}const extract=(root)=>{const seen=new Set();return [...root.querySelectorAll('.article_item')].map(d=>{const a=d.querySelector('a[href]');const c=d.querySelector('.article_content');return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:a.href,time:c?(c.textContent||'').trim().slice(0,20):null,excerpt:(d.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100)}:null;}).filter(x=>x&&x.url&&/guba\\.eastmoney\\.com\\/(news|list)/.test(x.url)&&!seen.has(x.url)&&seen.add(x.url));};let links=[];const start=Date.now();while(Date.now()-start<12000){links=extract(document);if(links.length>=3)break;await sleep(500);}let pages=1;const base='https://so.eastmoney.com/tiezi/s?keyword='+encodeURIComponent(keyword||'');while(links.length<lim&&pages<maxP){const next=base+'&page='+(pages+1);await sleep(1400+Math.floor(Math.random()*800));let html=null;try{const r=await fetch(next,{credentials:'include'});if(!r.ok)break;html=await r.text();}catch{break;}if(!html||html.length<500)break;let doc=null;try{doc=new DOMParser().parseFromString(html,'text/html');}catch{break;}const seen=new Set(links.map(x=>x.url));const added=extract(doc);let grew=0;for(const it of added){if(links.length>=lim)break;if(!seen.has(it.url)){links.push(it);grew++;}}pages++;if(!grew)break;}return {sort:sorted?'time':'default',count:links.length,links:links.slice(0,lim),pages:pages,text:(document.body.innerText||'').slice(0,2500).trim()};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.count",
+              "min": 3
+            }
+          ],
+          "note": "抓取帖子结果（sort=latest 时点击页面「按时间排序」）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "eastmoney.com",
+          "guba.eastmoney.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "finance.forum"
+        ],
+        "keywords": [
+          "股吧",
+          "东方财富",
+          "guba",
+          "股吧搜索",
+          "帖子搜索"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "title/url/excerpt"
+          },
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "东方财富股吧",
+          "guba 搜索"
+        ]
+      }
+    },
+    {
+      "id": "jiuyangongshe-article",
+      "name": "韭研公社文章爬取",
+      "version": "1.1.2",
+      "description": "爬取一篇韭研公社文章的标题与正文（最多8000字符）。需要微信登录态；积分/权限内容可能仅返回可见部分。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "文章链接（jiuyangongshe.com/a/<id>）；不填则在当前标签页爬取"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/jiuyangongshe\\.com\\/a\\//.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入公社文章链接（jiuyangongshe.com/a/<id>）'};await new Promise(r=>setTimeout(r,2500));for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,800));const body=document.querySelector('.detail-container');if(!body)return {ok:false,error:'no-content',hint:'正文未渲染，可能需要登录或积分权限'};const t=document.title.replace(/-?\\s*韭研公社.*$/,'').trim();const rawNums=[...body.querySelectorAll('.badge-box')].map(x=>parseInt((x.textContent||'').trim()));const nums=rawNums.filter(n=>!isNaN(n));return {ok:true,title:t,engagement:nums.length>=3?{shares:nums[0],replies:nums[1],likes:nums[2]}:null,content:body.innerText.replace(/\\n{3,}/g,'\\n\\n').trim().slice(0,8000),url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "提取正文 + 页面互动数（badge-box：分享/评论/赞）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "jiuyangongshe.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "crawl",
+          "finance.research"
+        ],
+        "keywords": [
+          "韭研公社",
+          "韭研公社",
+          "公社文章",
+          "爬取"
+        ],
+        "outputs": [
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "content",
+            "type": "string"
+          },
+          {
+            "name": "url",
+            "type": "url"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "韭研公社文章",
+          "公社爬取"
+        ]
+      }
+    },
+    {
+      "id": "jiuyangongshe-comments",
+      "name": "韭研公社评论爬取",
+      "version": "1.1.0",
+      "description": "爬取一篇韭研公社文章下的评论，返回指定条数（默认 30，最多 100；滚动加载）。需要微信登录态。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "文章链接；不填则用当前标签页"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 30,
+          "description": "最多抓取条数（1-100）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/jiuyangongshe\\.com\\/a\\//.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入公社文章链接（jiuyangongshe.com/a/<id>）'};const lim=Math.max(1,Math.min(Number(want('$limit'))||30,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const extract=()=>[...document.querySelectorAll('.comment-content')].map(n=>{const t=(n.innerText||'').replace(/\\n+/g,' ').trim();const user=(t.split('只看TA')[0]||'').trim().slice(0,40);const timeM=t.match(/((昨天|今天)?\\s*[\\d-]{5,10}\\s*\\d{2}:\\d{2})/);return {raw:t.slice(0,400),user:user||null,time:timeM?timeM[1].trim():null};});await sleep(1000);let comments=extract();for(let i=0;i<20&&comments.length<lim;i++){const before=comments.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));comments=extract();if(comments.length>=lim)break;if(comments.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {ok:true,fetched:comments.length,total:comments.length>=lim?'>='+lim:comments.length,comments:comments.slice(0,lim),url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "滚动触发懒加载后抓取 .comment-content"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "jiuyangongshe.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "crawl",
+          "finance.comments"
+        ],
+        "keywords": [
+          "韭研公社",
+          "韭研公社",
+          "评论"
+        ],
+        "outputs": [
+          {
+            "name": "comments",
+            "type": "array",
+            "description": "user/time/raw"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "韭研公社评论",
+          "公社评论"
+        ]
+      }
+    },
+    {
+      "id": "jiuyangongshe-search",
+      "name": "韭研公社搜索",
+      "version": "1.3.0",
+      "description": "在韭研公社搜索关键词，返回指定条数文章（标题+链接，默认 15，最多 100）。需要微信登录态。",
+      "category": "finance",
+      "tags": [
+        "finance",
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "排序：latest=按时间；留空=按热度"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 15,
+          "description": "返回文章条数（默认 15，最多 100）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.jiuyangongshe.com/search/fa3409439e2b45c79176c5eebf75a4f8?k=$query"
+          },
+          "note": "打开站内搜索结果页（搜索路径 token 为站内固定值，k 参数生效，2026-09 真机验证）"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 3000
+          },
+          "note": "SPA 渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){const t=[...document.querySelectorAll('a,div,span')].find(e=>e.children.length<=1&&/^\\s*按时间\\s*$/.test(e.textContent||''));if(t){t.click();sorted=true;await sleep(2500);}}const lim=Math.max(1,Math.min(Number(want('$limit'))||15,100));const extract=()=>{const seen=new Set();return [...document.querySelectorAll('a[href*=\"/a/\"]')].map(a=>{const url=location.origin+(a.getAttribute('href')||'');const title=(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120);return {title:title,url:url};}).filter(x=>x.title.length>3&&!seen.has(x.url)&&seen.add(x.url));};let posts=extract();for(let i=0;i<15&&posts.length<lim;i++){const before=posts.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));posts=extract();if(posts.length>=lim)break;if(posts.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {sort:sorted?'time':'hot',count:posts.length,links:posts.slice(0,lim),loaded:posts.length,text:(document.body.innerText||'').slice(0,2000).trim()};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.count",
+              "min": 3
+            }
+          ],
+          "note": "抓取 /a/ 文章链接（搜索页互动条仅个别卡片渲染，站点不提供稳定数据→省略字段）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "jiuyangongshe.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "finance.research"
+        ],
+        "keywords": [
+          "韭研公社",
+          "jiuyangongshe",
+          "公社搜索"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "title/url"
+          },
+          {
+            "name": "text",
+            "type": "string"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "韭研公社"
+        ]
+      }
+    },
+    {
+      "id": "jiuyangongshe-user-timeline",
+      "name": "韭研公社账号时间线",
+      "version": "1.1.0",
+      "description": "抓取韭研公社作者主页的最新文章，返回指定条数（默认 15，最多 100；滚动加载）。需要微信登录态。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "uid",
+          "type": "string",
+          "required": true,
+          "description": "作者主页路径 /u/<hash> 中的 hash（在文章页点作者名可得）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 15,
+          "description": "最多条数"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.jiuyangongshe.com/u/$uid"
+          },
+          "note": "打开作者主页"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 3000
+          },
+          "note": "渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||15,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const extract=()=>{const seen=new Set();const posts=[];for(const a of document.querySelectorAll('a[href*=\"/a/\"]')){const href=a.getAttribute('href')||'';const url=location.origin+href;if(seen.has(url))continue;const t=(a.textContent||'').replace(/\\s+/g,' ').trim();if(t.length>3){seen.add(url);posts.push({title:t.slice(0,120),url:url});}}return posts;};let posts=extract();for(let i=0;i<15&&posts.length<lim;i++){const before=posts.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));posts=extract();if(posts.length>=lim)break;if(posts.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {ok:true,count:posts.length,posts:posts.slice(0,lim),loaded:posts.length};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "滚动触发懒加载后抓取文章流"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "jiuyangongshe.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "finance.timeline",
+          "account.watch"
+        ],
+        "keywords": [
+          "韭研公社",
+          "韭研公社",
+          "作者",
+          "大V",
+          "账号"
+        ],
+        "outputs": [
+          {
+            "name": "posts",
+            "type": "array",
+            "description": "title/url"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "韭研公社作者",
+          "公社大V"
+        ]
+      }
+    },
+    {
+      "id": "search",
+      "name": "Google Search",
+      "version": "1.1.0",
+      "description": "在 Google 搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。",
+      "category": "search",
+      "tags": [
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Search query"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回结果条数（默认 10，最多 100）"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 5,
+          "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.google.com"
+          },
+          "note": "Open Google homepage."
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@focus",
+            "selectors": [
+              "textarea[name='q']",
+              "input[name='q']",
+              "input[type='search']",
+              "input[type='text']"
+            ]
+          },
+          "expect": "true",
+          "note": "Wait for and focus the search input."
+        },
+        {
+          "name": "fill",
+          "args": {
+            "selector": "[data-bp-focus]",
+            "value": "$query"
+          },
+          "note": "Fill the search query."
+        },
+        {
+          "name": "press",
+          "args": {
+            "key": "Enter",
+            "selector": "[data-bp-focus]"
+          },
+          "note": "Submit the search."
+        },
+        {
+          "name": "waitForSelector",
+          "args": {
+            "selector": "#search,#rso,#center_col",
+            "visible": true,
+            "timeoutMs": 20000
+          },
+          "note": "Wait for results DOM, independent of regional domain."
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@results",
+            "rootSelectors": [
+              "#search",
+              "#rso",
+              "#center_col"
+            ],
+            "minResults": 3,
+            "limit": "$limit",
+            "textLimit": 6000,
+            "excludeUrlPrefixes": [
+              "/search?",
+              "/imgres",
+              "/preferences",
+              "/advanced_search",
+              "/intl/",
+              "/settings",
+              "/webhp",
+              "/maps",
+              "/shopping",
+              "/translate",
+              "/travel",
+              "/support",
+              "/policies",
+              "/accounts",
+              "https://www.google.com/search?",
+              "https://www.google.com/preferences",
+              "https://www.google.com/intl/",
+              "https://www.google.com/webhp"
+            ],
+            "maxPages": "$maxPages",
+            "nextSelector": "#pnnext"
+          },
+          "note": "抓取搜索结果（排除 Google 自家 UI 链接）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "google.com",
+          "google.com.hk",
+          "google.co.jp",
+          "google.co.uk"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "web.search"
+        ],
+        "keywords": [
+          "google",
+          "search",
+          "web search"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number",
+            "description": "Number of results returned"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "Result list, each with title and url"
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "Visible text from the result container"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "google",
+          "google-search"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "search-demo",
+      "name": "Search Demo Template",
+      "version": "1.1.0",
+      "description": "可复制的搜索适配示例：演示运行时模板选择器 + 指定条数/自动翻页。",
+      "category": "search",
+      "tags": [
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "Search keyword"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回结果条数（默认 10，最多 100）"
+        },
+        {
+          "name": "maxPages",
+          "type": "number",
+          "required": false,
+          "default": 5,
+          "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://www.google.com"
+          },
+          "note": "Open the target search engine home page."
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@focus",
+            "selectors": [
+              "textarea[name='q']",
+              "input[name='q']",
+              "input[type='search']",
+              "input[type='text']"
+            ]
+          },
+          "expect": "true",
+          "note": "Focus the search input and mark it as [data-bp-focus]."
+        },
+        {
+          "name": "fill",
+          "args": {
+            "selector": "[data-bp-focus]",
+            "value": "$query"
+          },
+          "note": "Fill the query."
+        },
+        {
+          "name": "press",
+          "args": {
+            "key": "Enter",
+            "selector": "[data-bp-focus]"
+          },
+          "note": "Submit the query."
+        },
+        {
+          "name": "waitForSelector",
+          "args": {
+            "selector": "#search,#rso,#center_col",
+            "visible": true,
+            "timeoutMs": 20000
+          },
+          "note": "Wait for the result DOM instead of assuming a regional Google hostname."
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "@results",
+            "rootSelectors": [
+              "#search",
+              "#rso",
+              "#center_col"
+            ],
+            "linkSelector": "a",
+            "minResults": 3,
+            "limit": "$limit",
+            "textLimit": 6000,
+            "maxPages": "$maxPages",
+            "nextSelector": "#pnnext"
+          },
+          "note": "Collect result links and page text."
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "google.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search.web",
+          "search.demo"
+        ],
+        "keywords": [
+          "search",
+          "demo",
+          "selectors",
+          "google"
+        ],
+        "outputs": [
+          {
+            "name": "links",
+            "type": "array",
+            "description": "Top result links with title and url."
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "Visible text from the result container."
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "google-selector-demo"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "stock-announcements",
+      "name": "个股公告",
+      "version": "1.1.0",
+      "description": "按股票代码抓取东方财富最新公告（标题/类型/日期/链接），返回指定条数（默认 20，最多 100）。无需登录。",
+      "category": "finance",
+      "tags": [
+        "finance",
+        "news"
+      ],
+      "inputs": [
+        {
+          "name": "code",
+          "type": "string",
+          "required": true,
+          "description": "6 位股票代码（如 600519）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 20,
+          "description": "最多条数（1-50）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://data.eastmoney.com/notices/stock/$code.html"
+          },
+          "note": "打开东财个股公告页"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 3000
+          },
+          "note": "渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{await new Promise(r=>setTimeout(r,800));const links=[...document.querySelectorAll('a[href*=\"/notices/detail/\"]')];const rows=links.map(a=>{const row=a.closest('tr')||a.closest('div');const txt=(row?row.innerText:'').replace(/\\s+/g,' ').trim();const dateM=txt.match(/\\d{4}-\\d{2}-\\d{2}/);const typeM=txt.match(/\\|([^|\\d][^|]*)\\|\\d{4}-\\d{2}-\\d{2}/);return {title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,140),url:location.origin+a.getAttribute('href'),type:typeM?typeM[1].trim():null,date:dateM?dateM[0]:null};});const seen=new Set();const list=rows.filter(x=>x.title.length>4&&!seen.has(x.url)&&seen.add(x.url)).slice(0,Math.max(1,Math.min(Number('$limit')||20,100)));return {ok:true,count:list.length,announcements:list};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "抓取 /notices/detail/ 公告行（标题/类型/日期）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "eastmoney.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "finance.announcements",
+          "stock.disclosure"
+        ],
+        "keywords": [
+          "公告",
+          "东财",
+          "announcements",
+          "信息披露",
+          "巨潮替代"
+        ],
+        "outputs": [
+          {
+            "name": "announcements",
+            "type": "array",
+            "description": "title/url/type/date"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "股票公告",
+          "公司公告"
+        ]
+      }
+    },
+    {
+      "id": "tiktok-video-download",
+      "name": "TikTok 视频下载",
+      "version": "1.0.0",
+      "description": "下载一个 TikTok 视频为 MP4 文件（页面内拉流落盘到浏览器下载目录）。需要浏览器可访问 TikTok；受限视频返回结构化错误。",
+      "category": "media",
+      "tags": [
+        "video",
+        "download"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": true,
+          "description": "TikTok 视频页链接（tiktok.com/@user/video/<id>）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "$url"
+          },
+          "note": "打开 TikTok 视频页"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 4000
+          },
+          "note": "SPA 渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isTik=()=>/tiktok\\.com\\/.+\\/video\\//.test(location.href);if(target&&location.href!==target&&!isTik()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isTik())await new Promise(r=>setTimeout(r,500));}if(!isTik())return {ok:false,error:'not-video-page',hint:'请传入 TikTok 视频链接（tiktok.com/@user/video/<id>）'};await new Promise(r=>setTimeout(r,3000));const ud=document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__');if(!ud)return {ok:false,error:'no-data',hint:'页面数据未渲染（可能需要登录或视频受限）'};const j=JSON.parse(ud.textContent);const detail=(j['__DEFAULT_SCOPE__']||{})['webapp.video-detail']||{};const vi=detail.itemInfo&&detail.itemInfo.itemStruct;if(!vi)return {ok:false,error:'restricted',statusCode:detail.statusCode||null,hint:'视频受限（如官方账号区域限制/私密视频）或需要登录'};const v=vi.video||{};const bi=(v.bitrateInfo||[]).sort((a,b)=>(b.Bitrate||0)-(a.Bitrate||0))[0];const playUrl=(bi&&bi.PlayAddr&&bi.PlayAddr.UrlList[0])||v.playAddr;if(!playUrl)return {ok:false,error:'no-play-url'};const t0=Date.now();const blob=await fetch(playUrl,{credentials:'include'}).then(r=>{if(!r.ok)throw new Error('HTTP '+r.status);return r.blob();});const author=((vi.author||{}).uniqueId)||'tiktok';const desc=(vi.desc||'').replace(/[\\\\/:*?\"<>|]/g,'_').trim().slice(0,60)||'tiktok';const filename=author+'_'+desc+'.mp4';const objUrl=URL.createObjectURL(blob);const a=document.createElement('a');a.href=objUrl;a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{a.remove();URL.revokeObjectURL(objUrl);},120000);return {ok:true,downloaded:true,filename:filename,sizeMB:Math.round(blob.size/1048576*10)/10,durationSec:v.duration,author:author,desc:(vi.desc||'').slice(0,60),url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "读 rehydration 数据 → 最高码率 playAddr → 页面内拉流 → 锚点另存"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "tiktok.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "video.download"
+        ],
+        "keywords": [
+          "tiktok",
+          "抖音国际版",
+          "视频下载",
+          "TikTok download"
+        ],
+        "outputs": [
+          {
+            "name": "filename",
+            "type": "string"
+          },
+          {
+            "name": "sizeMB",
+            "type": "number"
+          },
+          {
+            "name": "durationSec",
+            "type": "number"
+          }
+        ],
+        "risk": "download",
+        "aliases": [
+          "TikTok 下载",
+          "抖音国际版下载"
+        ]
+      }
+    },
+    {
+      "id": "x-search",
+      "name": "X/Twitter 搜索",
+      "version": "1.2.0",
+      "description": "在 X (x.com) 搜索关键词，返回指定条数推文（作者+文本+时间，默认 10，最多 100；滚动加载直到取够或无法继续）。需要登录 X 账号。",
+      "category": "search",
+      "tags": [
+        "search",
+        "social"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回推文条数（默认 10，最多 100）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://x.com/search?q=$query&src=typed_query"
+          },
+          "note": "打开 X 搜索页"
+        },
+        {
+          "name": "waitForURL",
+          "args": {
+            "pattern": "x.com/search",
+            "partial": true,
+            "timeoutMs": 20000
+          },
+          "note": "等待搜索结果页导航完成"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{await new Promise(r=>setTimeout(r,2000));const loginWall=document.querySelector('[data-testid=\"login\"]')||document.querySelector('[data-testid=\"sheetDialog\"]')||document.querySelector('div[role=\"dialog\"] input[name=\"text\"]');if(loginWall){return {ok:false,reason:'login_required',detail:'X requires login to search. Please log in manually and re-run.'};}const captcha=document.querySelector('iframe[src*=\"captcha\"],iframe[src*=\"recaptcha\"],iframe[src*=\"arkose\"]');if(captcha){return {ok:false,reason:'captcha',detail:'CAPTCHA detected. Manual intervention required.'};}const verify=document.querySelector('[data-testid=\"verification\"]')||document.querySelector('div[class*=\"replace\"][class*=\"bottom\"]');if(verify){return {ok:false,reason:'verification',detail:'X is requesting phone/email verification.'};}return {ok:true};})()"
+          },
+          "note": "检测登录墙/验证码/人机验证"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const count=()=>document.querySelectorAll('article[data-testid=\"tweet\"]').length;const maxScrolls=Math.max(4,Math.min(40,Math.ceil(lim/4)+4));let scrolls=0;for(let i=0;i<maxScrolls;i++){const n=count();if(n>=lim)break;const before=n;window.scrollBy(0,800);scrolls++;await sleep(900+Math.floor(Math.random()*400));if(count()===before&&i>1){await sleep(1200);if(count()===before)break;}}window.scrollTo(0,0);await sleep(600);return {scrolls:scrolls,loaded:count(),limit:lim};})()"
+          },
+          "note": "滚动触发虚拟列表懒加载"
+        },
+        {
+          "name": "waitForSelector",
+          "args": {
+            "selector": "article[data-testid=\"tweet\"]",
+            "visible": true,
+            "timeoutMs": 15000
+          },
+          "note": "确认推文元素可见"
+        },
+        {
+          "name": "screenshot",
+          "args": {
+            "format": "jpeg"
+          },
+          "note": "截图确认推文已加载"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const arts=document.querySelectorAll('article[data-testid=\"tweet\"]');const tweets=[];const seen=new Set();for(const a of arts){if(tweets.length>=lim)break;const u=a.querySelector('[data-testid=\"User-Name\"]');const t=a.querySelector('[data-testid=\"tweetText\"]');const tm=a.querySelector('time');const user=(u?.innerText||'').split('\\n')[0].trim();const text=(t?.innerText||'').trim();const time=tm?.getAttribute('datetime')||'';const photos=a.querySelectorAll('[data-testid=\"tweetPhoto\"]');const imgs=[];photos.forEach(p=>{p.querySelectorAll('img').forEach(img=>{const s=img.src||'';if(s.includes('pbs.twimg.com'))imgs.push(s);});});const key=user+text.slice(0,50);if(text.length>10&&!seen.has(key)){seen.add(key);tweets.push({user,text:text.slice(0,500),time,imgs:imgs.slice(0,4)});}}return {count:tweets.length,tweets};})()"
+          },
+          "retry": 1,
+          "note": "提取推文数据（图文URL）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "x.com",
+          "twitter.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "social.search"
+        ],
+        "keywords": [
+          "X",
+          "Twitter",
+          "推特",
+          "搜索",
+          "search",
+          "tweet"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number",
+            "description": "返回推文条数"
+          },
+          {
+            "name": "tweets",
+            "type": "array",
+            "description": "推文列表，每项含user、text、time、imgs（图片URL列表，需登录才能查看）"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "x-search",
+          "twitter-search"
+        ],
+        "browserpilot": ">=0.1.0"
+      }
+    },
+    {
+      "id": "x-user-timeline",
+      "name": "X账号时间线",
+      "version": "1.1.0",
+      "description": "抓取 X 账号主页的最新推文，返回指定条数（默认 10，最多 100；滚动加载直到取够或无法继续）。需要 X 登录态。",
+      "category": "social",
+      "tags": [
+        "social"
+      ],
+      "inputs": [
+        {
+          "name": "handle",
+          "type": "string",
+          "required": true,
+          "description": "X 用户名（不含 @，如 elonmusk）"
+        },
+        {
+          "name": "maxScrolls",
+          "type": "number",
+          "required": false,
+          "default": 0,
+          "description": "额外滚动次数；0 或留空=按 limit 自动推导（上限 20）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回推文条数（默认 10，最多 100）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://x.com/$handle"
+          },
+          "note": "打开账号主页"
+        },
+        {
+          "name": "waitForURL",
+          "args": {
+            "pattern": "x.com/",
+            "partial": true,
+            "timeoutMs": 20000
+          },
+          "note": "等待页面就绪"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 2500
+          },
+          "note": "时间线渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{await new Promise(r=>setTimeout(r,2000));const loginWall=document.querySelector('[data-testid=\"login\"]')||document.querySelector('[data-testid=\"sheetDialog\"]');if(loginWall)return {ok:false,error:'login_required',hint:'X 未登录（登录墙）。BrowserPilot 不做登录绕过；请在浏览器中登录 X 后重试。'};const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));let MAX_SCROLLS=Math.max(0,Math.min(Number(want('$maxScrolls'))||0,20));if(!MAX_SCROLLS)MAX_SCROLLS=Math.max(4,Math.min(30,Math.ceil(lim/5)+3));const DELAY=900;const PX=800;for(let i=0;i<MAX_SCROLLS;i++){const n=document.querySelectorAll('article[data-testid=\"tweet\"]').length;if(n>=lim)break;const before=n;window.scrollBy(0,PX);await new Promise(r=>setTimeout(r,DELAY+Math.floor(Math.random()*300)));if(document.querySelectorAll('article[data-testid=\"tweet\"]').length===before&&i>1)break;}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,600));const arts=document.querySelectorAll('article[data-testid=\"tweet\"]');const tweets=[];const seen=new Set();for(const a of arts){if(tweets.length>=lim)break;const u=a.querySelector('[data-testid=\"User-Name\"]');const txt=a.querySelector('[data-testid=\"tweetText\"]');const time=a.querySelector('time');const linkA=a.querySelector('a[href*=\"/status/\"]');const hn=u?u.textContent.replace(/\\n+/g,' ').slice(0,50):null;const key=hn+(txt?txt.textContent.slice(0,20):'');if(seen.has(key))continue;seen.add(key);tweets.push({user:hn,text:txt?txt.textContent.replace(/\\s+/g,' ').trim().slice(0,400):null,time:time?time.getAttribute('datetime'):null,url:linkA?('https://x.com'+linkA.getAttribute('href')):null});}return {ok:true,count:tweets.length,tweets:tweets};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            },
+            {
+              "path": "value.count",
+              "min": 1
+            }
+          ],
+          "note": "登录墙检测 + 滚动加载 + 推文提取"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "x.com",
+          "twitter.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "social.timeline",
+          "account.watch"
+        ],
+        "keywords": [
+          "X",
+          "Twitter",
+          "推特",
+          "账号",
+          "时间线",
+          "大V"
+        ],
+        "outputs": [
+          {
+            "name": "tweets",
+            "type": "array",
+            "description": "user/text/time/url"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "推特账号",
+          "X时间线",
+          "大V动态"
+        ]
+      }
+    },
+    {
+      "id": "xueqiu-article",
+      "name": "雪球文章爬取",
+      "version": "1.1.0",
+      "description": "爬取一篇雪球帖子/文章的全文（标题+正文，最多8000字符）。需浏览器已有雪球登录态。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "雪球帖子链接（xueqiu.com/<uid>/<postid>）；不填则在当前标签页爬取"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/xueqiu\\.com\\/\\d+\\/\\d+/.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入雪球帖子链接（xueqiu.com/<用户id>/<帖子id>），或在帖子页上直接运行'};await new Promise(r=>setTimeout(r,1500));const body=document.querySelector('.article__bd__detail');if(!body)return {ok:false,error:'no-content',hint:'正文未渲染、需登录或无权限访问'};const h=document.querySelector('h1');const author=(document.querySelector('.article__bd__hd .user-name, .user-name')||{}).textContent||'';const pubTime=(document.body.innerText.match(/发布于[^\\n]{5,30}/)||[''])[0];const pid=(location.href.match(/\\/(\\d+)\\/(\\d+)/)||[])[2];let engagement=null;try{const api=await fetch('https://xueqiu.com/statuses/show.json?id='+pid,{credentials:'include'}).then(r=>r.json());const dd=api.data||api;if(dd&&dd.like_count!==undefined)engagement={likes:dd.like_count||0,replies:dd.reply_count||0,retweets:dd.retweet_count||0};}catch{}return {ok:true,title:((h?h.textContent.trim():'')||document.title.split('_')[0].split('-')[0].trim()),author:author.trim().slice(0,40)||null,pubTime:pubTime||null,engagement:engagement,content:body.innerText.slice(0,8000),url:location.href};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "提取正文 + 作者/发布时间 + show.json 接口的互动数（likes/replies/retweets）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "xueqiu.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "crawl",
+          "finance.article"
+        ],
+        "keywords": [
+          "雪球",
+          "xueqiu",
+          "爬文章",
+          "帖子全文"
+        ],
+        "outputs": [
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "content",
+            "type": "string"
+          },
+          {
+            "name": "url",
+            "type": "url"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "雪球文章",
+          "雪球全文"
+        ]
+      }
+    },
+    {
+      "id": "xueqiu-comments",
+      "name": "雪球评论爬取",
+      "version": "1.0.0",
+      "description": "爬取一篇雪球帖子下的评论（用户/内容/点赞/时间），支持分页，返回指定条数（默认 20，最多 100）。需雪球登录态。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "url",
+          "type": "url",
+          "required": false,
+          "description": "雪球帖子链接；不填则用当前标签页"
+        },
+        {
+          "name": "page",
+          "type": "number",
+          "required": false,
+          "default": 1,
+          "description": "评论页码"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 20,
+          "description": "每页条数（1-100）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/xueqiu\\.com\\/\\d+\\/\\d+/.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入雪球帖子链接（xueqiu.com/<uid>/<postid>）'};const pid=(location.href.match(/\\/(\\d+)\\/(\\d+)/)||[])[2];const page=Math.max(1,Number('$page')||1);const count=Math.max(1,Math.min(Number('$limit')||20,100));const r=await fetch('https://xueqiu.com/statuses/comments.json?id='+pid+'&page='+page+'&count='+count,{credentials:'include'}).then(x=>x.json());const list=r.comments||[];return {ok:true,postUrl:location.href,page:page,fetched:list.length,comments:list.map(c=>({user:c.user&&c.user.screen_name,text:(c.text||'').replace(/<[^>]+>/g,'').replace(/\\s+/g,' ').trim().slice(0,500),likes:c.like_count||0,time:c.created_at?new Date(c.created_at).toISOString().slice(0,19).replace('T',' '):null})),total:r.total!==undefined?r.total:null};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "走雪球官方评论接口（页面上下文，带登录态）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "xueqiu.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "crawl",
+          "finance.comments"
+        ],
+        "keywords": [
+          "雪球",
+          "评论",
+          "回复",
+          "comments"
+        ],
+        "outputs": [
+          {
+            "name": "comments",
+            "type": "array",
+            "description": "user/text/likes/time"
+          },
+          {
+            "name": "page",
+            "type": "number"
+          },
+          {
+            "name": "total",
+            "type": "number"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "雪球评论",
+          "帖子评论"
+        ]
+      }
+    },
+    {
+      "id": "xueqiu-search",
+      "name": "雪球搜索",
+      "version": "1.3.0",
+      "description": "在雪球搜索关键词，返回指定条数讨论帖（作者+时间+链接+摘要，默认 10，最多 100）。需浏览器已有雪球登录态。",
+      "category": "finance",
+      "tags": [
+        "finance",
+        "search"
+      ],
+      "inputs": [
+        {
+          "name": "query",
+          "type": "string",
+          "required": true,
+          "description": "搜索关键词（股票名/代码/话题）"
+        },
+        {
+          "name": "sort",
+          "type": "string",
+          "required": false,
+          "default": "",
+          "description": "排序：latest=最新讨论；留空=默认排序"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "返回帖子条数（默认 10，最多 100）"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://xueqiu.com/k?q=$query"
+          },
+          "note": "打开雪球搜索结果页（需登录态）"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 2500
+          },
+          "note": "SPA 渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const sort=want('$sort').toLowerCase();const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));if(sort==='latest'||sort==='time'){const btn=[...document.querySelectorAll('a,div,span')].find(e=>(e.textContent||'').trim()==='默认排序'&&e.children.length<=1);if(btn){btn.click();await sleep(900);const opt=[...document.querySelectorAll('li,div,a,span')].find(e=>(e.textContent||'').trim()==='最新讨论');if(opt){opt.click();await sleep(2500);}}}const extract=()=>{const seen=new Set();return [...document.querySelectorAll('.timeline__item')].map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');const nums=[...it.querySelectorAll('.timeline__item__control')].map(e=>parseInt((e.textContent||'').trim())||0);return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120),reposts:nums[0]||0,replies:nums[1]||0,likes:nums[2]||0}:null;}).filter(x=>x&&x.url&&!seen.has(x.url)&&seen.add(x.url));};let posts=[];const start=Date.now();while(Date.now()-start<12000){posts=extract();if(posts.length>=3)break;await sleep(500);}for(let i=0;i<15&&posts.length<lim;i++){const before=posts.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));posts=extract();if(posts.length>=lim)break;if(posts.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);const links=posts.slice(0,lim);return {sort:sort||'default',count:links.length,links:links,loaded:posts.length,text:(document.body.innerText||'').slice(0,3000).trim()};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.count",
+              "min": 3
+            }
+          ],
+          "note": "抓取讨论帖流（转发/评论/赞互动数；sort=latest 时先切「最新讨论」）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "xueqiu.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "search",
+          "finance.search",
+          "stock.discussion"
+        ],
+        "keywords": [
+          "雪球",
+          "xueqiu",
+          "股票讨论",
+          "投资搜索"
+        ],
+        "outputs": [
+          {
+            "name": "count",
+            "type": "number"
+          },
+          {
+            "name": "links",
+            "type": "array",
+            "description": "author/time/url/excerpt"
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "description": "页面文本（含股票行情卡）"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "雪球搜索",
+          "xueqiu 搜索"
+        ]
+      }
+    },
+    {
+      "id": "xueqiu-user-timeline",
+      "name": "雪球账号时间线",
+      "version": "1.1.0",
+      "description": "抓取雪球用户主页的最新帖子，返回指定条数（默认 10，最多 100；滚动加载直到取够或无法继续）。需雪球登录态。",
+      "category": "finance",
+      "tags": [
+        "finance"
+      ],
+      "inputs": [
+        {
+          "name": "uid",
+          "type": "string",
+          "required": true,
+          "description": "雪球用户数字 ID（主页链接 xueqiu.com/<uid> 中的数字）"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "required": false,
+          "default": 10,
+          "description": "最多条数"
+        }
+      ],
+      "steps": "commands",
+      "body": [
+        {
+          "name": "open_tab",
+          "args": {
+            "url": "https://xueqiu.com/$uid"
+          },
+          "note": "打开用户主页"
+        },
+        {
+          "name": "waitForTimeout",
+          "args": {
+            "ms": 3000
+          },
+          "note": "SPA 渲染等待"
+        },
+        {
+          "name": "js",
+          "args": {
+            "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const extract=()=>{const seen=new Set();return [...document.querySelectorAll('.timeline__item')].map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');const nums=[...it.querySelectorAll('.timeline__item__control')].map(e=>parseInt((e.textContent||'').trim())||0);return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120),reposts:nums[0]||0,replies:nums[1]||0,likes:nums[2]||0}:null;}).filter(x=>x&&x.url&&!seen.has(x.url)&&seen.add(x.url));};let posts=extract();for(let i=0;i<15&&posts.length<lim;i++){const before=posts.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));posts=extract();if(posts.length>=lim)break;if(posts.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {ok:true,count:posts.length,posts:posts.slice(0,lim),loaded:posts.length};})()"
+          },
+          "expectations": [
+            {
+              "path": "value.ok",
+              "equals": true
+            }
+          ],
+          "note": "时间线抓取（含转发/评论/赞）"
+        }
+      ],
+      "tokenStrategy": {
+        "defaultL0": true
+      },
+      "scope": {
+        "sites": [
+          "xueqiu.com"
+        ]
+      },
+      "discovery": {
+        "intents": [
+          "finance.timeline",
+          "account.watch"
+        ],
+        "keywords": [
+          "雪球",
+          "大V",
+          "账号",
+          "时间线",
+          "用户动态"
+        ],
+        "outputs": [
+          {
+            "name": "posts",
+            "type": "array",
+            "description": "author/time/url/excerpt/reposts/replies/likes"
+          }
+        ],
+        "risk": "read",
+        "aliases": [
+          "雪球大V",
+          "雪球用户",
+          "雪球动态"
+        ]
+      }
+    }
+  ]
+}

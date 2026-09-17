@@ -1,9 +1,9 @@
 # 韭研公社账号时间线
 
-> 抓取某个韭研公社作者主页的最新文章列表。需要微信登录态。
+> 抓取韭研公社作者主页的最新文章，返回指定条数（默认 15，最多 100；滚动加载）。需要微信登录态。
 
 - ID: `jiuyangongshe-user-timeline`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `jiuyangongshe.com`
 - Intents: `finance.timeline`, `account.watch`

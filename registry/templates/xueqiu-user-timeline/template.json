@@ -1,9 +1,12 @@
 {
   "id": "xueqiu-user-timeline",
   "name": "雪球账号时间线",
-  "version": "1.0.0",
-  "description": "抓取某个雪球用户主页的最新帖子（内容摘要+互动数+帖子链接）。需雪球登录态。",
+  "version": "1.1.0",
+  "description": "抓取雪球用户主页的最新帖子，返回指定条数（默认 10，最多 100；滚动加载直到取够或无法继续）。需雪球登录态。",
   "category": "finance",
+  "tags": [
+    "finance"
+  ],
   "inputs": [
     {
       "name": "uid",
@@ -38,7 +41,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));const items=[...document.querySelectorAll('.timeline__item')];const posts=items.map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');const nums=[...it.querySelectorAll('.timeline__item__control')].map(e=>parseInt((e.textContent||'').trim())||0);return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120),reposts:nums[0]||0,replies:nums[1]||0,likes:nums[2]||0}:null;}).filter(Boolean);return {ok:true,count:posts.length,posts:posts.slice(0,Number('$limit')||10)};})()"
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const extract=()=>{const seen=new Set();return [...document.querySelectorAll('.timeline__item')].map(it=>{const author=((it.querySelector('.user-name')||{}).textContent||'').trim().slice(0,40);const d=it.querySelector('.date-and-source');const href=d?d.getAttribute('href'):null;const c=it.querySelector('[class*=content]');const nums=[...it.querySelectorAll('.timeline__item__control')].map(e=>parseInt((e.textContent||'').trim())||0);return href?{author:author,time:(d.textContent||'').trim().slice(0,30),url:'https://xueqiu.com'+href,excerpt:((c?c.textContent:'')).replace(/\\s+/g,' ').trim().slice(0,120),reposts:nums[0]||0,replies:nums[1]||0,likes:nums[2]||0}:null;}).filter(x=>x&&x.url&&!seen.has(x.url)&&seen.add(x.url));};let posts=extract();for(let i=0;i<15&&posts.length<lim;i++){const before=posts.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));posts=extract();if(posts.length>=lim)break;if(posts.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {ok:true,count:posts.length,posts:posts.slice(0,lim),loaded:posts.length};})()"
       },
       "expectations": [
         {

@@ -1,18 +1,20 @@
 # Google Search
 
-> Search Google and return the top 10 results with title, URL, and snippet.
+> 在 Google 搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。
 
 - ID: `search`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `google.com`, `google.com.hk`, `google.co.jp`, `google.co.uk`
 - Intents: `search`, `web.search`
 - Capabilities: `fill`, `js`, `open_tab`, `press`, `waitForSelector`
-- 功能指纹: `sha256:7292e2457a6434fd9a511b4d485d4164a0c960ac643bef0c7b6879848dac3531`
+- 功能指纹: `sha256:2b4f239a2c9afb5f874c6b3a4fd4e4a677acecbf28ea6cbe8aa35a28068f91d1`
 
 ## 输入
 
 - `query` (string, required): Search query
+- `limit` (number): 返回结果条数（默认 10，最多 100）
+- `maxPages` (number): 最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）
 
 ## 输出
 

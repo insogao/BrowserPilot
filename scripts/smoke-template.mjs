@@ -4,10 +4,13 @@ import { spawn } from "node:child_process";
 import { acquireBrowserLease, releaseBrowserLease } from "./browser-lease-lib.mjs";
 
 const root = process.cwd();
-const ids = process.argv.slice(2);
+const rawArgs = process.argv.slice(2);
+// 默认后台执行（窗口最小化、不聚焦），不打扰用户桌面；--visible 才前台运行（调试渲染问题时用）。
+const visible = rawArgs.includes("--visible");
+const ids = rawArgs.filter((arg) => !arg.startsWith("--"));
 
 if (!ids.length) {
-  console.error("Usage: npm run smoke:template -- <template-id> [template-id...]");
+  console.error("Usage: npm run smoke:template -- [--visible] <template-id> [template-id...]");
   process.exit(2);
 }
 
@@ -112,7 +115,9 @@ try {
   if (!setupPing.ok) {
     setupError = (setupPing.stderr || setupPing.stdout || "BrowserPilot host unavailable").trim();
   } else {
-    const opened = await client("open_space", { name: "Smoke: " + ids.join(", "), url: "about:blank", state: "maximized" }, lease.token, 30_000);
+    const openSpaceArgs = { name: "Smoke: " + ids.join(", "), url: "about:blank" };
+    if (visible) openSpaceArgs.focus = true;
+    const opened = await client("open_space", openSpaceArgs, lease.token, 30_000);
     if (opened.ok && typeof opened.parsed?.data?.spaceId === "string") {
       smokeSpaceId = opened.parsed.data.spaceId;
     } else {

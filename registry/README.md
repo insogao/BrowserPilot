@@ -2,19 +2,22 @@
 
 公开模板按包放在 `registry/templates/<template-id>/`。普通 Chrome 商店用户只有已安装插件，没有源码，不运行 npm、不 build、不改插件目录；模板通过插件看板、`install_template` 或 Registry 安装到 `chrome.storage.local` 后生效。
 
-`catalog.json` 与 `details/*.md` 是公开 Registry 的生成物，只由项目维护者或 CI 在发布流程中生成，禁止手改：
+`catalog.json`、`bundle.json` 与 `details/*.md` 是公开 Registry 的生成物，只由项目维护者或 CI 在发布流程中生成，禁止手改：
 
 ```bash
 npm run registry:build
 npm run registry:check
 ```
 
+`bundle.json` 会在 `npm run build` 时打进扩展（`dist/templates.bundle.json`）：所有模板随扩展发布、开箱即用；`catalog.json` 供 GitHub Registry 检查更新/新增。
+
 模板至少包含：
 
 - 稳定 `id`
 - semver `version`
 - `name` / `description` / `category`
-- `inputs`
+- 公共 `tags`（search/finance/video/social/ai/download/news，至少一个；词汇表见 `registry/templates/README.md`）
+- `inputs`（列表类模板必须支持 `limit`，见作者规范）
 - `steps` 与 `body`
 - 可选站点范围 `scope.sites`
 - 动态发现元数据 `discovery`：intents / keywords / outputs / risk / aliases / 兼容版本

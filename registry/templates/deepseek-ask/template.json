@@ -4,6 +4,9 @@
   "version": "1.3.1",
   "description": "向 DeepSeek（chat.deepseek.com）提问，等待流式回复结束并回收回复文本。支持 conversationUrl 续问（同一会话多轮）。需要浏览器已有 DeepSeek 登录态。",
   "category": "ai-chat",
+  "tags": [
+    "ai"
+  ],
   "inputs": [
     {
       "name": "prompt",
@@ -26,6 +29,13 @@
         "url": "https://chat.deepseek.com/"
       },
       "note": "打开 DeepSeek（新对话；续问场景下下一步会跳到 conversationUrl）"
+    },
+    {
+      "name": "switch_tab",
+      "args": {
+        "visible": true
+      },
+      "note": "激活 DeepSeek 标签（流式回复需要前台渲染；该步显式请求可见）"
     },
     {
       "name": "waitForTimeout",

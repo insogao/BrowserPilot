@@ -1,15 +1,33 @@
 {
   "id": "bilibili-search",
   "name": "B站搜索",
-  "version": "1.0.2",
-  "description": "在B站搜索关键词，取回前10条视频结果（标题+链接+页面摘要）。",
+  "version": "1.1.0",
+  "description": "在B站搜索关键词，返回指定条数视频结果（标题/作者/链接，默认 10，最多 100；不足时自动翻页）。",
   "category": "search",
+  "tags": [
+    "video",
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
       "type": "string",
       "required": true,
       "description": "搜索关键词"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "返回视频条数（默认 10，最多 100）"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
@@ -33,7 +51,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const start=Date.now();let out=[];const isCover=(t)=>/^稍后再看/.test(t)||/\\d{1,2}:\\d{2}/.test(t);while(Date.now()-start<12000){out=[...document.querySelectorAll('.bili-video-card')].map(c=>{const links=[...c.querySelectorAll(\"a[href*='/video/BV']\")];if(!links.length)return null;let href=links[0].getAttribute('href')||'';let url=href.startsWith('//')?('https:'+href):href;try{url=new URL(url,location.href).href;}catch{}const titEl=c.querySelector('.bili-video-card__info--tit');let title=titEl?(titEl.textContent||'').trim():'';if(!title){const t=links.map(x=>(x.textContent||'').trim()).find(x=>x.length>2&&!isCover(x));title=t||'';}if(!title||title.length<2)return null;const owner=c.querySelector('.bili-video-card__info--owner');const author=owner?(owner.textContent||'').split('·')[0].trim().slice(0,40):'';return {title:title.slice(0,150),url:url,author:author};}).filter(Boolean);const seen=new Set();out=out.filter(x=>!seen.has(x.url)&&seen.add(x.url));if(out.length>=3)break;await new Promise(r=>setTimeout(r,400));}return {count:out.length,links:out.slice(0,10),text:(document.body.innerText||'').slice(0,6000).trim()};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const keyword=want('$query');const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const maxP=Math.max(1,Math.min(Number(want('$maxPages'))||3,5));const isCover=(t)=>/^稍后再看/.test(t)||/\\d{1,2}:\\d{2}/.test(t);const extract=(root)=>{const out=[];const seen=new Set();for(const c of root.querySelectorAll('.bili-video-card')){const links=[...c.querySelectorAll(\"a[href*='/video/BV']\")];if(!links.length)continue;let href=links[0].getAttribute('href')||'';let url=href.startsWith('//')?('https:'+href):href;try{url=new URL(url,location.href).href;}catch{}if(seen.has(url))continue;const titEl=c.querySelector('.bili-video-card__info--tit');let title=titEl?(titEl.textContent||'').trim():'';if(!title){const t=links.map(x=>(x.textContent||'').trim()).find(x=>x.length>2&&!isCover(x));title=t||'';}if(!title||title.length<2)continue;seen.add(url);const owner=c.querySelector('.bili-video-card__info--owner');const author=owner?(owner.textContent||'').split('·')[0].trim().slice(0,40):'';out.push({title:title.slice(0,150),url:url,author:author});}return out;};const start=Date.now();let links=[];while(Date.now()-start<12000){links=extract(document);if(links.length>=3)break;await sleep(400);}let pages=1;const base='https://search.bilibili.com/all?keyword='+encodeURIComponent(keyword||'');while(links.length<lim&&pages<maxP){const next=base+'&page='+(pages+1);await sleep(1400+Math.floor(Math.random()*800));let html=null;try{const r=await fetch(next,{credentials:'include'});if(!r.ok)break;html=await r.text();}catch{break;}if(!html||html.length<500)break;let doc=null;try{doc=new DOMParser().parseFromString(html,'text/html');}catch{break;}const seen=new Set(links.map(x=>x.url));const added=extract(doc);let grew=0;for(const it of added){if(links.length>=lim)break;if(!seen.has(it.url)){links.push(it);grew++;}}pages++;if(!grew)break;}return {count:links.length,links:links.slice(0,lim),pages:pages,text:(document.body.innerText||'').slice(0,6000).trim()};})()"
       },
       "expectations": [
         {

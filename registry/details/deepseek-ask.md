@@ -7,8 +7,8 @@
 - 风险: `write`
 - 适用站点: `chat.deepseek.com`
 - Intents: `ai.ask`
-- Capabilities: `js`, `open_tab`, `press`, `waitForTimeout`, `wait_dom_idle`
-- 功能指纹: `sha256:5d54f9f581400c1f5401c488cf71d1da34bb3e20be59c2f9de86ddc87f9a79d0`
+- Capabilities: `js`, `open_tab`, `press`, `switch_tab`, `waitForTimeout`, `wait_dom_idle`
+- 功能指纹: `sha256:40878b490c912def2de319147bb07b3bce990f762392ed93a5fd95d8551eb074`
 
 ## 输入
 

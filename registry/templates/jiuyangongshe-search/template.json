@@ -1,9 +1,13 @@
 {
   "id": "jiuyangongshe-search",
   "name": "韭研公社搜索",
-  "version": "1.2.0",
-  "description": "在韭研公社（jiuyangongshe.com，原韭菜公社）搜索关键词，返回相关文章列表（标题+链接）。需要浏览器已有微信登录态。",
+  "version": "1.3.0",
+  "description": "在韭研公社搜索关键词，返回指定条数文章（标题+链接，默认 15，最多 100）。需要微信登录态。",
   "category": "finance",
+  "tags": [
+    "finance",
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
@@ -17,6 +21,13 @@
       "required": false,
       "default": "",
       "description": "排序：latest=按时间；留空=按热度"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 15,
+      "description": "返回文章条数（默认 15，最多 100）"
     }
   ],
   "steps": "commands",
@@ -38,7 +49,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){const t=[...document.querySelectorAll('a,div,span')].find(e=>e.children.length<=1&&/^\\s*按时间\\s*$/.test(e.textContent||''));if(t){t.click();sorted=true;await new Promise(r=>setTimeout(r,2500));}}for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,800));const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('a[href*=\"/a/\"]')].map(a=>{const url=location.origin+(a.getAttribute('href')||'');return {title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:url};});const seen=new Set();posts=posts.filter(x=>!seen.has(x.url)&&seen.add(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {sort:sorted?'time':'hot',count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2000).trim()};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){const t=[...document.querySelectorAll('a,div,span')].find(e=>e.children.length<=1&&/^\\s*按时间\\s*$/.test(e.textContent||''));if(t){t.click();sorted=true;await sleep(2500);}}const lim=Math.max(1,Math.min(Number(want('$limit'))||15,100));const extract=()=>{const seen=new Set();return [...document.querySelectorAll('a[href*=\"/a/\"]')].map(a=>{const url=location.origin+(a.getAttribute('href')||'');const title=(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120);return {title:title,url:url};}).filter(x=>x.title.length>3&&!seen.has(x.url)&&seen.add(x.url));};let posts=extract();for(let i=0;i<15&&posts.length<lim;i++){const before=posts.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));posts=extract();if(posts.length>=lim)break;if(posts.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {sort:sorted?'time':'hot',count:posts.length,links:posts.slice(0,lim),loaded:posts.length,text:(document.body.innerText||'').slice(0,2000).trim()};})()"
       },
       "expectations": [
         {

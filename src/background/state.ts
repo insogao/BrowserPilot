@@ -9,6 +9,9 @@ export interface SpaceState {
   tabId?: number;
   ownerClientId?: string;
   ownership?: "agent" | "user" | "inactive";
+  /** true = 创建时即为后台空间（窗口最小化、不聚焦）；窗口内标签可保持 active 以正常渲染。
+   *  可见空间（显式 focus/保持可见）为 undefined。 */
+  background?: boolean;
   createdAt?: number;
   updatedAt?: number;
   layer: "L0" | "L1";

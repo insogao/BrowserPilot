@@ -1,9 +1,12 @@
 {
   "id": "guba-list",
   "name": "个股吧帖子流",
-  "version": "1.0.1",
-  "description": "按股票代码打开个股吧列表页，返回最新帖子流（标题/链接/阅读数/评论数/时间），默认按时间排序。无需登录。",
+  "version": "1.1.0",
+  "description": "按股票代码打开个股吧列表页，返回指定条数（默认 30，最多 100）。无需登录。",
   "category": "finance",
+  "tags": [
+    "finance"
+  ],
   "inputs": [
     {
       "name": "code",
@@ -17,6 +20,13 @@
       "required": false,
       "default": 30,
       "description": "最多条数"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
@@ -38,7 +48,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const code=(want('$code')||(want('$url').match(/(\\d{6})/)||[])[1]||'');if(!code)return {ok:false,error:'no-code',hint:'请传 6 位股票代码（params.code）'};await new Promise(r=>setTimeout(r,800));const rows=[...document.querySelectorAll('.listitem, tr[class*=listitem], [id*=tr_]')];const items=rows.map(r=>{const a=r.querySelector('a[href*=news],a[href*=caifuhao],a[href]');const nums=(r.innerText||'').match(/[\\d.]+\\s*[万]?/g)||[];const timeM=(r.textContent||'').match(/\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}/);return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100),url:a.href.startsWith('//')?'https:'+a.href:a.href,reads:nums[0]||null,replies:nums[1]||null,time:timeM?timeM[0]:null}:null;}).filter(Boolean).slice(0,Math.max(1,Math.min(Number('$limit')||30,50)));return {ok:true,code:code,count:items.length,posts:items,sort:'time'};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const code=(want('$code')||(want('$url').match(/(\\d{6})/)||[])[1]||'');if(!code)return {ok:false,error:'no-code',hint:'请传 6 位股票代码（params.code）'};const lim=Math.max(1,Math.min(Number(want('$limit'))||30,100));const maxP=Math.max(1,Math.min(Number(want('$maxPages'))||3,5));const extract=(root)=>{const seen=new Set();return [...root.querySelectorAll('.listitem, tr[class*=listitem], [id*=tr_]')].map(r=>{const a=r.querySelector('a[href*=news],a[href*=caifuhao],a[href]');const nums=(r.innerText||'').match(/[\\d.]+\\s*[万]?/g)||[];const timeM=(r.textContent||'').match(/\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}/);return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100),url:a.href.startsWith('//')?'https:'+a.href:a.href,reads:nums[0]||null,replies:nums[1]||null,time:timeM?timeM[0]:null}:null;}).filter(x=>x&&x.url&&!seen.has(x.url)&&seen.add(x.url));};await sleep(800);let posts=[];const start=Date.now();while(Date.now()-start<12000){posts=extract(document);if(posts.length>=3)break;await sleep(500);}let pages=1;while(posts.length<lim&&pages<maxP){const next='https://guba.eastmoney.com/list,'+code+'_'+(pages+1)+'.html';await sleep(1400+Math.floor(Math.random()*700));let html=null;try{const r=await fetch(next,{credentials:'include'});if(!r.ok)break;html=await r.text();}catch{break;}if(!html||html.length<500)break;let doc=null;try{doc=new DOMParser().parseFromString(html,'text/html');}catch{break;}const seen=new Set(posts.map(x=>x.url));const added=extract(doc);let grew=0;for(const it of added){if(posts.length>=lim)break;if(!seen.has(it.url)){posts.push(it);grew++;}}pages++;if(!grew)break;}return {ok:true,code:code,count:posts.length,posts:posts.slice(0,lim),pages:pages,sort:'time'};})()"
       },
       "expectations": [
         {

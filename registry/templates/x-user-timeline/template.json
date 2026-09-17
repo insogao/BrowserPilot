@@ -1,9 +1,12 @@
 {
   "id": "x-user-timeline",
   "name": "X账号时间线",
-  "version": "1.0.0",
-  "description": "抓取某个 X（Twitter）账号主页的最新推文（文本/时间/链接），支持滚动加载。需要浏览器已有 X 登录态。",
+  "version": "1.1.0",
+  "description": "抓取 X 账号主页的最新推文，返回指定条数（默认 10，最多 100；滚动加载直到取够或无法继续）。需要 X 登录态。",
   "category": "social",
+  "tags": [
+    "social"
+  ],
   "inputs": [
     {
       "name": "handle",
@@ -15,8 +18,15 @@
       "name": "maxScrolls",
       "type": "number",
       "required": false,
-      "default": 4,
-      "description": "滚动加载轮数（1-10，越多抓得越深）"
+      "default": 0,
+      "description": "额外滚动次数；0 或留空=按 limit 自动推导（上限 20）"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "返回推文条数（默认 10，最多 100）"
     }
   ],
   "steps": "commands",
@@ -47,7 +57,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2000));const loginWall=document.querySelector('[data-testid=\"login\"]')||document.querySelector('[data-testid=\"sheetDialog\"]');if(loginWall)return {ok:false,error:'login_required',hint:'X 未登录（登录墙）。BrowserPilot 不做登录绕过；请在浏览器中登录 X 后重试。'};const MAX_SCROLLS=Math.max(0,Math.min(Number('$maxScrolls')||4,10));const DELAY=800;const PX=800;let prev=0;for(let i=0;i<MAX_SCROLLS;i++){const n=document.querySelectorAll('article[data-testid=\"tweet\"]').length;if(n===prev&&i>0)break;prev=n;window.scrollBy(0,PX);await new Promise(r=>setTimeout(r,DELAY));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,600));const arts=document.querySelectorAll('article[data-testid=\"tweet\"]');const tweets=[];const seen=new Set();for(const a of arts){if(tweets.length>=20)break;const u=a.querySelector('[data-testid=\"User-Name\"]');const txt=a.querySelector('[data-testid=\"tweetText\"]');const time=a.querySelector('time');const linkA=a.querySelector('a[href*=\"/status/\"]');const hn=u?u.textContent.replace(/\\n+/g,' ').slice(0,50):null;const key=hn+(txt?txt.textContent.slice(0,20):'');if(seen.has(key))continue;seen.add(key);tweets.push({user:hn,text:txt?txt.textContent.replace(/\\s+/g,' ').trim().slice(0,400):null,time:time?time.getAttribute('datetime'):null,url:linkA?('https://x.com'+linkA.getAttribute('href')):null});}return {ok:true,count:tweets.length,tweets:tweets};})()"
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2000));const loginWall=document.querySelector('[data-testid=\"login\"]')||document.querySelector('[data-testid=\"sheetDialog\"]');if(loginWall)return {ok:false,error:'login_required',hint:'X 未登录（登录墙）。BrowserPilot 不做登录绕过；请在浏览器中登录 X 后重试。'};const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));let MAX_SCROLLS=Math.max(0,Math.min(Number(want('$maxScrolls'))||0,20));if(!MAX_SCROLLS)MAX_SCROLLS=Math.max(4,Math.min(30,Math.ceil(lim/5)+3));const DELAY=900;const PX=800;for(let i=0;i<MAX_SCROLLS;i++){const n=document.querySelectorAll('article[data-testid=\"tweet\"]').length;if(n>=lim)break;const before=n;window.scrollBy(0,PX);await new Promise(r=>setTimeout(r,DELAY+Math.floor(Math.random()*300)));if(document.querySelectorAll('article[data-testid=\"tweet\"]').length===before&&i>1)break;}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,600));const arts=document.querySelectorAll('article[data-testid=\"tweet\"]');const tweets=[];const seen=new Set();for(const a of arts){if(tweets.length>=lim)break;const u=a.querySelector('[data-testid=\"User-Name\"]');const txt=a.querySelector('[data-testid=\"tweetText\"]');const time=a.querySelector('time');const linkA=a.querySelector('a[href*=\"/status/\"]');const hn=u?u.textContent.replace(/\\n+/g,' ').slice(0,50):null;const key=hn+(txt?txt.textContent.slice(0,20):'');if(seen.has(key))continue;seen.add(key);tweets.push({user:hn,text:txt?txt.textContent.replace(/\\s+/g,' ').trim().slice(0,400):null,time:time?time.getAttribute('datetime'):null,url:linkA?('https://x.com'+linkA.getAttribute('href')):null});}return {ok:true,count:tweets.length,tweets:tweets};})()"
       },
       "expectations": [
         {

@@ -1,15 +1,32 @@
 {
   "id": "google-scholar-search",
   "name": "Google Scholar Search",
-  "version": "1.2.0",
-  "description": "Search Google Scholar for academic papers and return top results with title, URL, and visible text summary.",
+  "version": "1.3.0",
+  "description": "Search Google Scholar for academic papers and return a specified number of results (default 10, up to 100; auto-paginates with polite delays).",
   "category": "search",
+  "tags": [
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
       "type": "string",
       "required": true,
       "description": "Academic search query (paper title, keywords, author, etc.)"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "Number of results to return (default 10, max 100)"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
@@ -75,8 +92,10 @@
         ],
         "linkSelector": ".gs_rt a",
         "minResults": 3,
-        "limit": 10,
-        "textLimit": 6000
+        "limit": "$limit",
+        "textLimit": 6000,
+        "maxPages": "$maxPages",
+        "nextSelector": "a:has(.gs_ico_nav_next)"
       },
       "note": "Collect academic result links and page text."
     }

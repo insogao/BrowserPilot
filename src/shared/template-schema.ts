@@ -116,6 +116,20 @@ export interface TemplateDiscovery {
   browserpilot?: string;
 }
 
+/** 公共 Tag 词汇表：模板可多选，UI 按 Tag 筛选/分组。新增 Tag 需同时更新这里与 registry 作者规范。 */
+export const TEMPLATE_TAGS = ["search", "finance", "video", "social", "ai", "download", "news"] as const;
+export type TemplateTag = (typeof TEMPLATE_TAGS)[number];
+
+export const TEMPLATE_TAG_LABELS: Record<TemplateTag, string> = {
+  search: "搜索",
+  finance: "财经",
+  video: "视频",
+  social: "社交",
+  ai: "AI",
+  download: "下载",
+  news: "资讯",
+};
+
 export interface Template {
   id: string;
   name: string;
@@ -123,6 +137,8 @@ export interface Template {
   version?: string;
   description: string;
   category: "search" | "ai-chat" | "generic" | string;
+  /** 公共 Tag（多选）：search/finance/video/social/ai/download/news。 */
+  tags?: string[];
   inputs: TemplateInput[];
   /** 载体类型：命令序列 / 脚本 / 提示词。 */
   steps: TemplateStepsKind;
@@ -181,6 +197,17 @@ export function validateTemplate(raw: unknown): Template {
     throw new Error(t.steps + " 模版的 body 必须是字符串");
   }
   if (!Array.isArray(t.inputs)) t.inputs = [];
+  if (t.tags !== undefined) {
+    if (!Array.isArray(t.tags) || t.tags.length > TEMPLATE_TAGS.length) throw new Error("模版 tags 必须是数组且不超过 " + TEMPLATE_TAGS.length + " 个");
+    const seen = new Set<string>();
+    for (const tag of t.tags) {
+      if (typeof tag !== "string" || !(TEMPLATE_TAGS as readonly string[]).includes(tag)) {
+        throw new Error("模版 tag 必须是公共词汇表之一: " + TEMPLATE_TAGS.join("/") + "（实际 " + JSON.stringify(tag) + "）");
+      }
+      if (seen.has(tag)) throw new Error("模版 tag 重复: " + tag);
+      seen.add(tag);
+    }
+  }
   if (t.discovery !== undefined) {
     const d = t.discovery;
     if (!d || !Array.isArray(d.intents) || !d.intents.every((x) => typeof x === "string" && !!x)) throw new Error("discovery.intents 无效");

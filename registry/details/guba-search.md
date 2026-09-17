@@ -1,19 +1,21 @@
 # 股吧搜索
 
-> 在东方财富股吧搜索关键词，返回相关帖子（标题+链接+摘要）。无需登录即可访问。
+> 在东方财富股吧搜索关键词，返回指定条数帖子（标题+链接+摘要，默认 15，最多 100）。无需登录。
 
 - ID: `guba-search`
-- 版本: `1.1.1`
+- 版本: `1.2.0`
 - 风险: `read`
 - 适用站点: `eastmoney.com`, `guba.eastmoney.com`
 - Intents: `search`, `finance.forum`
 - Capabilities: `js`, `open_tab`, `waitForTimeout`
-- 功能指纹: `sha256:84de08c63ed395a75dd3d16b67f73a352e39c0f7265cc53d2f619a75974a415d`
+- 功能指纹: `sha256:93f12377b4976778adb2dce91be6e7ba6163a241e51bc7d9870a2fc4dab17f5b`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词（股票名/话题）
 - `sort` (string): 排序：latest=按时间；留空=默认（相关度）
+- `limit` (number): 返回帖子条数（默认 15，最多 100）
+- `maxPages` (number): 最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）
 
 ## 输出
 

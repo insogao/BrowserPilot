@@ -1,9 +1,13 @@
 {
   "id": "guba-search",
   "name": "股吧搜索",
-  "version": "1.1.1",
-  "description": "在东方财富股吧搜索关键词，返回相关帖子（标题+链接+摘要）。无需登录即可访问。",
+  "version": "1.2.0",
+  "description": "在东方财富股吧搜索关键词，返回指定条数帖子（标题+链接+摘要，默认 15，最多 100）。无需登录。",
   "category": "finance",
+  "tags": [
+    "finance",
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
@@ -17,6 +21,20 @@
       "required": false,
       "default": "",
       "description": "排序：latest=按时间；留空=默认（相关度）"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 15,
+      "description": "返回帖子条数（默认 15，最多 100）"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 3,
+      "description": "最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
@@ -38,7 +56,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){for(let att=0;att<6&&!sorted;att++){const t=[...document.querySelectorAll('a')].find(a=>/按时间排序/.test(a.textContent||''));if(t){t.click();sorted=true;await new Promise(r=>setTimeout(r,2500));}else{await new Promise(r=>setTimeout(r,800));}}}const start=Date.now();let posts=[];while(Date.now()-start<12000){posts=[...document.querySelectorAll('.article_item')].map(d=>{const a=d.querySelector('a[href]');const c=d.querySelector('.article_content');return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:a.href,time:c?(c.textContent||'').trim().slice(0,20):null,excerpt:(d.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100)}:null;}).filter(x=>x&&x.url&&/guba\\.eastmoney\\.com\\/(news|list)/.test(x.url));if(posts.length>=5)break;await new Promise(r=>setTimeout(r,500));}return {sort:sorted?'time':'default',count:posts.length,links:posts.slice(0,15),text:(document.body.innerText||'').slice(0,2500).trim()};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const keyword=want('$query');const lim=Math.max(1,Math.min(Number(want('$limit'))||15,100));const maxP=Math.max(1,Math.min(Number(want('$maxPages'))||3,5));const sort=want('$sort').toLowerCase();let sorted=false;if(sort==='latest'||sort==='time'){for(let att=0;att<6&&!sorted;att++){const t=[...document.querySelectorAll('a')].find(a=>/按时间排序/.test(a.textContent||''));if(t){t.click();sorted=true;await sleep(2500);}else{await sleep(800);}}}const extract=(root)=>{const seen=new Set();return [...root.querySelectorAll('.article_item')].map(d=>{const a=d.querySelector('a[href]');const c=d.querySelector('.article_content');return a?{title:(a.textContent||'').replace(/\\s+/g,' ').trim().slice(0,120),url:a.href,time:c?(c.textContent||'').trim().slice(0,20):null,excerpt:(d.textContent||'').replace(/\\s+/g,' ').trim().slice(0,100)}:null;}).filter(x=>x&&x.url&&/guba\\.eastmoney\\.com\\/(news|list)/.test(x.url)&&!seen.has(x.url)&&seen.add(x.url));};let links=[];const start=Date.now();while(Date.now()-start<12000){links=extract(document);if(links.length>=3)break;await sleep(500);}let pages=1;const base='https://so.eastmoney.com/tiezi/s?keyword='+encodeURIComponent(keyword||'');while(links.length<lim&&pages<maxP){const next=base+'&page='+(pages+1);await sleep(1400+Math.floor(Math.random()*800));let html=null;try{const r=await fetch(next,{credentials:'include'});if(!r.ok)break;html=await r.text();}catch{break;}if(!html||html.length<500)break;let doc=null;try{doc=new DOMParser().parseFromString(html,'text/html');}catch{break;}const seen=new Set(links.map(x=>x.url));const added=extract(doc);let grew=0;for(const it of added){if(links.length>=lim)break;if(!seen.has(it.url)){links.push(it);grew++;}}pages++;if(!grew)break;}return {sort:sorted?'time':'default',count:links.length,links:links.slice(0,lim),pages:pages,text:(document.body.innerText||'').slice(0,2500).trim()};})()"
       },
       "expectations": [
         {

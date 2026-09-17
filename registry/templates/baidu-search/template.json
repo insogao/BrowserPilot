@@ -1,36 +1,62 @@
 {
   "id": "baidu-search",
   "name": "百度搜索",
-  "version": "1.2.0",
-  "description": "在百度搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。",
+  "version": "1.3.0",
+  "description": "在百度搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。",
   "category": "search",
+  "tags": [
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
       "type": "string",
       "required": true,
       "description": "搜索关键词"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "返回结果条数（默认 10，最多 100）"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
   "body": [
     {
       "name": "open_tab",
-      "args": { "url": "https://www.baidu.com" },
+      "args": {
+        "url": "https://www.baidu.com"
+      },
       "note": "打开百度首页"
     },
     {
       "name": "js",
       "args": {
         "expression": "@focus",
-        "selectors": ["#chat-textarea", "textarea[name=wd]", "#kw"]
+        "selectors": [
+          "#chat-textarea",
+          "textarea[name=wd]",
+          "#kw"
+        ]
       },
       "expect": "true",
       "note": "等待并聚焦搜索框"
     },
     {
       "name": "fill",
-      "args": { "selector": "[data-bp-focus]", "value": "$query" },
+      "args": {
+        "selector": "[data-bp-focus]",
+        "value": "$query"
+      },
       "note": "填入关键词"
     },
     {
@@ -43,36 +69,74 @@
     },
     {
       "name": "waitForURL",
-      "args": { "pattern": "baidu.com/s", "partial": true, "timeoutMs": 20000 },
+      "args": {
+        "pattern": "baidu.com/s",
+        "partial": true,
+        "timeoutMs": 20000
+      },
       "note": "等待结果页加载"
     },
     {
       "name": "js",
       "args": {
         "expression": "@results",
-        "rootSelectors": ["#content_left", ".result", ".c-container"],
+        "rootSelectors": [
+          "#content_left",
+          ".result",
+          ".c-container"
+        ],
         "linkSelector": "h3 a,.t a",
         "minResults": 3,
-        "limit": 10,
-        "textLimit": 6000
+        "limit": "$limit",
+        "textLimit": 6000,
+        "maxPages": "$maxPages",
+        "nextSelector": "#page a.n",
+        "nextText": "下一页"
       },
       "note": "抓取搜索结果"
     }
   ],
-  "tokenStrategy": { "defaultL0": true },
+  "tokenStrategy": {
+    "defaultL0": true
+  },
   "scope": {
-    "sites": ["baidu.com"]
+    "sites": [
+      "baidu.com"
+    ]
   },
   "discovery": {
-    "intents": ["search", "web.search"],
-    "keywords": ["百度", "baidu", "搜索", "search"],
+    "intents": [
+      "search",
+      "web.search"
+    ],
+    "keywords": [
+      "百度",
+      "baidu",
+      "搜索",
+      "search"
+    ],
     "outputs": [
-      { "name": "count", "type": "number", "description": "返回结果条数" },
-      { "name": "links", "type": "array", "description": "搜索结果列表，每项含title和url" },
-      { "name": "text", "type": "string", "description": "结果页纯文本摘要" }
+      {
+        "name": "count",
+        "type": "number",
+        "description": "返回结果条数"
+      },
+      {
+        "name": "links",
+        "type": "array",
+        "description": "搜索结果列表，每项含title和url"
+      },
+      {
+        "name": "text",
+        "type": "string",
+        "description": "结果页纯文本摘要"
+      }
     ],
     "risk": "read",
-    "aliases": ["baidu", "bd-search"],
+    "aliases": [
+      "baidu",
+      "bd-search"
+    ],
     "browserpilot": ">=0.1.0"
   }
 }

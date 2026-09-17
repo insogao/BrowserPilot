@@ -1,18 +1,20 @@
 # Search Demo Template
 
-> A copyable demo for adapting a search engine with runtime template selectors.
+> 可复制的搜索适配示例：演示运行时模板选择器 + 指定条数/自动翻页。
 
 - ID: `search-demo`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `google.com`
 - Intents: `search.web`, `search.demo`
 - Capabilities: `fill`, `js`, `open_tab`, `press`, `waitForSelector`
-- 功能指纹: `sha256:ffc7fb6858bb2d2dfca7646b86f493cd5604a9996e5d274e7e0aacfb7fc9d7a7`
+- 功能指纹: `sha256:14a4cb1c9386f8fa1e291d640d46906f186f43cc91cd027ea12ba9fe0980e574`
 
 ## 输入
 
 - `query` (string, required): Search keyword
+- `limit` (number): 返回结果条数（默认 10，最多 100）
+- `maxPages` (number): 最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）
 
 ## 输出
 

@@ -1,15 +1,32 @@
 {
   "id": "search",
   "name": "Google Search",
-  "version": "1.0.0",
-  "description": "Search Google and return the top 10 results with title, URL, and snippet.",
+  "version": "1.1.0",
+  "description": "在 Google 搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。",
   "category": "search",
+  "tags": [
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
       "type": "string",
       "required": true,
       "description": "Search query"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "返回结果条数（默认 10，最多 100）"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
@@ -70,7 +87,7 @@
           "#center_col"
         ],
         "minResults": 3,
-        "limit": 10,
+        "limit": "$limit",
         "textLimit": 6000,
         "excludeUrlPrefixes": [
           "/search?",
@@ -91,7 +108,9 @@
           "https://www.google.com/preferences",
           "https://www.google.com/intl/",
           "https://www.google.com/webhp"
-        ]
+        ],
+        "maxPages": "$maxPages",
+        "nextSelector": "#pnnext"
       },
       "note": "抓取搜索结果（排除 Google 自家 UI 链接）"
     }

@@ -2,8 +2,11 @@
   "id": "xueqiu-comments",
   "name": "雪球评论爬取",
   "version": "1.0.0",
-  "description": "爬取一篇雪球帖子下的评论（用户/内容/点赞/时间），支持分页。需雪球登录态。",
+  "description": "爬取一篇雪球帖子下的评论（用户/内容/点赞/时间），支持分页，返回指定条数（默认 20，最多 100）。需雪球登录态。",
   "category": "finance",
+  "tags": [
+    "finance"
+  ],
   "inputs": [
     {
       "name": "url",

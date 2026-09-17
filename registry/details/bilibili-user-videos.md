@@ -1,9 +1,9 @@
 # B站用户投稿列表
 
-> 抓取某个B站用户空间的投稿视频列表（标题/BV号/链接），滚动加载。配合 bilibili-download-video 可逐个下载。
+> 抓取B站用户空间的投稿视频，返回指定条数（默认 30，最多 100；滚动加载）。配合 bilibili-download-video 可逐个下载。
 
 - ID: `bilibili-user-videos`
-- 版本: `1.0.2`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `bilibili.com`
 - Intents: `media.list`, `account.watch`

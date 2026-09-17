@@ -1,9 +1,9 @@
 # B站收藏夹列表
 
-> 列出B站登录用户收藏夹中的视频（标题/BV号/链接），配合 bilibili-download-video 可批量下载自己收藏的内容。需要B站登录态。
+> 列出B站登录用户收藏夹中的视频，返回指定条数（默认 30，最多 100；滚动加载）。需要B站登录态。
 
 - ID: `bilibili-favlist`
-- 版本: `1.0.3`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `bilibili.com`
 - Intents: `media.list`, `video.download`

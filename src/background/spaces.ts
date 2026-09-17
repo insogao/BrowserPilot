@@ -129,6 +129,15 @@ export async function assertTabInCommandSpace(cmd: Command, tabId: number): Prom
   return space;
 }
 
+/** 可见性意图（与 Backlight 门禁同构）：默认后台，不做任何聚焦/恢复；
+ *  只有显式 `focus:true` / `keepVisible:true` / `visible:true` / `background:false` 才允许可见路径。 */
+export function wantsVisible(args: Record<string, unknown> | undefined): boolean {
+  const a = args ?? {};
+  if (a.background === true) return false;
+  return a.focus === true || a.keepVisible === true || a.visible === true || a.background === false;
+}
+
+/** 显式可见路径：恢复窗口为 normal 并聚焦（仅供 wantsVisible 为真或 ensure_visible 命令使用）。 */
 export async function ensureTabVisible(tabId: number, requestedState?: "normal" | "maximized"): Promise<chrome.tabs.Tab> {
   const tab = await chrome.tabs.get(tabId);
   if (tab.windowId !== undefined) {
@@ -165,8 +174,10 @@ export async function open_space(cmd: Command): Promise<SpaceState> {
   const args = cmd.args ?? {};
   const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "Task " + new Date().toLocaleTimeString();
   const url = typeof args.url === "string" && args.url.trim() ? args.url.trim() : "about:blank";
-  const requestedState = args.state === "normal" ? "normal" : "maximized";
-  const win = await chrome.windows.create({ url, focused: true, state: requestedState });
+  const visible = wantsVisible(args);
+  const requestedState = args.state === "normal" ? "normal" : visible ? "maximized" : "minimized";
+  // 默认后台：新窗口不聚焦且最小化，避免抢占用户桌面；显式 visible 才前台最大化。
+  const win = await chrome.windows.create({ url, focused: visible, state: requestedState });
   if (win.id === undefined) throw new Error("创建 Task Space 窗口失败");
   const spaceId = "space-" + crypto.randomUUID();
   const tab = win.tabs?.[0];
@@ -177,6 +188,7 @@ export async function open_space(cmd: Command): Promise<SpaceState> {
     tabId: tab?.id,
     ownerClientId: clientId,
     ownership: "agent",
+    background: !visible,
     createdAt: now,
     updatedAt: now,
   });
@@ -247,9 +259,13 @@ export async function open_tab(cmd: Command): Promise<{ tabId?: number; windowId
   const space = await ensureCommandSpace(cmd);
   if (space.windowId === undefined) throw new TaskSpaceError("SPACE_INACTIVE", "Task Space 没有活动窗口");
   const url = (cmd.args?.url as string) ?? "about:blank";
-  const tab = await chrome.tabs.create({ windowId: space.windowId, url, active: true });
+  const visible = wantsVisible(cmd.args);
+  // 默认后台：不聚焦/不恢复窗口；但后台空间（窗口最小化）内让标签保持 active，
+  // 页面才能正常渲染（visibilityState=visible），同时窗口不会弹到前台。
+  const activateInWindow = visible || space.background === true;
+  const tab = await chrome.tabs.create({ windowId: space.windowId, url, active: activateInWindow });
   await patchSpace(space.spaceId, { tabId: tab.id });
-  await ensureTabVisible(tab.id as number).catch(() => {});
+  if (visible) await ensureTabVisible(tab.id as number).catch(() => {});
   return { tabId: tab.id, windowId: tab.windowId, spaceId: space.spaceId };
 }
 
@@ -265,7 +281,15 @@ export async function switch_tab(cmd: Command): Promise<{ tabId: number; windowI
   const tabId = Number(cmd.args?.tabId);
   if (!Number.isFinite(tabId)) throw new Error("switch_tab 需要数字 tabId");
   const space = await assertTabInCommandSpace(cmd, tabId);
-  const tab = await ensureTabVisible(tabId);
+  // 默认后台：不聚焦/不恢复窗口；后台空间（最小化窗口）内允许切换窗口内 active 标签以正常渲染。
+  let tab: chrome.tabs.Tab;
+  if (wantsVisible(cmd.args)) {
+    tab = await ensureTabVisible(tabId);
+  } else if (space.background === true) {
+    tab = await chrome.tabs.update(tabId, { active: true });
+  } else {
+    tab = await chrome.tabs.get(tabId);
+  }
   await patchSpace(space.spaceId, { tabId });
   return { tabId: tab.id as number, windowId: tab.windowId, url: tab.url, title: tab.title };
 }

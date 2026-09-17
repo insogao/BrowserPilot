@@ -1,19 +1,20 @@
 # 雪球搜索
 
-> 在雪球搜索关键词，返回相关讨论帖（作者+时间+链接+摘要）与页面信息（含股票行情卡文本）。需浏览器已有雪球登录态。
+> 在雪球搜索关键词，返回指定条数讨论帖（作者+时间+链接+摘要，默认 10，最多 100）。需浏览器已有雪球登录态。
 
 - ID: `xueqiu-search`
-- 版本: `1.1.0`
+- 版本: `1.3.0`
 - 风险: `read`
 - 适用站点: `xueqiu.com`
 - Intents: `search`, `finance.search`, `stock.discussion`
 - Capabilities: `js`, `open_tab`, `waitForTimeout`
-- 功能指纹: `sha256:d05413202075413c624907914cea6a76c4998508dd311ea94e8bd151e22c7b05`
+- 功能指纹: `sha256:c4044a2531b2f974e62af79a565601ab1727d3acdb67beb67b00079e2306d5ef`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词（股票名/代码/话题）
 - `sort` (string): 排序：latest=最新讨论；留空=默认排序
+- `limit` (number): 返回帖子条数（默认 10，最多 100）
 
 ## 输出
 

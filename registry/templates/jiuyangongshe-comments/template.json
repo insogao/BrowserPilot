@@ -1,9 +1,12 @@
 {
   "id": "jiuyangongshe-comments",
   "name": "韭研公社评论爬取",
-  "version": "1.0.0",
-  "description": "爬取一篇韭研公社文章下的评论（用户/时间/内容）。需要微信登录态；无评论时返回空列表。",
+  "version": "1.1.0",
+  "description": "爬取一篇韭研公社文章下的评论，返回指定条数（默认 30，最多 100；滚动加载）。需要微信登录态。",
   "category": "finance",
+  "tags": [
+    "finance"
+  ],
   "inputs": [
     {
       "name": "url",
@@ -24,7 +27,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/jiuyangongshe\\.com\\/a\\//.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入公社文章链接（jiuyangongshe.com/a/<id>）'};for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}await new Promise(r=>setTimeout(r,1000));window.scrollTo(0,0);const nodes=[...document.querySelectorAll('.comment-content')];const limit=Math.max(1,Math.min(Number('$limit')||30,100));const comments=nodes.slice(0,limit).map(n=>{const t=(n.innerText||'').replace(/\\n+/g,' ').trim();const user=(t.split('只看TA')[0]||'').trim().slice(0,40);const timeM=t.match(/((昨天|今天)?\\s*[\\d-]{5,10}\\s*\\d{2}:\\d{2})/);return {raw:t.slice(0,400),user:user||null,time:timeM?timeM[1].trim():null};});return {ok:true,fetched:comments.length,total:comments.length>=limit?'>='+limit:comments.length,comments:comments,url:location.href};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const target=want('$url');const isArt=()=>/jiuyangongshe\\.com\\/a\\//.test(location.href);if(target&&location.href!==target&&!isArt()){location.href=target;const t0=Date.now();while(Date.now()-t0<20000&&!isArt())await new Promise(r=>setTimeout(r,500));}if(!isArt())return {ok:false,error:'not-article-page',hint:'请传入公社文章链接（jiuyangongshe.com/a/<id>）'};const lim=Math.max(1,Math.min(Number(want('$limit'))||30,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const extract=()=>[...document.querySelectorAll('.comment-content')].map(n=>{const t=(n.innerText||'').replace(/\\n+/g,' ').trim();const user=(t.split('只看TA')[0]||'').trim().slice(0,40);const timeM=t.match(/((昨天|今天)?\\s*[\\d-]{5,10}\\s*\\d{2}:\\d{2})/);return {raw:t.slice(0,400),user:user||null,time:timeM?timeM[1].trim():null};});await sleep(1000);let comments=extract();for(let i=0;i<20&&comments.length<lim;i++){const before=comments.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));comments=extract();if(comments.length>=lim)break;if(comments.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {ok:true,fetched:comments.length,total:comments.length>=lim?'>='+lim:comments.length,comments:comments.slice(0,lim),url:location.href};})()"
       },
       "expectations": [
         {

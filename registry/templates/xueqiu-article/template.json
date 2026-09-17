@@ -4,6 +4,9 @@
   "version": "1.1.0",
   "description": "爬取一篇雪球帖子/文章的全文（标题+正文，最多8000字符）。需浏览器已有雪球登录态。",
   "category": "finance",
+  "tags": [
+    "finance"
+  ],
   "inputs": [
     {
       "name": "url",

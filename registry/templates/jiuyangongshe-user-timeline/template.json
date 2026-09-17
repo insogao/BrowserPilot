@@ -1,9 +1,12 @@
 {
   "id": "jiuyangongshe-user-timeline",
   "name": "韭研公社账号时间线",
-  "version": "1.0.0",
-  "description": "抓取某个韭研公社作者主页的最新文章列表。需要微信登录态。",
+  "version": "1.1.0",
+  "description": "抓取韭研公社作者主页的最新文章，返回指定条数（默认 15，最多 100；滚动加载）。需要微信登录态。",
   "category": "finance",
+  "tags": [
+    "finance"
+  ],
   "inputs": [
     {
       "name": "uid",
@@ -38,7 +41,7 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));for(let y=0;y<=document.body.scrollHeight;y+=700){window.scrollTo(0,y);await new Promise(r=>setTimeout(r,120));}window.scrollTo(0,0);await new Promise(r=>setTimeout(r,600));const arts=[...document.querySelectorAll('a[href*=\"/a/\"]')];const seen=new Set();const posts=[];for(const a of arts){if(posts.length>=(Number('$limit')||15))break;const href=a.getAttribute('href')||'';const url=location.origin+href;if(seen.has(url))continue;seen.add(url);const t=(a.textContent||'').replace(/\\s+/g,' ').trim();if(t.length>3)posts.push({title:t.slice(0,120),url:url});}return {ok:true,count:posts.length,posts:posts};})()"
+        "expression": "(async()=>{await new Promise(r=>setTimeout(r,2500));const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||15,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const extract=()=>{const seen=new Set();const posts=[];for(const a of document.querySelectorAll('a[href*=\"/a/\"]')){const href=a.getAttribute('href')||'';const url=location.origin+href;if(seen.has(url))continue;const t=(a.textContent||'').replace(/\\s+/g,' ').trim();if(t.length>3){seen.add(url);posts.push({title:t.slice(0,120),url:url});}}return posts;};let posts=extract();for(let i=0;i<15&&posts.length<lim;i++){const before=posts.length;window.scrollTo(0,document.body.scrollHeight);await sleep(900+Math.floor(Math.random()*400));posts=extract();if(posts.length>=lim)break;if(posts.length===before&&i>1)break;}window.scrollTo(0,0);await sleep(300);return {ok:true,count:posts.length,posts:posts.slice(0,lim),loaded:posts.length};})()"
       },
       "expectations": [
         {

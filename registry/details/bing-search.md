@@ -1,18 +1,20 @@
 # 必应搜索
 
-> 在必应搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。
+> 在必应搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。
 
 - ID: `bing-search`
-- 版本: `1.2.2`
+- 版本: `1.3.0`
 - 风险: `read`
 - 适用站点: `bing.com`
 - Intents: `search`, `web.search`
 - Capabilities: `js`, `open_tab`, `press`, `type`, `waitForSelector`, `waitForTimeout`, `waitForURL`
-- 功能指纹: `sha256:603b7af0a5f2f77a387b3a8fa11c8cfb02be46db932a358bd687b92a83ac800e`
+- 功能指纹: `sha256:f73fe9b58488b98db1ff907059c43590cee67f6312bc85f2bf548549097df624`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词
+- `limit` (number): 返回结果条数（默认 10，最多 100）
+- `maxPages` (number): 最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）
 
 ## 输出
 

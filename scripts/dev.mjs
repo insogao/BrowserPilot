@@ -50,6 +50,7 @@ function copyAllStatic() {
   copyStatic("src/kernel/kernel.html", "kernel/kernel.html");
   copyStatic("src/offscreen/offscreen.html", "offscreen/offscreen.html");
   copyStatic("assets/icons", "icons");
+  if (fs.existsSync(path.join(root, "registry", "bundle.json"))) copyStatic("registry/bundle.json", "templates.bundle.json");
 }
 
 // 扫描 47001~47060，找能 ping 通的 host 端口。

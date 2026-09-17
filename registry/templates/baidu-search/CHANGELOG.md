@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0 — 2026-09-17
+
+- 支持 `limit`（默认 10，最多 100）与 `maxPages`；结果不足时按「下一页」自动翻页（礼貌间隔 + 抖动）。
+
 ## 1.2.0
 
 - 重构为声明式搜索模式：`@focus` 声明 `selectors`，`@results` 声明 `rootSelectors`/`linkSelector`/`minResults`/`limit`/`textLimit`。

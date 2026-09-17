@@ -1,19 +1,20 @@
 # 个股吧帖子流
 
-> 按股票代码打开个股吧列表页，返回最新帖子流（标题/链接/阅读数/评论数/时间），默认按时间排序。无需登录。
+> 按股票代码打开个股吧列表页，返回指定条数（默认 30，最多 100）。无需登录。
 
 - ID: `guba-list`
-- 版本: `1.0.1`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `guba.eastmoney.com`
 - Intents: `finance.forum`, `stock.posts`
 - Capabilities: `js`, `open_tab`, `waitForTimeout`
-- 功能指纹: `sha256:db2029cacf246102fd5541dc77c9c8f6a04ed60d52d09332c1349986c30912d2`
+- 功能指纹: `sha256:eacf8728a112ec241b4e359b4dfdacfdde9d9ff23c9a85060b3c77e964fd187b`
 
 ## 输入
 
 - `code` (string, required): 6 位股票代码（如 600519）；或用 params.url 传含代码的链接
 - `limit` (number): 最多条数
+- `maxPages` (number): 最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）
 
 ## 输出
 

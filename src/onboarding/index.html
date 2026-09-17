@@ -29,8 +29,16 @@
       .badge { display: inline-block; border-radius: 999px; padding: 2px 7px; background: #f3f4f6; font-size: 11px; margin-left: 5px; }
       .badge.ok { background: #dcfce7; color: #166534; }
       .badge.off { background: #fee2e2; color: #991b1b; }
+      .badge.update { background: #fef3c7; color: #92400e; }
+      .badge.tag { background: #eef2ff; color: #3730a3; }
       .status { min-height: 22px; color: #4b5563; margin: 8px 0; }
-      details.install { border: 1px solid #dbeafe; background: #f8fbff; border-radius: 10px; padding: 12px; }
+      .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0 2px; }
+      .chip { border: 1px solid #d1d5db; background: #fff; border-radius: 999px; padding: 4px 12px; cursor: pointer; font-size: 12px; }
+      .chip.active { background: #2563eb; border-color: #2563eb; color: #fff; }
+      .updates-panel { border: 1px solid #fde68a; background: #fffbeb; border-radius: 10px; padding: 12px; margin: 10px 0; }
+      .update-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13px; }
+      .update-row .ver { color: #92400e; }
+      details.install { border: 1px solid #dbeafe; background: #f8fbff; border-radius: 10px; padding: 12px; margin-top: 14px; }
     </style>
   </head>
   <body>
@@ -61,25 +69,31 @@
     <p>连接本机 <code>com.browserpilot.browseragent</code> host 后，先从 popup 复制 Copy Skill 文档。当前可用：<code>ping</code> / <code>version</code> / <code>get_profile</code> / <code>export_guide</code> / <code>snapshot(level=L0)</code> / <code>click</code> / <code>fill</code> / <code>js</code> / <code>drainEvents</code> / <code>screenshot</code> / <code>list_tabs</code> / <code>run_template</code>。</p>
 
     <h2>操作模板</h2>
-    <p>安装、查阅、启停、更新、回滚或卸载模板。内置模板随扩展发布，不可卸载；GitHub 来源当前支持公开仓库。</p>
-    <div class="toolbar">
-      <button class="primary" id="refresh-templates">刷新模板</button>
+    <p>模板随扩展发布、开箱即用，按 Tag 分类展示。「检查更新」会读取 GitHub Registry（<code>insogao/BrowserPilot</code>），
+      发现新版本或新模板后由你勾选安装；安装的 GitHub 版本会覆盖随扩展发布的同名模板，可回滚或卸载恢复。</p>
+    <div class="toolbar" style="margin:10px 0">
+      <input id="template-search" placeholder="搜索名称、站点、Intent 或关键词" style="flex:1" />
+      <button class="primary" id="check-updates">检查更新（GitHub）</button>
       <span id="template-summary"></span>
     </div>
-    <div class="form-row" style="margin:10px 0">
-      <input id="template-search" placeholder="搜索功能、站点、intent 或关键词" style="flex:1" />
-      <button id="search-registry">搜索 Registry</button>
-      <button id="sync-registry">同步目录</button>
-    </div>
+    <div class="chips" id="tag-filter"></div>
     <div class="status" id="template-status"></div>
-    <div class="template-grid" id="registry-results"></div>
+    <section class="updates-panel" id="updates-panel" hidden>
+      <strong id="updates-title"></strong>
+      <div id="updates-list"></div>
+      <div class="toolbar" style="margin-top:8px">
+        <button class="primary" id="install-selected">安装所选</button>
+        <button id="close-updates">关闭</button>
+      </div>
+    </section>
+    <div class="template-grid" id="template-list"></div>
 
     <details class="install">
-      <summary><strong>安装模板</strong></summary>
+      <summary><strong>手动安装 / 高级选项</strong></summary>
       <h3>从 GitHub 安装</h3>
       <div class="form-row">
         <input id="github-repo" value="insogao/BrowserPilot" placeholder="owner/repo" />
-        <input id="github-path" placeholder="templates/example.json" />
+        <input id="github-path" placeholder="registry/templates/&lt;id&gt;/template.json" />
         <input id="github-ref" value="main" placeholder="main" />
         <button id="load-catalog">读取目录</button>
         <button id="install-github">安装</button>
@@ -91,8 +105,6 @@
       <textarea id="template-content" placeholder='{"id":"my-template", ...}'></textarea>
       <button id="install-content">安装本地模板</button>
     </details>
-
-    <div class="template-grid" id="template-list"></div>
 
     <script src="index.js"></script>
   </body>

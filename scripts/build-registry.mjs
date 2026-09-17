@@ -129,6 +129,7 @@ for (const manifestPath of manifestPaths) {
     detailsPath: "registry/details/" + template.id + ".md",
     description: template.description,
     category: template.category,
+    tags: template.tags ?? [],
     sites: template.scope?.sites ?? [],
     intents: template.discovery.intents,
     keywords: template.discovery.keywords,
@@ -156,6 +157,14 @@ for (let i = 0; i < packages.length; i++) {
 const catalog = JSON.stringify({ schemaVersion: 2, generatorVersion: 1, templates: packages.map((x) => x.entry) }, null, 2) + "\n";
 const outputs = new Map([[catalogPath, catalog]]);
 
+// 随扩展发布的模板包（build 时打进 dist）：默认全量可用，GitHub Registry 仅用于发现更新/新增。
+const bundle = JSON.stringify({
+  schemaVersion: 1,
+  generatorVersion: 1,
+  templates: packages.map((x) => x.template).sort((a, b) => a.id.localeCompare(b.id)),
+}, null, 2) + "\n";
+outputs.set(path.join(root, "registry", "bundle.json"), bundle);
+
 function indexMarkdown(entries) {
   const groups = new Map();
   for (const entry of entries) {
@@ -171,10 +180,10 @@ function indexMarkdown(entries) {
     "",
   ];
   for (const [cat, items] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
-    lines.push("## " + cat, "", "| 模板 ID | 名称 | 版本 | 功能 | 风险 | 包目录 |", "|---|---|---|---|---|---|");
+    lines.push("## " + cat, "", "| 模板 ID | 名称 | 版本 | Tag | 功能 | 风险 | 包目录 |", "|---|---|---|---|---|---|---|");
     for (const e of items.sort((a, b) => a.id.localeCompare(b.id))) {
       const dir = "templates/" + e.id + "/";
-      lines.push("| `" + e.id + "` | " + e.name + " | " + e.version + " | " + e.description + " | " + e.risk + " | [" + dir + "](" + dir + ") |");
+      lines.push("| `" + e.id + "` | " + e.name + " | " + e.version + " | " + ((e.tags && e.tags.length) ? e.tags.join(", ") : "-") + " | " + e.description + " | " + e.risk + " | [" + dir + "](" + dir + ") |");
     }
     lines.push("");
   }

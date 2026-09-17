@@ -61,6 +61,7 @@ export type CommandName =
   | "uninstall_template"
   | "set_template_enabled"
   | "check_template_update"
+  | "check_registry_updates"
   | "list_template_catalog"
   | "sync_registry"
   | "search_templates"

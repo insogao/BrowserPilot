@@ -4,6 +4,10 @@
   "version": "1.0.0",
   "description": "下载一个 TikTok 视频为 MP4 文件（页面内拉流落盘到浏览器下载目录）。需要浏览器可访问 TikTok；受限视频返回结构化错误。",
   "category": "media",
+  "tags": [
+    "video",
+    "download"
+  ],
   "inputs": [
     {
       "name": "url",

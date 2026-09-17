@@ -1,9 +1,9 @@
 # 个股公告
 
-> 按股票代码抓取东方财富的最新公告列表（标题/类型/日期/详情链接）。无需登录。
+> 按股票代码抓取东方财富最新公告（标题/类型/日期/链接），返回指定条数（默认 20，最多 100）。无需登录。
 
 - ID: `stock-announcements`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `eastmoney.com`
 - Intents: `finance.announcements`, `stock.disclosure`

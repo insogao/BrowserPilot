@@ -1,18 +1,20 @@
 # B站搜索
 
-> 在B站搜索关键词，取回前10条视频结果（标题+链接+页面摘要）。
+> 在B站搜索关键词，返回指定条数视频结果（标题/作者/链接，默认 10，最多 100；不足时自动翻页）。
 
 - ID: `bilibili-search`
-- 版本: `1.0.2`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `bilibili.com`
 - Intents: `search`, `video.search`
 - Capabilities: `js`, `open_tab`, `waitForSelector`
-- 功能指纹: `sha256:202205919c79fc01036a505916a9773c77fedff54fe175e68450ee98cc424ea6`
+- 功能指纹: `sha256:a59286bdf503beb136865b2d2f9d6da16418e550399b79c65b405083f4d30f1f`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词
+- `limit` (number): 返回视频条数（默认 10，最多 100）
+- `maxPages` (number): 最多翻页数（默认 3，上限 5；仅当结果不足 limit 时才翻页）
 
 ## 输出
 

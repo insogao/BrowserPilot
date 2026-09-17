@@ -1,18 +1,19 @@
 # X/Twitter 搜索
 
-> 在 X (x.com) 搜索关键词，返回前10条推文（作者+文本+图片URL+时间）。需要登录 X 账号。
+> 在 X (x.com) 搜索关键词，返回指定条数推文（作者+文本+时间，默认 10，最多 100；滚动加载直到取够或无法继续）。需要登录 X 账号。
 
 - ID: `x-search`
-- 版本: `1.1.0`
+- 版本: `1.2.0`
 - 风险: `read`
 - 适用站点: `x.com`, `twitter.com`
 - Intents: `search`, `social.search`
 - Capabilities: `js`, `open_tab`, `screenshot`, `waitForSelector`, `waitForURL`
-- 功能指纹: `sha256:8253732a51e0c8fc11cb5d551fecb26c29a4524f84574e7b818a8565a9434f24`
+- 功能指纹: `sha256:16e6978564c3a074e27b94c498a630b1568786c04ebf90ff530bad2c07d0f53c`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词
+- `limit` (number): 返回推文条数（默认 10，最多 100）
 
 ## 输出
 

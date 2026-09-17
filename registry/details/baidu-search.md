@@ -1,18 +1,20 @@
 # 百度搜索
 
-> 在百度搜索一个关键词，取回前10条结果（标题+链接+正文摘要）。
+> 在百度搜索关键词，返回指定条数结果（默认 10，最多 100；不足时自动翻页，页间有礼貌间隔）。
 
 - ID: `baidu-search`
-- 版本: `1.2.0`
+- 版本: `1.3.0`
 - 风险: `read`
 - 适用站点: `baidu.com`
 - Intents: `search`, `web.search`
 - Capabilities: `fill`, `js`, `open_tab`, `waitForURL`
-- 功能指纹: `sha256:c0dbeb07a0f8f02c3d8acc430b640ae95f2c5ae5e556c4a6a67358afc7d21b42`
+- 功能指纹: `sha256:83608737bcce176575a97de40418538606381c89155dd9e107d84c83d2f58942`
 
 ## 输入
 
 - `query` (string, required): 搜索关键词
+- `limit` (number): 返回结果条数（默认 10，最多 100）
+- `maxPages` (number): 最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）
 
 ## 输出
 

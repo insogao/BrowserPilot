@@ -1,27 +1,44 @@
 {
   "id": "x-search",
   "name": "X/Twitter 搜索",
-  "version": "1.1.0",
-  "description": "在 X (x.com) 搜索关键词，返回前10条推文（作者+文本+图片URL+时间）。需要登录 X 账号。",
+  "version": "1.2.0",
+  "description": "在 X (x.com) 搜索关键词，返回指定条数推文（作者+文本+时间，默认 10，最多 100；滚动加载直到取够或无法继续）。需要登录 X 账号。",
   "category": "search",
+  "tags": [
+    "search",
+    "social"
+  ],
   "inputs": [
     {
       "name": "query",
       "type": "string",
       "required": true,
       "description": "搜索关键词"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "返回推文条数（默认 10，最多 100）"
     }
   ],
   "steps": "commands",
   "body": [
     {
       "name": "open_tab",
-      "args": { "url": "https://x.com/search?q=$query&src=typed_query" },
+      "args": {
+        "url": "https://x.com/search?q=$query&src=typed_query"
+      },
       "note": "打开 X 搜索页"
     },
     {
       "name": "waitForURL",
-      "args": { "pattern": "x.com/search", "partial": true, "timeoutMs": 20000 },
+      "args": {
+        "pattern": "x.com/search",
+        "partial": true,
+        "timeoutMs": 20000
+      },
       "note": "等待搜索结果页导航完成"
     },
     {
@@ -34,42 +51,74 @@
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const MAX_SCROLLS=6;const DELAY=800;const PX=800;let tweetCount=0;let i=0;for(i=0;i<MAX_SCROLLS;i++){tweetCount=document.querySelectorAll('article[data-testid=\"tweet\"]').length;if(tweetCount>=3)break;window.scrollBy(0,PX);await new Promise(r=>setTimeout(r,DELAY));}tweetCount=document.querySelectorAll('article[data-testid=\"tweet\"]').length;return {scrolls:i+1,tweetCount};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));const count=()=>document.querySelectorAll('article[data-testid=\"tweet\"]').length;const maxScrolls=Math.max(4,Math.min(40,Math.ceil(lim/4)+4));let scrolls=0;for(let i=0;i<maxScrolls;i++){const n=count();if(n>=lim)break;const before=n;window.scrollBy(0,800);scrolls++;await sleep(900+Math.floor(Math.random()*400));if(count()===before&&i>1){await sleep(1200);if(count()===before)break;}}window.scrollTo(0,0);await sleep(600);return {scrolls:scrolls,loaded:count(),limit:lim};})()"
       },
       "note": "滚动触发虚拟列表懒加载"
     },
     {
       "name": "waitForSelector",
-      "args": { "selector": "article[data-testid=\"tweet\"]", "visible": true, "timeoutMs": 15000 },
+      "args": {
+        "selector": "article[data-testid=\"tweet\"]",
+        "visible": true,
+        "timeoutMs": 15000
+      },
       "note": "确认推文元素可见"
     },
     {
       "name": "screenshot",
-      "args": { "format": "jpeg" },
+      "args": {
+        "format": "jpeg"
+      },
       "note": "截图确认推文已加载"
     },
     {
       "name": "js",
       "args": {
-        "expression": "(async()=>{const arts=document.querySelectorAll('article[data-testid=\"tweet\"]');const tweets=[];const seen=new Set();for(const a of arts){if(tweets.length>=10)break;const u=a.querySelector('[data-testid=\"User-Name\"]');const t=a.querySelector('[data-testid=\"tweetText\"]');const tm=a.querySelector('time');const user=(u?.innerText||'').split('\\n')[0].trim();const text=(t?.innerText||'').trim();const time=tm?.getAttribute('datetime')||'';const photos=a.querySelectorAll('[data-testid=\"tweetPhoto\"]');const imgs=[];photos.forEach(p=>{p.querySelectorAll('img').forEach(img=>{const s=img.src||'';if(s.includes('pbs.twimg.com'))imgs.push(s);});});const key=user+text.slice(0,50);if(text.length>10&&!seen.has(key)){seen.add(key);tweets.push({user,text:text.slice(0,500),time,imgs:imgs.slice(0,4)});}}return {count:tweets.length,tweets};})()"
+        "expression": "(async()=>{const want=(p)=>{p=(p||'').trim();return (!p||p[0]==='$')?'':p;};const lim=Math.max(1,Math.min(Number(want('$limit'))||10,100));const arts=document.querySelectorAll('article[data-testid=\"tweet\"]');const tweets=[];const seen=new Set();for(const a of arts){if(tweets.length>=lim)break;const u=a.querySelector('[data-testid=\"User-Name\"]');const t=a.querySelector('[data-testid=\"tweetText\"]');const tm=a.querySelector('time');const user=(u?.innerText||'').split('\\n')[0].trim();const text=(t?.innerText||'').trim();const time=tm?.getAttribute('datetime')||'';const photos=a.querySelectorAll('[data-testid=\"tweetPhoto\"]');const imgs=[];photos.forEach(p=>{p.querySelectorAll('img').forEach(img=>{const s=img.src||'';if(s.includes('pbs.twimg.com'))imgs.push(s);});});const key=user+text.slice(0,50);if(text.length>10&&!seen.has(key)){seen.add(key);tweets.push({user,text:text.slice(0,500),time,imgs:imgs.slice(0,4)});}}return {count:tweets.length,tweets};})()"
       },
       "retry": 1,
       "note": "提取推文数据（图文URL）"
     }
   ],
-  "tokenStrategy": { "defaultL0": true },
+  "tokenStrategy": {
+    "defaultL0": true
+  },
   "scope": {
-    "sites": ["x.com", "twitter.com"]
+    "sites": [
+      "x.com",
+      "twitter.com"
+    ]
   },
   "discovery": {
-    "intents": ["search", "social.search"],
-    "keywords": ["X", "Twitter", "推特", "搜索", "search", "tweet"],
+    "intents": [
+      "search",
+      "social.search"
+    ],
+    "keywords": [
+      "X",
+      "Twitter",
+      "推特",
+      "搜索",
+      "search",
+      "tweet"
+    ],
     "outputs": [
-      { "name": "count", "type": "number", "description": "返回推文条数" },
-      { "name": "tweets", "type": "array", "description": "推文列表，每项含user、text、time、imgs（图片URL列表，需登录才能查看）" }
+      {
+        "name": "count",
+        "type": "number",
+        "description": "返回推文条数"
+      },
+      {
+        "name": "tweets",
+        "type": "array",
+        "description": "推文列表，每项含user、text、time、imgs（图片URL列表，需登录才能查看）"
+      }
     ],
     "risk": "read",
-    "aliases": ["x-search", "twitter-search"],
+    "aliases": [
+      "x-search",
+      "twitter-search"
+    ],
     "browserpilot": ">=0.1.0"
   }
 }

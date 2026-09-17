@@ -4,6 +4,9 @@
   "version": "1.1.2",
   "description": "爬取一篇韭研公社文章的标题与正文（最多8000字符）。需要微信登录态；积分/权限内容可能仅返回可见部分。",
   "category": "finance",
+  "tags": [
+    "finance"
+  ],
   "inputs": [
     {
       "name": "url",

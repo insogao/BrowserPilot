@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.3.0 — 2026-09-17
+
+- 支持 `limit`（默认 10，最多 100）与 `maxPages`；结果不足时按 Scholar 下一页控件自动翻页（礼貌间隔 + 抖动）。
+
 ## 1.2.0
 
 - Removed `waitForSelector` step that caused timeouts when anti-bot protection was detected.

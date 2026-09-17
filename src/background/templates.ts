@@ -13,6 +13,7 @@ import {
 } from "../shared/template-schema";
 import { pushEvent } from "./native-bridge";
 import { getL0Snapshot } from "./content-bridge";
+import { loadBundledTemplates } from "./bundled";
 import { sleep } from "./cdp";
 
 // ---------------------------------------------------------------------------
@@ -46,7 +47,12 @@ function numberOption(value: unknown, fallback: number, min: number, max: number
 
 /** 通用搜索结果抓取：站点差异由模板 args 声明，新增搜索引擎不需要改代码/重编译。
  *  excludeUrlPrefixes：模板声明的前缀排除（Google 搜索包用它剔除“翻译此页”等 UI 链接；
- *  不做全局内置——finance 等模板本来就要抓 /finance/quote 前缀的链接）。 */
+ *  不做全局内置——finance 等模板本来就要抓 /finance/quote 前缀的链接）。
+ *  limit：目标结果条数（1..100，默认 10）。模板声明同名 input 即可由调用方指定。
+ *  自动翻页：模板声明 nextSelector（下一页链接选择器，可选 nextText 文本过滤）后，当结果不足 limit
+ *  时按 maxPages（默认按 limit/pageSize 估算，封顶 5；显式上限 10）在同页上下文顺序 fetch 后续页
+ *  （credentials:include 复用登录态），合并去重；每页之间强制 pageDelayMs（默认 1500ms + 随机抖动）
+ *  的礼貌间隔，任一页失败/无下一页/页数到顶即停，避免高频抓取触发风控。 */
 function searchResultsExpr(options: {
   rootSelectors: string[];
   linkSelector?: string;
@@ -54,51 +60,77 @@ function searchResultsExpr(options: {
   limit?: number;
   textLimit?: number;
   excludeUrlPrefixes?: string[];
+  nextSelector?: string;
+  nextText?: string;
+  maxPages?: number;
+  pageSize?: number;
+  pageDelayMs?: number;
 }): string {
   const roots = JSON.stringify(options.rootSelectors);
   const linkSelector = JSON.stringify(options.linkSelector || "a");
-  const minResults = numberOption(options.minResults, 3, 1, 20);
-  const limit = numberOption(options.limit, 10, 1, 50);
+  const minResults = numberOption(options.minResults, 3, 1, 50);
+  const limit = numberOption(options.limit, 10, 1, 100);
   const textLimit = numberOption(options.textLimit, 6000, 500, 50000);
+  const pageSize = numberOption(options.pageSize, 10, 1, 50);
+  const defaultMaxPages = Math.max(1, Math.min(Math.ceil(limit / pageSize), 5));
+  const maxPages = numberOption(options.maxPages, defaultMaxPages, 1, 10);
+  const pageDelayMs = numberOption(options.pageDelayMs, 1500, 500, 10000);
+  const nextSelector = options.nextSelector ? JSON.stringify(options.nextSelector) : "null";
+  const nextText = options.nextText ? JSON.stringify(options.nextText) : "null";
   const excluded = JSON.stringify((options.excludeUrlPrefixes ?? []).filter(Boolean));
   return (
     "(async()=>{const roots=" + roots + ";const linkSel=" + linkSelector + ";const min=" + minResults + ";const limit=" + limit + ";const textLimit=" + textLimit + ";const excluded=" + excluded + ";" +
+    "const nextSel=" + nextSelector + ";const nextText=" + nextText + ";const maxPages=" + maxPages + ";const pageDelay=" + pageDelayMs + ";" +
     "const skip=(u)=>excluded.some(p=>u.indexOf(p)===0);" +
-    "const pickRoot=()=>{for(const s of roots){const el=document.querySelector(s);if(el)return el;}return document.body||document.documentElement;};" +
-    "const normalize=(href)=>{let u=href||'';if(u.startsWith('/url?q=')){try{u=decodeURIComponent(u.split('/url?q=')[1].split('&')[0]);}catch{}}" +
-    "try{if(u.startsWith('/'))u=new URL(u,location.href).href;}catch{}return u;};" +
-    "const collect=()=>{const root=pickRoot();const links=[];const seen=new Set();" +
-    "for(const a of root.querySelectorAll(linkSel)){const href=a.getAttribute('href')||'';const url=normalize(href);const title=(a.innerText||a.textContent||'').trim();" +
-    "if(url&&title&&title.length>2&&(url.startsWith('http')||href.startsWith('/url'))){if(skip(url))continue;const key=url;if(!seen.has(key)){seen.add(key);links.push({title:title.slice(0,150),url});}}" +
+    "const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));" +
+    "const pickRoot=(doc)=>{for(const s of roots){const el=doc.querySelector(s);if(el)return el;}return doc.body||doc.documentElement;};" +
+    "const normalize=(href,base)=>{let u=href||'';if(u.startsWith('/url?q=')){try{u=decodeURIComponent(u.split('/url?q=')[1].split('&')[0]);}catch{}}" +
+    "try{if(u.startsWith('/'))u=new URL(u,base||location.href).href;}catch{}return u;};" +
+    "const titleOf=(a)=>{const h=a.querySelector('h3,h2,h4');const t=((h&&(h.innerText||h.textContent))||a.innerText||a.textContent||'').trim();return t;};" +
+    "const extract=(doc,base)=>{const root=pickRoot(doc);const links=[];const seen=new Set();" +
+    "for(const a of root.querySelectorAll(linkSel)){const href=a.getAttribute('href')||'';const url=normalize(href,base);const title=titleOf(a);" +
+    "if(url&&title&&title.length>2&&(url.startsWith('http')||href.startsWith('/url'))){if(skip(url))continue;const key=url.split('#')[0];if(!seen.has(key)){seen.add(key);links.push({title:title.slice(0,150),url});}}" +
     "if(links.length>=limit)break;}" +
     "return {root,links};};" +
-    "const start=Date.now();let result={links:[]};try{result=collect();}catch{}while(Date.now()-start<12000&&result.links.length<min){await new Promise(r=>setTimeout(r,400));try{result=collect();}catch{}}" +
-    "return {count:result.links.length,links:result.links,text:((result.root.innerText||'').slice(0,textLimit).trim())};})()"
+    "const start=Date.now();let result={links:[],root:document.body||document.documentElement};" +
+    "try{result=extract(document,location.href);}catch{}while(Date.now()-start<12000&&result.links.length<min){await sleep(400);try{result=extract(document,location.href);}catch{}}" +
+    "const seen=new Set(result.links.map(l=>l.url));const merged=result.links.slice();let doc=document;let base=location.href;let pages=1;" +
+    "const pickNext=(d,b)=>{if(!nextSel)return null;const cands=[...d.querySelectorAll(nextSel)];if(!cands.length)return null;let a=cands[cands.length-1];" +
+    "if(nextText){const hit=cands.find(x=>((x.innerText||x.textContent||'').indexOf(nextText)>=0));if(hit)a=hit;}" +
+    "const href=a.getAttribute('href')||'';if(!href||href.charAt(0)==='#')return null;" +
+    "try{const u=new URL(href,b||location.href).href;return u===(b||location.href)?null:u;}catch{return null;}};" +
+    "while(merged.length<limit&&pages<maxPages){const next=pickNext(doc,base);if(!next)break;" +
+    "await sleep(pageDelay+Math.floor(Math.random()*Math.min(800,Math.max(1,Math.floor(pageDelay/2)))));" +
+    "let html=null;try{const resp=await fetch(next,{credentials:'include'});if(!resp.ok)break;html=await resp.text();}catch{break;}" +
+    "if(!html||html.length<200)break;" +
+    "let parsed=null;try{parsed=new DOMParser().parseFromString(html,'text/html');}catch{break;}" +
+    "let added=[];try{added=extract(parsed,next).links;}catch{}" +
+    "for(const l of added){if(merged.length>=limit)break;const key=l.url.split('#')[0];if(!seen.has(key)){seen.add(key);merged.push(l);}}" +
+    "doc=parsed;base=next;pages++;}" +
+    "return {count:merged.length,links:merged,text:((result.root.innerText||'').slice(0,textLimit).trim()),pages:pages,pagesRequested:maxPages,limit:limit};})()"
   );
 }
 
-/** 抓取 Google 搜索结果：等待结果容器内出现 ≥3 条真实结果链接后，取前 10 条（标题 + 链接 + 正文摘要）。
- *  内置排除 Google 自家 UI 链接（翻译此页/图片/地图/账户等）——仅此处内置，通用 searchResultsExpr 由模板声明。 */
-function googleResultsExpr(): string {
-  return (
-    "(async()=>{const start=Date.now();" +
-    "const BAD=['/search?','/imgres','/preferences','/advanced_search','/intl/','/settings','/webhp','/maps','/shopping','/finance','/news','/videos','/books','/scholar','/translate','/travel','/support','/policies','/accounts'];" +
-    "const skip=(u)=>u.indexOf('google.')>=0&&BAD.some(b=>u.indexOf(b)>=0);" +
-    "const hasResults=()=>{const s=document.querySelector('#search')||document.querySelector('#rso')||document.querySelector('#center_col');" +
-    "if(!s)return false;const as=s.querySelectorAll('a');let n=0;for(const a of as){const h=a.getAttribute('href')||'';" +
-    "if(h.startsWith('http')||h.startsWith('/url?q=')){if((a.innerText||'').trim().length>2)n++;}}return n>=3;};" +
-    "while(Date.now()-start<12000){if(hasResults())break;await new Promise(r=>setTimeout(r,400));}" +
-    "const root=document.querySelector('#search')||document.querySelector('#rso')||document.querySelector('#center_col')||document.body||document.documentElement;" +
-    "const links=[];const seen=new Set();" +
-    "for(const a of root.querySelectorAll('a')){const href=a.getAttribute('href')||'';let u=href;" +
-    "if(href.startsWith('/url?q=')){try{u=decodeURIComponent(href.split('/url?q=')[1].split('&')[0]);}catch{}}" +
-    "const t=(a.innerText||'').trim();" +
-    "if(u&&t&&t.length>2&&(u.startsWith('http')||href.startsWith('/url'))){u=new URL(u,location.href).href;if(skip(u))continue;" +
-    "const key=u;if(!seen.has(key)){seen.add(key);links.push({title:t.slice(0,150),url:u});}}" +
-    "if(links.length>=10)break;}" +
-    "const text=(root.innerText||'').slice(0,6000).trim();" +
-    "return {count:links.length,links,text};})()"
-  );
+/** 抓取 Google 搜索结果（未声明 rootSelectors 的模板走这里）：Google 自家 UI 链接内置排除，
+ *  自动翻页用 #pnnext；其余行为与通用 searchResultsExpr 一致。 */
+function googleResultsExpr(options: { limit?: number; textLimit?: number; nextSelector?: string; maxPages?: number; pageDelayMs?: number } = {}): string {
+  const BAD = [
+    "/search?", "/imgres", "/preferences", "/advanced_search", "/intl/", "/settings", "/webhp",
+    "/maps", "/shopping", "/finance", "/news", "/videos", "/books", "/scholar", "/translate",
+    "/travel", "/support", "/policies", "/accounts",
+    "https://www.google.com/search?", "https://www.google.com/preferences", "https://www.google.com/intl/", "https://www.google.com/webhp",
+  ];
+  return searchResultsExpr({
+    rootSelectors: ["#search", "#rso", "#center_col"],
+    linkSelector: "a",
+    minResults: 3,
+    limit: options.limit,
+    textLimit: options.textLimit,
+    excludeUrlPrefixes: BAD,
+    nextSelector: options.nextSelector ?? "#pnnext",
+    maxPages: options.maxPages,
+    pageDelayMs: options.pageDelayMs,
+  });
 }
 
 /** AI 聊天模版的写步骤：先把 prompt 写进富文本编辑器（Gemini=Quill API、ChatGPT=ProseMirror 经 execCommand），
@@ -259,80 +291,11 @@ function collectFeedbackExpr(respSel: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 内置模版
+// 随扩展发布的模板包（registry/bundle.json → dist/templates.bundle.json）
+// 全部模板开箱即用，不再硬编码单个内置模板；GitHub Registry 只用于发现更新与新增。
 // ---------------------------------------------------------------------------
 
 const GOOGLE_CANDS = ["textarea[name='q']", "input[name='q']", "input[type='search']", "input[type='text']"];
-const AI_CANDS = ["div[role='textbox']", "[contenteditable='true']", "textarea", "input[type='text']"];
-
-function builtinTemplates(): Template[] {
-  return [
-    {
-      id: "search",
-      name: "谷歌搜索",
-      category: "search",
-      description: "在 Google 搜索一个关键词，取回前 10 条结果（标题 + 链接 + 正文摘要）。",
-      inputs: [{ name: "query", type: "string", required: true, description: "搜索关键词" }],
-      steps: "commands",
-      body: [
-        { name: "open_tab", args: { url: "https://www.google.com" }, note: "打开 Google 首页" },
-        { name: "js", args: { expression: "@focus" }, expectations: [{ path: "value", equals: true }], note: "等待并聚焦搜索框" },
-        { name: "fill", args: { selector: "[data-bp-focus]", value: "$query" }, note: "填入关键词" },
-        { name: "press", args: { key: "Enter", selector: "[data-bp-focus]" }, note: "重新聚焦搜索框并提交搜索" },
-        { name: "waitForSelector", args: { selector: "#search,#rso,#center_col", visible: true, timeoutMs: 20000 }, note: "等待搜索结果 DOM，不依赖地区域名或 URL 形态" },
-        { name: "js", args: { expression: "@results" }, note: "抓取搜索结果" },
-      ],
-      tokenStrategy: { defaultL0: true },
-    },
-    {
-      id: "gemini-ask",
-      name: "Gemini 提问",
-      category: "ai-chat",
-      description: "向 gemini.google.com/app 提问，等待回复流式结束并回收反馈文本。",
-      inputs: [
-        { name: "prompt", type: "string", required: true, description: "要问的问题" },
-        { name: "tabId", type: "number", required: false, description: "已打开的 Gemini 标签；提供则复用，不再新开" },
-        { name: "responseSelector", type: "string", required: false, default: "", description: "回复容器 CSS 选择器；留空则取整页文本" },
-        { name: "conversationUrl", type: "url", required: false, description: "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话" },
-      ],
-      steps: "commands",
-      body: [
-        { name: "open_tab", args: { url: "https://gemini.google.com/app" }, skipWhenParam: "tabId", note: "打开 Gemini" },
-        { name: "switch_tab", args: {}, note: "激活 Gemini 标签（后台标签不渲染回复，需前台）" },
-        { name: "js", args: { expression: "@verifyConv", expected: "$conversationUrl" }, expect: "__BP_CONV_OK__", note: "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）" },
-        { name: "js", args: { expression: "@write", mode: "gemini" }, note: "写入问题并记录回复基线（Quill API）" },
-        { name: "click", args: { selector: "button[aria-label='Send message']" }, note: "点击发送按钮" },
-        { name: "js", args: { expression: "@chatCollect", mode: "gemini" }, note: "回收回复文本（取基线后新增的最后一条回复）" },
-      ],
-      tokenStrategy: { defaultL0: true },
-    },
-    {
-      id: "chatgpt-ask",
-      name: "ChatGPT 提问",
-      category: "ai-chat",
-      description: "向 chatgpt.com 提问，等待回复流式结束并回收反馈文本。",
-      inputs: [
-        { name: "prompt", type: "string", required: true, description: "要问的问题" },
-        { name: "tabId", type: "number", required: false, description: "已打开的 ChatGPT 标签；提供则复用，不再新开" },
-        { name: "responseSelector", type: "string", required: false, default: "", description: "回复容器 CSS 选择器；留空则取整页文本" },
-        { name: "conversationUrl", type: "url", required: false, description: "会话 URL（上次提问返回的 url）；续问传入以校验仍指向同一会话" },
-      ],
-      steps: "commands",
-      body: [
-        { name: "open_tab", args: { url: "https://chatgpt.com/" }, skipWhenParam: "tabId", note: "打开 ChatGPT" },
-        { name: "switch_tab", args: {}, note: "激活 ChatGPT 标签（后台标签不渲染回复，需前台）" },
-        { name: "js", args: { expression: "@verifyConv", expected: "$conversationUrl" }, expect: "__BP_CONV_OK__", note: "确认当前标签仍是目标会话 URL（续问校验；无 conversationUrl 则跳过）" },
-        { name: "js", args: { expression: "@write", mode: "chatgpt" }, note: "写入问题并记录回复基线（ProseMirror）" },
-        { name: "click", args: { selector: "button[data-testid='send-button']" }, note: "点击发送按钮" },
-        { name: "js", args: { expression: "@chatCollect", mode: "chatgpt" }, note: "回收回复文本" },
-      ],
-      tokenStrategy: { defaultL0: true },
-    },
-  ];
-}
-
-// 内置模版 registry（id → Template）
-const BUILTINS: Record<string, Template> = Object.fromEntries(builtinTemplates().map((t) => [t.id, t]));
 
 // ---------------------------------------------------------------------------
 // 导入 / 导出 / 清单
@@ -416,7 +379,8 @@ async function resolveInstalledRecord(id: string): Promise<InstalledTemplateReco
 export async function resolveTemplateById(id: string, includeDisabled = false): Promise<Template | undefined> {
   const record = await resolveInstalledRecord(id);
   if (record && (includeDisabled || record.enabled)) return record.template;
-  return BUILTINS[id];
+  const bundled = await loadBundledTemplates();
+  return bundled[id];
 }
 
 function templateCapabilities(template: Template): string[] {
@@ -426,12 +390,14 @@ function templateCapabilities(template: Template): string[] {
 
 export async function listTemplates(): Promise<unknown[]> {
   const installed = await loadInstalled();
-  const builtins = Object.values(BUILTINS).filter((t) => !installed[t.id]).map((t) => ({
+  const bundled = await loadBundledTemplates();
+  const builtins = Object.values(bundled).filter((t) => !installed[t.id]).map((t) => ({
     id: t.id,
     name: t.name,
     version: t.version ?? "0.0.0",
     description: t.description,
     category: t.category,
+    tags: t.tags ?? [],
     inputs: t.inputs,
     steps: t.steps,
     scope: t.scope,
@@ -453,6 +419,7 @@ export async function listTemplates(): Promise<unknown[]> {
     version: r.template.version ?? "0.0.0",
     description: r.template.description,
     category: r.template.category,
+    tags: r.template.tags ?? [],
     inputs: r.template.inputs,
     steps: r.template.steps,
     scope: r.template.scope,
@@ -463,8 +430,8 @@ export async function listTemplates(): Promise<unknown[]> {
     risk: r.template.discovery?.risk ?? "write",
     aliases: r.template.discovery?.aliases ?? [],
     builtin: false,
-    overridesBuiltin: !!BUILTINS[r.template.id],
-    fallbackBuiltin: !!BUILTINS[r.template.id],
+    overridesBuiltin: !!bundled[r.template.id],
+    fallbackBuiltin: !!bundled[r.template.id],
     enabled: r.enabled,
     source: r.source,
     installedAt: r.installedAt,
@@ -540,6 +507,7 @@ export async function installTemplate(cmd: Command): Promise<unknown> {
   }
   const template = parseTemplateContent(content);
   const records = await loadInstalled();
+  const bundled = await loadBundledTemplates();
   const existing = records[template.id];
   const now = Date.now();
   const contentHash = await hashTemplate(template);
@@ -563,7 +531,7 @@ export async function installTemplate(cmd: Command): Promise<unknown> {
     source,
     contentHash,
     updated: !!existing,
-    overridesBuiltin: !!BUILTINS[template.id],
+    overridesBuiltin: !!bundled[template.id],
   };
 }
 
@@ -573,7 +541,8 @@ export async function importTemplate(cmd: Command): Promise<unknown> {
     const t = await resolveTemplateById(args.id);
     if (!t) throw new Error("未找到要导入的模版: " + args.id);
     const installed = await resolveInstalledRecord(t.id);
-    return { imported: true, id: t.id, builtin: !installed && !!BUILTINS[t.id], name: t.name };
+    const bundled = await loadBundledTemplates();
+    return { imported: true, id: t.id, builtin: !installed && !!bundled[t.id], name: t.name };
   }
   if (typeof args.content === "string" && args.content.trim()) {
     const installed = await installTemplate(cmd) as { id: string; name: string };
@@ -587,12 +556,14 @@ export async function uninstallTemplate(cmd: Command): Promise<unknown> {
   if (!id) throw new Error("uninstall_template 需要 id");
   const records = await loadInstalled();
   if (!records[id]) {
-    if (BUILTINS[id]) throw new Error("内置模板不能卸载");
+    const bundled = await loadBundledTemplates();
+    if (bundled[id]) throw new Error("随扩展发布的模板不能卸载");
     throw new Error("未安装模板: " + id);
   }
   delete records[id];
   await saveInstalled(records);
-  return { uninstalled: true, id, restoredBuiltin: !!BUILTINS[id] };
+  const bundled = await loadBundledTemplates();
+  return { uninstalled: true, id, restoredBuiltin: !!bundled[id] };
 }
 
 export async function setTemplateEnabled(cmd: Command): Promise<unknown> {
@@ -601,13 +572,15 @@ export async function setTemplateEnabled(cmd: Command): Promise<unknown> {
   if (!id || typeof enabled !== "boolean") throw new Error("set_template_enabled 需要 id 和 enabled:boolean");
   const records = await loadInstalled();
   if (!records[id]) {
-    if (BUILTINS[id]) throw new Error("内置模板暂不支持禁用");
+    const bundled = await loadBundledTemplates();
+    if (bundled[id]) throw new Error("随扩展发布的模板暂不支持禁用");
     throw new Error("未安装模板: " + id);
   }
   records[id].enabled = enabled;
   records[id].updatedAt = Date.now();
   await saveInstalled(records);
-  return { id, enabled, fallbackBuiltinActive: !enabled && !!BUILTINS[id] };
+  const bundled = await loadBundledTemplates();
+  return { id, enabled, fallbackBuiltinActive: !enabled && !!bundled[id] };
 }
 
 export async function checkTemplateUpdate(cmd: Command): Promise<unknown> {
@@ -626,6 +599,64 @@ export async function checkTemplateUpdate(cmd: Command): Promise<unknown> {
     remoteVersion: candidate.version ?? "0.0.0",
     currentHash: record.contentHash,
     remoteHash,
+  };
+}
+
+function parseVersion(value: unknown): [number, number, number] {
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(String(value ?? ""));
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : [0, 0, 0];
+}
+
+function versionGreater(left: unknown, right: unknown): boolean {
+  const a = parseVersion(left);
+  const b = parseVersion(right);
+  for (let i = 0; i < 3; i++) {
+    if (a[i] !== b[i]) return a[i] > b[i];
+  }
+  return false;
+}
+
+/** 模板看板/外部 Agent 的「检查更新」：对比 GitHub Registry 与本地全量模板（含随扩展发布的模板包），
+ *  返回可更新与新增数量，由用户勾选后再 install_template。 */
+export async function checkRegistryUpdates(cmd: Command): Promise<unknown> {
+  const cache = await getRegistryCache(cmd);
+  const local = await listTemplates() as Array<Record<string, unknown>>;
+  const localById = new Map(local.map((item) => [String(item.id), item]));
+  const updates: Array<Record<string, unknown>> = [];
+  const added: Array<Record<string, unknown>> = [];
+  for (const entry of cache.templates) {
+    const id = String(entry.id ?? "");
+    if (!id) continue;
+    const source = { type: "github", repo: cache.repo, ref: cache.ref, path: String(entry.path ?? "") };
+    const base = {
+      id,
+      name: String(entry.name ?? id),
+      description: String(entry.description ?? ""),
+      tags: Array.isArray(entry.tags) ? entry.tags : [],
+      remoteVersion: String(entry.version ?? "0.0.0"),
+      source,
+    };
+    const mine = localById.get(id);
+    if (!mine) {
+      added.push(base);
+      continue;
+    }
+    const localVersion = String(mine.version ?? "0.0.0");
+    if (versionGreater(base.remoteVersion, localVersion)) {
+      updates.push({
+        ...base,
+        localVersion,
+        builtin: !!mine.builtin,
+        installed: !mine.builtin,
+        overridesBuiltin: !!mine.overridesBuiltin,
+      });
+    }
+  }
+  return {
+    registry: { repo: cache.repo, ref: cache.ref, syncedAt: cache.syncedAt, total: cache.templates.length },
+    counts: { updates: updates.length, added: added.length, local: local.length },
+    updates: updates.sort((a, b) => String(a.id).localeCompare(String(b.id))),
+    added: added.sort((a, b) => String(a.id).localeCompare(String(b.id))),
   };
 }
 
@@ -691,7 +722,7 @@ function textScore(query: string, item: Record<string, unknown>): number {
   const tokens = [...new Set([q, ...q.split(/[\s,，/]+/).filter(Boolean)])];
   const fields: Array<[unknown, number]> = [
     [item.id, 10], [item.name, 9], [item.aliases, 8], [item.intents, 8], [item.keywords, 7],
-    [item.sites, 6], [item.capabilities, 5], [item.description, 4], [item.category, 3],
+    [item.tags, 6], [item.sites, 6], [item.capabilities, 5], [item.description, 4], [item.category, 3],
   ];
   let score = 0;
   for (const token of tokens) {
@@ -727,12 +758,13 @@ export async function getTemplateDetail(cmd: Command): Promise<unknown> {
   const local = await resolveTemplateById(id, true);
   if (local) {
     const record = await resolveInstalledRecord(id);
+    const bundled = await loadBundledTemplates();
     return {
       id,
-      installed: !!record || !!BUILTINS[id],
-      builtin: !record && !!BUILTINS[id],
-      overridesBuiltin: !!record && !!BUILTINS[id],
-      fallbackBuiltin: !!BUILTINS[id],
+      installed: !!record || !!bundled[id],
+      builtin: !record && !!bundled[id],
+      overridesBuiltin: !!record && !!bundled[id],
+      fallbackBuiltin: !!bundled[id],
       template: local,
       markdown: toMarkdown(local),
       record,
@@ -971,10 +1003,20 @@ async function buildFailback(
 
 export async function runTemplate(cmd: Command): Promise<unknown> {
   const generation = runGeneration;
-  const args = (cmd.args ?? {}) as { id?: string; params?: Record<string, unknown>; tabId?: number };
+  const args = (cmd.args ?? {}) as {
+    id?: string;
+    params?: Record<string, unknown>;
+    tabId?: number;
+    background?: boolean;
+    focus?: boolean;
+    keepVisible?: boolean;
+    visible?: boolean;
+  };
   const id = String(args.id ?? "");
   const given = (args.params ?? {}) as Record<string, unknown>;
   const baseTab = typeof args.tabId === "number" ? Number(args.tabId) : undefined;
+  // 可见性意图：默认后台（不恢复/不聚焦窗口）；显式 focus/keepVisible/visible/background:false 才走前台路径。
+  const visibleRun = args.background === false || args.focus === true || args.keepVisible === true || args.visible === true;
   const tpl = await resolveTemplateById(id);
   if (!tpl) throw new Error("未找到模版: " + id);
 
@@ -1015,17 +1057,39 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     }
     if (typeof stepArgs.expression === "string" && stepArgs.expression === "@results") {
       const hasDeclaredSearch = Array.isArray(stepArgs.rootSelectors) || Array.isArray(params.resultRootSelectors);
+      const optionalNumber = (value: unknown): number | undefined => {
+        if (value === undefined || value === null || value === "") return undefined;
+        const n = Number(value);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const resultOptions = {
+        limit: Number(stepArgs.limit ?? params.limit ?? 10),
+        textLimit: Number(stepArgs.textLimit ?? params.textLimit ?? 6000),
+        maxPages: optionalNumber(stepArgs.maxPages ?? params.maxPages),
+        pageDelayMs: optionalNumber(stepArgs.pageDelayMs ?? params.pageDelayMs),
+        pageSize: optionalNumber(stepArgs.pageSize ?? params.pageSize),
+      };
       if (hasDeclaredSearch) {
         stepArgs.expression = searchResultsExpr({
           rootSelectors: stringList(stepArgs.rootSelectors ?? params.resultRootSelectors, ["#search", "#rso", "#center_col"]),
           linkSelector: typeof stepArgs.linkSelector === "string" ? stepArgs.linkSelector : undefined,
           minResults: Number(stepArgs.minResults ?? params.minResults ?? 3),
-          limit: Number(stepArgs.limit ?? params.limit ?? 10),
-          textLimit: Number(stepArgs.textLimit ?? params.textLimit ?? 6000),
           excludeUrlPrefixes: stringList(stepArgs.excludeUrlPrefixes ?? params.excludeUrlPrefixes, []),
+          nextSelector: typeof (stepArgs.nextSelector ?? params.nextSelector) === "string"
+            ? String(stepArgs.nextSelector ?? params.nextSelector)
+            : undefined,
+          nextText: typeof (stepArgs.nextText ?? params.nextText) === "string"
+            ? String(stepArgs.nextText ?? params.nextText)
+            : undefined,
+          ...resultOptions,
         });
       } else {
-        stepArgs.expression = googleResultsExpr();
+        stepArgs.expression = googleResultsExpr({
+          limit: resultOptions.limit,
+          textLimit: resultOptions.textLimit,
+          maxPages: resultOptions.maxPages,
+          pageDelayMs: resultOptions.pageDelayMs,
+        });
       }
     }
     // @write：把 $prompt 安全写入富文本编辑器（mode 决定 Gemini-Quill / ChatGPT-ProseMirror），并记录回复基线
@@ -1043,8 +1107,14 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     if (TAB_SCOPED.has(step.name) && currentTab !== undefined && stepArgs.tabId === undefined) {
       stepArgs.tabId = currentTab;
     }
+    // 可见运行会向下游 tab 切换/显式恢复步骤透传 visible 意图；模板可用 ensureVisible:true 强制单步前台。
+    if (visibleRun && ["switch_tab", "ensure_visible"].includes(step.name)
+      && stepArgs.background !== true && stepArgs.visible === undefined && stepArgs.focus === undefined && stepArgs.keepVisible === undefined) {
+      stepArgs.visible = true;
+    }
     const visibleTab = typeof stepArgs.tabId === "number" && Number.isFinite(stepArgs.tabId) ? Number(stepArgs.tabId) : currentTab;
-    if (visibleTab !== undefined && VISIBLE_BEFORE_STEP.has(step.name) && stepArgs.ensureVisible !== false) {
+    const shouldEnsureVisible = stepArgs.ensureVisible === true || (visibleRun && stepArgs.ensureVisible !== false);
+    if (visibleTab !== undefined && VISIBLE_BEFORE_STEP.has(step.name) && shouldEnsureVisible) {
       await runOne({
         type: "command",
         name: "ensure_visible",

@@ -1,15 +1,32 @@
 {
   "id": "search-demo",
   "name": "Search Demo Template",
-  "version": "1.0.0",
-  "description": "A copyable demo for adapting a search engine with runtime template selectors.",
+  "version": "1.1.0",
+  "description": "可复制的搜索适配示例：演示运行时模板选择器 + 指定条数/自动翻页。",
   "category": "search",
+  "tags": [
+    "search"
+  ],
   "inputs": [
     {
       "name": "query",
       "type": "string",
       "required": true,
       "description": "Search keyword"
+    },
+    {
+      "name": "limit",
+      "type": "number",
+      "required": false,
+      "default": 10,
+      "description": "返回结果条数（默认 10，最多 100）"
+    },
+    {
+      "name": "maxPages",
+      "type": "number",
+      "required": false,
+      "default": 5,
+      "description": "最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）"
     }
   ],
   "steps": "commands",
@@ -71,8 +88,10 @@
         ],
         "linkSelector": "a",
         "minResults": 3,
-        "limit": 10,
-        "textLimit": 6000
+        "limit": "$limit",
+        "textLimit": 6000,
+        "maxPages": "$maxPages",
+        "nextSelector": "#pnnext"
       },
       "note": "Collect result links and page text."
     }

@@ -1,18 +1,20 @@
 # Google Scholar Search
 
-> Search Google Scholar for academic papers and return top results with title, URL, and visible text summary.
+> Search Google Scholar for academic papers and return a specified number of results (default 10, up to 100; auto-paginates with polite delays).
 
 - ID: `google-scholar-search`
-- 版本: `1.2.0`
+- 版本: `1.3.0`
 - 风险: `read`
 - 适用站点: `scholar.google.com`
 - Intents: `search.academic`, `search.scholar`, `search.web`
 - Capabilities: `fill`, `js`, `open_tab`, `press`, `screenshot`, `waitForURL`
-- 功能指纹: `sha256:9fa51c12e99fd3086d7af638e547ef872f58a1cfe7bda25af5b8bb5d2f6a96bd`
+- 功能指纹: `sha256:236d842c566f8abae4787db988b688fee18e3548e8908dc977643c0c269a74b5`
 
 ## 输入
 
 - `query` (string, required): Academic search query (paper title, keywords, author, etc.)
+- `limit` (number): Number of results to return (default 10, max 100)
+- `maxPages` (number): 最多翻页数（默认 5，上限 10；只有结果不足 limit 时才翻页）
 
 ## 输出
 

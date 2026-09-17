@@ -74,9 +74,11 @@ Suggested loop:
 1. Open or locate the target page:
 
 ```bash
-npm run browser:lease -- client <agent-name> <template-id> open_space '{"name":"<template-id>-inspection","url":"https://www.example.com","state":"maximized"}'
+npm run browser:lease -- client <agent-name> <template-id> open_space '{"name":"<template-id>-inspection","url":"https://www.example.com"}'
 npm run browser:lease -- client <agent-name> <template-id> list_tabs '{}'
 ```
+
+`open_space` / `open_tab` / `switch_tab` / `run_template` are **background by default** (minimized window, no focus steal, tabs stay active inside the window so pages render normally). Only pass `focus:true` / `keepVisible:true` / `visible:true` explicitly when the user asked to watch, or when a page genuinely requires foreground rendering; `ensure_visible` remains the explicit show command.
 
 2. Observe structure cheaply first:
 
@@ -104,7 +106,7 @@ npm run browser:lease -- client <agent-name> <template-id> js '{"tabId":123,"exp
 npm run smoke:template -- example-search
 ```
 
-`smoke:template` acquires the repository-wide browser test lease, creates one temporary Task Space window, runs all requested templates serially, closes that window, and releases the lease immediately when it exits. It uses `--no-launch`. If the process crashes, the lease expires automatically after ten minutes and the plugin-side foreground lease expires after 90 seconds. There is no manual unlock step, and agents must never create or edit lease files themselves.
+`smoke:template` acquires the repository-wide browser test lease, creates one temporary Task Space window, runs all requested templates serially, closes that window, and releases the lease immediately when it exits. It uses `--no-launch` and runs **in the background by default** (minimized, no focus steal); add `--visible` only when the user asked to watch or a rendering issue must be inspected live. If the process crashes, the lease expires automatically after ten minutes and the plugin-side foreground lease expires after 90 seconds. There is no manual unlock step, and agents must never create or edit lease files themselves.
 
 The runner is serial and forces `--no-launch`.
 
@@ -116,7 +118,7 @@ npm run browser:lease -- client <agent-name> <template-id> screenshot '{"tabId":
 npm run browser:lease -- client <agent-name> <template-id> complete_space '{"keep":false}'
 ```
 
-Manual inspection must begin with `open_space` and end with `complete_space`. Reuse the exact same `<agent-name>` for every command so Host-side ownership stays stable. If the user explicitly takes over that Space, do not close it; report the handoff instead.
+Manual inspection must begin with `open_space` and end with `complete_space`, and runs in the background by default. Reuse the exact same `<agent-name>` for every command so Host-side ownership stays stable. If the user explicitly takes over that Space, do not close it; report the handoff instead.
 
 The wrapper grants one command exclusive browser access. For a complete multi-command smoke flow, use `smoke:template` so the same lease covers install, execution, and verification.
 
@@ -151,6 +153,33 @@ Required principles:
 
 Current framework note: `set_humanize` is reserved but not implemented. Template authors must encode pacing explicitly with existing commands until plugin-core provides a global humanization policy.
 
+## Tags (Public Vocabulary)
+
+Every package must declare `tags` (at least one) from this fixed public vocabulary. The board groups and filters by tags; do not invent new tags without updating `src/shared/template-schema.ts` and this guide.
+
+| tag | 含义 | 典型模板 |
+| --- | --- | --- |
+| `search` | 检索/搜索 | `google-search`、`bilibili-search` |
+| `finance` | 财经/投资信息 | `xueqiu-*`、`guba-*`、`google-finance-search` |
+| `video` | 视频内容与媒体 | `bilibili-*`、`tiktok-video-download` |
+| `social` | 社交平台 | `x-search`、`x-user-timeline` |
+| `ai` | AI 问答/提示词 | `chatgpt-ask`、`deepseek-ask` |
+| `download` | 下载产物到本地 | `bilibili-download-video` |
+| `news` | 快讯/公告/资讯流 | `cls-telegraph`、`stock-announcements` |
+
+Examples: `bilibili-search` = `video` + `search`; `google-finance-search` = `finance` + `search`; Google web search = `search`.
+
+## Result Count And Pagination
+
+Every list/search template must let the caller choose how many results to return, and must try to satisfy that count before giving up.
+
+- Declare a `limit` input (`number`, optional, default per template, hard ceiling 100) and document it. Never hard-code "前 10 条" in the description.
+- `limit` must actually control the returned array length on every code path.
+- For SERP-style pages adapted through `@results`, declare `nextSelector` (CSS selector for the next-page link; add `nextText` when the anchor is ambiguous). The core expression then fetches following pages in-page (`credentials:include`), merges/dedupes, and enforces polite page delays. Never re-implement this loop per template.
+- For custom `js` extraction, load until `limit` or until the page stops producing new items (infinite scroll or next-page fetch), then stop. Use per-page/per-scroll delays of at least ~900 ms plus jitter; cap the number of pages/scrolls (default 3 pages / measured stalls) so no template can run unbounded.
+- Stop conditions to implement: enough results, no next page/link, empty or failed fetch, no growth for two consecutive rounds, page cap reached.
+- Do not fan out to many tabs or issue parallel searches. One template = one sequential, human-paced flow.
+
 ## Package Shape
 
 Use this structure:
@@ -184,7 +213,7 @@ Then convert the findings into a commands template:
 - `fill` targets `selector:"[data-bp-focus]"`.
 - `press` submits with `key:"Enter"` and `selector:"[data-bp-focus]"`, so the input is re-focused immediately before the key event.
 - Prefer `waitForSelector` on a real result container. Use `waitForURL` only when navigation identity is itself part of the contract; regional domains and SPA routes make URL-only success checks brittle.
-- `js` with `expression:"@results"` declares `rootSelectors:[...]` plus optional `linkSelector`, `minResults`, `limit`, and `textLimit`.
+- `js` with `expression:"@results"` declares `rootSelectors:[...]` plus optional `linkSelector`, `minResults`, `limit`, `textLimit`, and `nextSelector`/`nextText`/`maxPages` for auto-pagination. Prefer `"limit": "$limit"` so callers can choose the result count.
 
 Do not add a new branch to `src/background/templates.ts` for ordinary search engines.
 

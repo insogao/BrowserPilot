@@ -1,19 +1,20 @@
 # X账号时间线
 
-> 抓取某个 X（Twitter）账号主页的最新推文（文本/时间/链接），支持滚动加载。需要浏览器已有 X 登录态。
+> 抓取 X 账号主页的最新推文，返回指定条数（默认 10，最多 100；滚动加载直到取够或无法继续）。需要 X 登录态。
 
 - ID: `x-user-timeline`
-- 版本: `1.0.0`
+- 版本: `1.1.0`
 - 风险: `read`
 - 适用站点: `x.com`, `twitter.com`
 - Intents: `social.timeline`, `account.watch`
 - Capabilities: `js`, `open_tab`, `waitForTimeout`, `waitForURL`
-- 功能指纹: `sha256:df8e5566645b90382a6eda351fc3cfc1f8baa06529ad8bebbb110282f23b811c`
+- 功能指纹: `sha256:c417b7c44c254bd39420be2251bde8dcf5f97e9825f7b9e7a62bf2016c0a09f0`
 
 ## 输入
 
 - `handle` (string, required): X 用户名（不含 @，如 elonmusk）
-- `maxScrolls` (number): 滚动加载轮数（1-10，越多抓得越深）
+- `maxScrolls` (number): 额外滚动次数；0 或留空=按 limit 自动推导（上限 20）
+- `limit` (number): 返回推文条数（默认 10，最多 100）
 
 ## 输出
 
