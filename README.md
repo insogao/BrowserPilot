@@ -2,7 +2,7 @@
 
 把浏览器交给 AI/CLI：安装时一次授权、运行中不再请求权限；外部 AI/CLI 经 native messaging 驱动网页（共用 cookie/登录态）；感知当前 profile 并一键导出使用文档。
 
-当前进度：**M1/M2/M3/M5/M7/M9/M11 已落地**（含内置操作模版 search / gemini-ask / chatgpt-ask，真机验证通过）；M4/M6/M8/M10 见下方。
+当前进度：**M1/M2/M3/M5/M7/M9/M11 已落地**（含全部 Registry 模板随扩展发布、Tag 分类与 `limit`/自动翻页，真机验证通过）；M4/M6/M8/M10 见下方。
 
 ---
 
@@ -112,7 +112,7 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 - 宿主：Backlight 默认实例（daemon pid 2695 / `http://127.0.0.1:9333`；品牌 Chrome for Testing 153.0.8010.47），user-data-dir `/Users/jiangao/Library/Application Support/Backlight/spaces/default/profile`（当前唯一 space `default`）。
 - 扩展：本 worktree `dist/` 已被加载，ID `nnollghpaggbcdkkgoieneffnlijinio`、版本 0.1.0、runtime `enabled=true`（`curl -s http://127.0.0.1:9333/api/extensions`）；首次加载自动打开了 onboarding 页。
 - native host：定向注册在默认 profile 的 `NativeMessagingHosts/`，wrapper 指向本 worktree 的 `native-host/dist/host-mac.sh`；host 是品牌浏览器进程的直接子进程，监听 `127.0.0.1:47001`。
-- 验证（无浏览器启动）：`npm run client -- ping '{}' --no-launch` → `pong: true`；`npm run client -- list_templates '{}' --no-launch` 当前只返回 3 个编译内置（search、gemini-ask、chatgpt-ask），未安装动态包。注册与连接在浏览器未重启时生效。
+- 验证（无浏览器启动）：`npm run client -- ping '{}' --no-launch` → `pong: true`；`npm run client -- list_templates '{}' --no-launch` 返回全部 31 个随扩展发布的 bundled 模板（带 `tags`；2026-09-17 起不再只含 3 个编译内置），未安装动态包。注册与连接在浏览器未重启时生效。
 - 边界：新 Backlight space/profile 需重新定向注册；本 worktree 路径变化会同时破坏已加载扩展与 host wrapper 指向，迁移后需 `bl ext` reload + 重注册。
 
 ## 验证顺序（macOS，保留登录态）
@@ -184,6 +184,6 @@ Registry 使用 `browserpilot.templates.v2`，首次读取会自动迁移 v1 本
 | M6 sandbox 内核（run_script 脚本型） | ⬜（骨架已留） |
 | M7 Task Space 所有权（Agent 身份 + 独立窗口 + tab 归属 + 人工交接 + 前台串行） | ✅ |
 | M8 profile 使用文档导出 + onboarding 文案 | ✅（含 host capability token） |
-| M9 插件化操作模版（import/run + failback，省 token 驱动，内置 search/gemini-ask/chatgpt-ask；含追问 URL 锚定 `@verifyConv` + 图片 `@chatCollect` 多图全收〔Gemini Choice A/B〕+ `download_resource`〔通道 B：blob canvas 全尺寸 / 登录态 http 页面 fetch / `urls[]` 一次下多张自动编号，文件名可控〕，均已实现并真机闭环测试） | ✅ |
+| M9 插件化操作模版（import/run + failback，省 token 驱动；全部 31 个 Registry 模板随扩展发布并带 7 个公共 Tag，`limit`/`maxPages` 参数化 + SERP 自动翻页 + 滚动收敛；含追问 URL 锚定 `@verifyConv` + 图片 `@chatCollect` 多图全收〔Gemini Choice A/B〕+ `download_resource`〔通道 B：blob canvas 全尺寸 / 登录态 http 页面 fetch / `urls[]` 一次下多张自动编号，文件名可控〕，均已实现并真机闭环测试） | ✅ |
 | M10 模拟人工防限流（set_humanize + botCheck） | ⬜ |
 | M11 人工接管遮罩（start_mask / stop_mask / mask_takeover） | ✅ |

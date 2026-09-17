@@ -16,6 +16,15 @@ stale_after: 2026-09-19
 3. **健康三查**：`npm run doctor`（结构）→ `npm run client -- ping '{}' --no-launch` 与 `npm run client -- list_templates '{}' --no-launch`（host+扩展链路，不会拉起浏览器）→ `git status --short --branch`（工作树干净、分支领先数）。
 4. 模板能力速查：[registry/INDEX.md](../../registry/INDEX.md)（31 个模板按分类，自动生成）。
 
+## 2026-09-17 本轮变更（模板全量 + Tag + limit/翻页 + 后台默认）
+
+- **模板全量随扩展发布**：`npm run registry:build` 生成 `registry/bundle.json` → `npm run build` 打进 `dist/templates.bundle.json`；`list_templates` 默认返回全部 31 个 bundled 模板（不再只有 3 个编译内置）；GitHub Registry 只用于「检查更新/新增」。
+- **公共 Tag**：schema 强校验 7 个 Tag（search/finance/video/social/ai/download/news），31 个模板全部声明；onboarding 看板支持 Tag 筛选 + 本地搜索 + 「检查更新（GitHub）」勾选安装；新增命令 `check_registry_updates`。
+- **limit / 自动翻页**：搜索类均支持 `limit`（默认 10 或 15，上限 100）与 `maxPages`；`@results` 支持 `nextSelector`/`nextText` 自动 fetch 后续页（1.5s+ 抖动礼貌间隔、去重、封顶）；B站/股吧同源翻页；X/B站/雪球/财联社/韭研滚动收敛到 limit 或连续无增长。19 个模板升版本并记 CHANGELOG。
+- **后台默认（重要行为反转）**：`open_space`/`open_tab`/`switch_tab`/`run_template`/`smoke:template` 默认后台（窗口最小化、不聚焦、不弹窗）；显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才前台。后台空间内 Agent 标签保持窗口内 active，页面按可见态渲染（Baidu 必须如此）。AI 聊天模板显式声明 `visible:true`（前台渲染需求）。
+- **真机后台验证**：Google/Bing/Baidu/B站搜索/股吧搜索/股吧列表/公告/财联社/B站投稿列表/雪球搜索 全部 PASS（daemon state-log 无任何显式可见性事件）；X 因该 profile 未登录 BLOCKED。Baidu 隐藏标签渲染差异与浏览器侧建议见 `/Users/jiangao/work/browser/BROWSER-BG-REPORT-2026-09-17.md`。
+- **未验证**：韭研公社（微信登录）、雪球文章/评论、ChatGPT/DeepSeek/Gemini（写操作）在后台模式下的表现；X 登录后需复测 x-search / x-user-timeline。
+
 ## 当前结论
 
 macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 由 Chrome 拉起，命令往返正常）。随后按 code review 清单完成 13 项修复，全部逐项验证。本仓库继续在 macOS 开发；Windows 部署链保留未动。
@@ -39,7 +48,7 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 - 宿主：Backlight 默认实例（daemon pid 2695 / `http://127.0.0.1:9333`；品牌 Chrome for Testing 153.0.8010.47），user-data-dir `/Users/jiangao/Library/Application Support/Backlight/spaces/default/profile`（当前唯一 space `default`）。
 - 扩展：本 worktree `dist/` 已被 Backlight 加载，ID `nnollghpaggbcdkkgoieneffnlijinio`、版本 0.1.0、runtime `enabled=true`（`curl -s http://127.0.0.1:9333/api/extensions`）；首次安装（`onInstalled` reason=install）自动打开 onboarding/options 页。
 - native host：按 profile 定向注册（`--only-user-data-dir`），manifest 在默认 profile 的 `NativeMessagingHosts/`，wrapper 指向本 worktree `native-host/dist/host-mac.sh`；host 是品牌浏览器进程的直接子进程，监听 `127.0.0.1:47001`。
-- 验证（无启动、无重启）：`npm run client -- ping '{}' --no-launch` → `pong: true`；`npm run client -- list_templates '{}' --no-launch` → 3 个编译内置（search、gemini-ask、chatgpt-ask），未安装动态包。**native host 注册生效不需要重启浏览器**；需要重载的只是扩展本身（`chrome://extensions` reload 或 `npm run dev` 热更新）。
+- 验证（无启动、无重启）：`npm run client -- ping '{}' --no-launch` → `pong: true`；`npm run client -- list_templates '{}' --no-launch` → 31 个随扩展发布的 bundled 模板（带 tags；2026-09-17 起），未安装动态包。**native host 注册生效不需要重启浏览器**；需要重载的只是扩展本身（`chrome://extensions` reload 或 `npm run dev` 热更新；Backlight 也会在 dist 变化时自动热重载扩展）。
 - 复现/新目标定向注册命令（先 dry-run 核对，`--only-user-data-dir` 不写自动发现目录）：
   ```bash
   npm run register-host:mac -- --only-user-data-dir --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile" --dry-run

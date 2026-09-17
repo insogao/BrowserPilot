@@ -18,7 +18,8 @@ stale_after: 2026-12-03
 | Host 扫描本机动态端口并注入经过校验的稳定 Agent 身份 | `native-host/host.js`、`native-host/client.mjs` |
 | 一个 Task Space 对应一个普通 Chrome 窗口；同 profile 共享 cookie | `src/background/spaces.ts`、`docs/dev/task-spaces.md` |
 | 扩展层强制 Space 所有权、tab 归属与前台 lease | `spaces.ts`、`tab-resolver.ts`、`foreground-lease.ts` |
-| Registry 模板运行时安装进 `chrome.storage.local`，最终用户无需重编译 | `src/background/templates.ts`、`registry/templates/README.md` |
+| 全部 Registry 模板在 `registry:build` 时打进扩展（`dist/templates.bundle.json`），开箱即用；GitHub Registry 仅用于发现更新/新增，安装后以动态包覆盖同名模板 | `src/background/bundled.ts`、`src/background/templates.ts`、`scripts/build-registry.mjs` |
+| 可见性默认后台：`open_space`/`open_tab`/`switch_tab`/`run_template` 默认不聚焦、不恢复窗口（后台空间窗口最小化，窗口内 Agent 标签保持 active 以正常渲染）；只有显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才走前台 | `src/background/spaces.ts`、`src/background/templates.ts` |
 | 单 profile 可见浏览器工作串行；仓库 lease 是开发保护，扩展 lease 是产品权限 | `scripts/browser-lease*.mjs`、`foreground-lease.ts` |
 | Adapter 自动队列串行启动外部 Agent，并应以语义结果而非退出码判定 | `scripts/run-adapter-agent-queue.mjs` |
 
@@ -27,7 +28,8 @@ stale_after: 2026-12-03
 - 运行时模板和插件核心分离；普通站点适配不得要求重编译扩展。
 - Host 才能注入内部 `_clientId` 和 foreground token；外部输入不得伪造。
 - 任一 tab 页面操作必须通过调用者拥有且活动的 Space。
-- Agent 新建的 Space 默认最大化；可见性恢复不得把已最大化窗口降回普通小窗口。
+- Agent 新建的 Space 默认后台（最小化、不聚焦），不得抢占用户桌面；只有显式可见请求才允许前台最大化，且可见性恢复不得把已最大化窗口降回普通小窗口。
+- 页面能力差异（滚动/惰性加载/按 `visibilityState` 分流 UI）不得以“弹窗到前台”为默认代价：后台空间内保持 Agent 标签在窗口内 active，使页面按可见态渲染。
 - 用户接管优先于 Agent；用户拥有的 Space 不自动清理。
 - 同 profile 的可见浏览器动作只能有一个执行者。
 - 媒体字节不以内嵌大 base64 穿过模板定义；使用下载通道。
@@ -56,5 +58,6 @@ stale_after: 2026-12-03
 
 - ADR-001：采用普通 Chrome 上的逻辑 Task Space，不声称 Chromium BrowserContext 级隔离。
 - ADR-002：真实页面任务单 profile 串行，静态审查可并行。
-- ADR-003：最终用户通过运行时 Registry 安装模板，`registry:build` 仅供维护者/CI 发布索引。
+- ADR-003：模板随扩展发布（bundle），GitHub Registry 只负责更新/新增发现；运行时安装仍保留用于覆盖与第三方模板。
 - ADR-004：Adapter 只改自己的模板包；公共能力缺口回派 Core maintainer。
+- ADR-005：后台优先于可见——默认后台执行与验证，前台是需要显式声明的例外（AI 聊天等确实要求前台渲染的模板自行声明）。

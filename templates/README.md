@@ -164,13 +164,13 @@
 {"type":"command","name":"import_template","args":{"content":"{\"id\":\"my-bing\",\"name\":\"必应搜索\",\"category\":\"search\",\"inputs\":[{\"name\":\"query\",\"type\":\"string\",\"required\":true}],\"steps\":\"commands\",\"body\":[{\"name\":\"open_tab\",\"args\":{\"url\":\"https://www.bing.com\"}},{\"name\":\"js\",\"args\":{\"expression\":\"@focus\"},\"expect\":\"true\"},{\"name\":\"fill\",\"args\":{\"selector\":\"[data-bp-focus]\",\"value\":\"$query\"}},{\"name\":\"press\",\"args\":{\"key\":\"Enter\"}},{\"name\":\"waitForURL\",\"args\":{\"pattern\":\"bing.com/search\",\"partial\":true,\"timeoutMs\":20000}},{\"name\":\"js\",\"args\":{\"expression\":\"@results\"}}]}"},"requestId":"1"}
 ```
 
-### B. 内置模板（只给插件内置基线能力用，不是普通用户安装路径）
-1. 在 `src/background/templates.ts` 的 `builtinTemplates()` 里加一个对象（照 §4 格式）。
-2. `npm run typecheck` + `node scripts/build.js` 重建 `dist/`。
-3. 重载扩展 SW（`reload` 命令或手动），发 `export_template {id, as:"md"}` 把 markdown 存到 `templates/<id>.md` 作为权威产物。
+### B. 随扩展发布的模板包（全量模板的正式路径）
+1. 在 `registry/templates/<id>/template.json` 写/改模板（含 `tags` 与 `limit`，照 `registry/templates/README.md`）。
+2. `npm run registry:build` 重新生成 `registry/catalog.json`、`registry/bundle.json`、`registry/INDEX.md`、`registry/details/*.md`。
+3. `npm run build` 把 bundle 打进 `dist/templates.bundle.json`；重载扩展 SW（`reload` 命令或 Backlight 自动热重载）后，`list_templates` / 模板看板默认即含该模板。
 
 ### 建议流程
-先用 **A 在真机试跑**，调通后发布到 Registry；只有少量“默认随插件分发”的基线模板才走 **B 固化**，避免反复改代码/重打包。`npm run registry:build` 只属于维护者/CI 的发布流程，不是终端用户安装模板的步骤。
+先用 **A 在真机试跑**，调通后发布到 Registry；模板包一律走 **B 随扩展发布**（GitHub Registry 只负责发现更新/新增，用户勾选安装后以动态包覆盖同名 bundled 模板）。`npm run registry:build` 只属于维护者/CI 的发布流程，不是终端用户安装模板的步骤。
 
 ## 8. Registry 与命令参考
 
@@ -192,12 +192,12 @@
 | `compare_templates` | `{ids?,candidate?}` | 按语义字段计算相似度，创建前检查重复 |
 | `update_template` | `{id}` | 从已绑定来源升级并保留上一 revision |
 | `rollback_template` | `{id}` | 在当前与上一 revision 间回滚 |
-| `uninstall_template` | `{id}` | 删除已安装模板；内置模板不可卸载 |
+| `uninstall_template` | `{id}` | 删除已安装的动态模板；随扩展发布的 bundled 模板不能卸载（卸载同名动态包会回退到 bundled 版本） |
 
 Registry Protocol v1.1 规定每个公开模板使用目录包 `registry/templates/<id>/`，其中 `template.json` 是唯一真源，README/CHANGELOG/examples/tests 为配套资源。catalog 和详情 Markdown 通过 `npm run registry:build` 生成，CI 运行 `npm run registry:check`，禁止手工维护两套功能列表与详情数据。
 
 > `run_template` 顶层 `tabId` 会并入 params，使 `skipWhenParam:"tabId"` 与 `TAB_SCOPED` 注入生效（复用标签、不新开）。
-> `run_template` 会在观测、JS、截图和等待类步骤前自动恢复并聚焦目标窗口，降低最小化/后台渲染节流；步骤 args 可设置 `ensureVisible:false` 关闭。
+> `run_template` 默认后台执行，不会恢复/聚焦窗口；只有显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false`（或步骤 args 设置 `ensureVisible:true`）才在前台运行。后台空间内 Agent 标签保持窗口内 active，页面按可见态渲染。
 
 ## 9. 注意事项 / 坑
 

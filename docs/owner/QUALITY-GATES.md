@@ -41,7 +41,10 @@ Adapter 不运行 build、不手改 catalog/details。最终用户也不需要�
 
 ```powershell
 npm run smoke:template -- <template-id>
+npm run smoke:template -- --visible <template-id>   # 仅在用户明确要看、或排查渲染差异时使用
 ```
+
+`smoke:template` 默认**后台运行**（临时 Space 窗口最小化、不聚焦、不弹窗；窗口内 Agent 标签保持 active 以正常渲染），`--visible` 才前台最大化。
 
 通过证据必须同时具备：
 
@@ -69,9 +72,9 @@ npm run agents:migrate-builtins # 把 search/chatgpt-ask/gemini-ask 迁为免编
 npm run agents:regression:plan  # 只查看站点与顺序，不打开浏览器
 ```
 
-注意：`agents:regression` 只覆盖动态包。扩展内置兜底版本（Google Search、ChatGPT、Gemini）不在此队列——`smoke:template` 对已存在动态包的模板会先安装动态包，测到的仍是动态版本。要回归内置兜底，先 `uninstall_template` 卸载对应动态包，再 `npm run smoke:template -- <id>`（此时走 `import_template` + `tests/site-smoke/<id>.json` 契约）。
+注意：`agents:regression` 只覆盖动态包。全部 31 个 Registry 模板都随扩展发布（`dist/templates.bundle.json`），`smoke:template` 会先用仓库包 `install_template` 覆盖同名 bundled 版本再跑，因此测到的是当前仓库版本；要回归 bundled 兜底版本，先 `uninstall_template` 卸载对应动态包，再 `npm run smoke:template -- <id>`（此时走 `import_template` + `tests/site-smoke/<id>.json` 契约）。
 
-当前产品登记 8 个站点工作流：Google Search、百度、Bing、X、Google Scholar、Google Finance、ChatGPT、Gemini。全部以动态包作为站点更新入口；Google Search、ChatGPT、Gemini 另有扩展内置兜底。`search-demo` 是开发示例，参加兼容回归但不重复计算站点；`browserpilot-example-prompt` 不操作网页，只参加静态 Registry 检查。
+当前产品登记 8 个站点工作流：Google Search、百度、Bing、X、Google Scholar、Google Finance、ChatGPT、Gemini。全部以动态包作为站点更新入口，且全部随扩展发布。`search-demo` 是开发示例，参加兼容回归但不重复计算站点；`browserpilot-example-prompt` 不操作网页，只参加静态 Registry 检查。
 
 ## 发布门禁
 
