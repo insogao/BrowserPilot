@@ -769,10 +769,10 @@
     {
       "id": "google-finance-search",
       "name": "Google Finance Search",
-      "version": "1.1.0",
+      "version": "1.2.0",
       "path": "registry/templates/google-finance-search/template.json",
       "detailsPath": "registry/details/google-finance-search.md",
-      "description": "Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.",
+      "description": "Search Google Finance (zh/en UI) for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.",
       "category": "finance",
       "tags": [
         "finance",

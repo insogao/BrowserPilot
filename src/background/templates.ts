@@ -1113,12 +1113,14 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
       stepArgs.visible = true;
     }
     const visibleTab = typeof stepArgs.tabId === "number" && Number.isFinite(stepArgs.tabId) ? Number(stepArgs.tabId) : currentTab;
+    // 后台运行完全不碰窗口状态：最小化窗口里的 active 标签仍按可见态渲染（实测滚动/SPA 均正常），
+    // 恢复窗口（minimized→normal）在 macOS 上会置前，是弹窗来源。只有显式前台/步骤强制才 ensure_visible。
     const shouldEnsureVisible = stepArgs.ensureVisible === true || (visibleRun && stepArgs.ensureVisible !== false);
     if (visibleTab !== undefined && VISIBLE_BEFORE_STEP.has(step.name) && shouldEnsureVisible) {
       await runOne({
         type: "command",
         name: "ensure_visible",
-        args: { tabId: visibleTab },
+        args: { tabId: visibleTab, focus: true },
         requestId: cmd.requestId + ":" + i + ":visible",
         space: cmd.space,
         _clientId: cmd._clientId,

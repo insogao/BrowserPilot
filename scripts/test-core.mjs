@@ -148,7 +148,7 @@ await assert.rejects(
 );
 const bSpace = await spaces.open_space({ type: "command", name: "open_space", requestId: "b2", _clientId: "agent:b", args: { name: "B" } });
 assert.equal(bSpace.ownerClientId, "agent:b");
-assert.equal(lastCreatedWindowState, "minimized", "default task space must open minimized in the background");
+assert.equal(lastCreatedWindowState, "normal", "default task space must stay visible without being raised");
 assert.equal(lastCreatedWindowFocused, false, "default task space must not steal focus");
 const bVisible = await spaces.open_space({ type: "command", name: "open_space", requestId: "b2v", _clientId: "agent:b", args: { name: "B-visible", focus: true } });
 assert.equal(lastCreatedWindowState, "maximized", "explicit focus:true must use the visible maximized viewport");
@@ -247,11 +247,13 @@ assert.doesNotMatch(templateSource, /不能覆盖内置模板/, "runtime package
 const spacesSource = fs.readFileSync("src/background/spaces.ts", "utf8");
 assert.match(spacesSource, /return a\.focus === true \|\| a\.keepVisible === true \|\| a\.visible === true \|\| a\.background === false/, "visibility must require an explicit flag");
 assert.match(spacesSource, /const win = await chrome\.windows\.create\(\{ url, focused: visible, state: requestedState \}\)/, "open_space must not focus by default");
-assert.match(spacesSource, /const requestedState = args\.state === "normal" \? "normal" : visible \? "maximized" : "minimized"/, "background spaces must open minimized instead of maximized");
-assert.match(spacesSource, /const activateInWindow = visible \|\| space\.background === true;/, "open_tab must keep background spaces rendering without activating the window");
+assert.match(spacesSource, /const requestedState = args\.state === "normal" \? "normal" : visible \? "maximized" : "normal"/, "background spaces must open visible-normal without being raised");
+assert.match(spacesSource, /const tab = await chrome\.tabs\.create\(\{ windowId: space\.windowId, url, active: true \}\);/, "open_tab must keep the agent tab active in its window for rendering and visibility");
 assert.match(spacesSource, /background: !visible,/, "open_space must record whether it was created as a background space");
+assert.match(spacesSource, /const patch = focus \? \(state \? \{ state, focused: true \} : \{ focused: true \}\) : \(state \? \{ state \} : null\);/, "ensure visible without focus must only restore minimized windows");
 assert.match(templateSource, /const visibleRun = args\.background === false \|\| args\.focus === true \|\| args\.keepVisible === true \|\| args\.visible === true;/, "run_template must derive an explicit visible run intent");
-assert.match(templateSource, /const shouldEnsureVisible = stepArgs\.ensureVisible === true \|\| \(visibleRun && stepArgs\.ensureVisible !== false\);/, "run_template must only restore windows on explicit visible intent");
+assert.match(templateSource, /const shouldEnsureVisible = stepArgs\.ensureVisible === true \|\| \(visibleRun && stepArgs\.ensureVisible !== false\);/, "background runs must never touch window state");
+assert.match(templateSource, /args: \{ tabId: visibleTab, focus: true \},/, "explicit visible runs must focus the target window");
 console.log("PASS core: template runner keeps declaration-driven selectors and defaults every path to background");
 
 // ---------- debugger attach 自愈（SW 回收后 Set 与 Chrome 实际状态脱钩） ----------

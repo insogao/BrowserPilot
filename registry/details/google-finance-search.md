@@ -1,9 +1,9 @@
 # Google Finance Search
 
-> Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.
+> Search Google Finance (zh/en UI) for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.
 
 - ID: `google-finance-search`
-- 版本: `1.1.0`
+- 版本: `1.2.0`
 - 风险: `read`
 - 适用站点: `google.com`
 - Intents: `finance.search`, `finance.quote`, `finance.lookup`

@@ -94,7 +94,7 @@ function sourceLabel(item: TemplateListItem): string {
 
 let items: TemplateListItem[] = [];
 let updatesById = new Map<string, string>();
-const activeTags = new Set<string>();
+let activeTag: string | null = null;
 let query = "";
 let pendingCandidates: UpdateCandidate[] = [];
 
@@ -109,8 +109,8 @@ function matchesQuery(item: TemplateListItem): boolean {
 }
 
 function matchesTags(item: TemplateListItem): boolean {
-  if (!activeTags.size) return true;
-  return (item.tags ?? []).some((tag) => activeTags.has(tag));
+  if (!activeTag) return true;
+  return (item.tags ?? []).includes(activeTag);
 }
 
 function sortForDisplay(list: TemplateListItem[]): TemplateListItem[] {
@@ -137,12 +137,11 @@ function renderTagFilter(): void {
   const root = $("tag-filter");
   const makeChip = (label: string, key: string | null): HTMLButtonElement => {
     const chip = document.createElement("button");
-    chip.className = "chip" + ((key === null && !activeTags.size) || (key !== null && activeTags.has(key)) ? " active" : "");
+    // 单选：任何时刻至多一个 Tag 生效，再点一次取消回到「全部」。
+    chip.className = "chip" + (activeTag === key ? " active" : "");
     chip.textContent = label;
     chip.addEventListener("click", () => {
-      if (key === null) activeTags.clear();
-      else if (activeTags.has(key)) activeTags.delete(key);
-      else activeTags.add(key);
+      activeTag = key !== null && activeTag === key ? null : key;
       renderTagFilter();
       renderList();
       renderSummary();

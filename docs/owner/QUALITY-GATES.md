@@ -44,7 +44,7 @@ npm run smoke:template -- <template-id>
 npm run smoke:template -- --visible <template-id>   # 仅在用户明确要看、或排查渲染差异时使用
 ```
 
-`smoke:template` 默认**后台运行**（临时 Space 窗口最小化、不聚焦、不弹窗；窗口内 Agent 标签保持 active 以正常渲染），`--visible` 才前台最大化。
+`smoke:template` 默认**后台运行**：复用同一个常驻 `BrowserPilot Smoke` 窗口（可见但不聚焦、不弹到前台；窗口内 Agent 标签保持 active 以正常渲染），每个模板在同一窗口开标签页、测完自动关闭；`--visible` 才把窗口激活到最前，`--fresh` 跑完关闭窗口。
 
 通过证据必须同时具备：
 

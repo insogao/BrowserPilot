@@ -1289,8 +1289,8 @@
     {
       "id": "google-finance-search",
       "name": "Google Finance Search",
-      "version": "1.1.0",
-      "description": "Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.",
+      "version": "1.2.0",
+      "description": "Search Google Finance (zh/en UI) for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data.",
       "category": "finance",
       "tags": [
         "finance",
@@ -1316,39 +1316,40 @@
         {
           "name": "waitForSelector",
           "args": {
-            "selector": "div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]",
+            "selector": "div[role=button][aria-label=\"搜索股票、ETF 等\"], div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]",
             "timeoutMs": 15000
           },
-          "note": "Wait for the search launcher button to appear."
+          "note": "Wait for the search launcher (zh/en aria-label)."
         },
         {
           "name": "click",
           "args": {
-            "selector": "div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]"
+            "selector": "div[role=button][aria-label=\"搜索股票、ETF 等\"], div[role=button][aria-label=\"Search for stocks, ETFs, and more\"]"
           },
-          "note": "Click the search launcher to reveal the search textarea."
+          "note": "Click the search launcher (zh/en)."
         },
         {
           "name": "waitForSelector",
           "args": {
-            "selector": "textarea[aria-label=\"Ask about this or search\"]",
-            "timeoutMs": 10000
+            "selector": "textarea[aria-label*=\"搜索\"], textarea[aria-label*=\"search\" i]",
+            "visible": true,
+            "timeoutMs": 15000
           },
-          "note": "Wait for the search textarea to become visible."
+          "note": "Wait for the post-click search textarea specifically (the AI ask box is visible before the click)."
         },
         {
           "name": "fill",
           "args": {
-            "selector": "textarea[aria-label=\"Ask about this or search\"]",
+            "selector": "textarea[aria-label*=\"搜索\"], textarea[aria-label*=\"search\" i]",
             "value": "$query"
           },
-          "note": "Fill the search query."
+          "note": "Fill the search query into the page search textarea."
         },
         {
           "name": "press",
           "args": {
             "key": "Enter",
-            "selector": "textarea[aria-label=\"Ask about this or search\"]"
+            "selector": "textarea[aria-label*=\"搜索\"], textarea[aria-label*=\"search\" i]"
           },
           "note": "Submit the search query."
         },

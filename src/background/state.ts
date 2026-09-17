@@ -9,9 +9,11 @@ export interface SpaceState {
   tabId?: number;
   ownerClientId?: string;
   ownership?: "agent" | "user" | "inactive";
-  /** true = 创建时即为后台空间（窗口最小化、不聚焦）；窗口内标签可保持 active 以正常渲染。
-   *  可见空间（显式 focus/保持可见）为 undefined。 */
+  /** true = 创建时即为后台空间：窗口可见（normal）但不抢焦点、不激活到最前；窗口内标签保持 active 以正常渲染。
+   *  前台空间（显式 focus/保持可见）为 undefined。 */
   background?: boolean;
+  /** 最近一次实测的窗口状态（normal/minimized/maximized/fullscreen），用于后台诊断。 */
+  windowState?: string;
   createdAt?: number;
   updatedAt?: number;
   layer: "L0" | "L1";

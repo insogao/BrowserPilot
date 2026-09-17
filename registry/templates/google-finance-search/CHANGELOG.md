@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.0 — 2026-09-17
+
+- 选择器改为中英双语：搜索启动按钮支持「搜索股票、ETF 等」/「Search for stocks, ETFs, and more」，输入框改用 `@focus` 顺序优先（尽情提问/Ask about this or search），修复中文界面下 waitForSelector 超时。
+
 ## 1.1.1
 
 - Fixed waitForURL pattern from `google.com/finance` to `finance/beta/quote` to prove navigation to a quote-result route and avoid matching the homepage.

@@ -129,21 +129,27 @@ export async function assertTabInCommandSpace(cmd: Command, tabId: number): Prom
   return space;
 }
 
-/** 可见性意图（与 Backlight 门禁同构）：默认后台，不做任何聚焦/恢复；
- *  只有显式 `focus:true` / `keepVisible:true` / `visible:true` / `background:false` 才允许可见路径。 */
+/** 前台意图（与 Backlight 门禁同构）：默认“不抢焦点”，窗口仍可见；只有显式 `focus:true` /
+ *  `keepVisible:true` / `visible:true` / `background:false` 才允许把窗口激活到最前。 */
 export function wantsVisible(args: Record<string, unknown> | undefined): boolean {
   const a = args ?? {};
   if (a.background === true) return false;
   return a.focus === true || a.keepVisible === true || a.visible === true || a.background === false;
 }
 
-/** 显式可见路径：恢复窗口为 normal 并聚焦（仅供 wantsVisible 为真或 ensure_visible 命令使用）。 */
-export async function ensureTabVisible(tabId: number, requestedState?: "normal" | "maximized"): Promise<chrome.tabs.Tab> {
+/** 恢复目标窗口用于渲染/交互。focus=true 才把窗口激活到最前（显式可见路径）；
+ *  focus=false（默认后台运行）只把 minimized 恢复为 normal，保持用户桌面焦点不变。 */
+export async function ensureTabVisible(
+  tabId: number,
+  requestedState?: "normal" | "maximized",
+  focus = true,
+): Promise<chrome.tabs.Tab> {
   const tab = await chrome.tabs.get(tabId);
   if (tab.windowId !== undefined) {
     const win = await chrome.windows.get(tab.windowId).catch(() => undefined);
     const state = requestedState ?? (win?.state === "minimized" ? "normal" : undefined);
-    await chrome.windows.update(tab.windowId, state ? { state, focused: true } : { focused: true }).catch(() => {});
+    const patch = focus ? (state ? { state, focused: true } : { focused: true }) : (state ? { state } : null);
+    if (patch) await chrome.windows.update(tab.windowId, patch).catch(() => {});
   }
   if (!tab.active) return chrome.tabs.update(tabId, { active: true });
   return tab;
@@ -175,10 +181,13 @@ export async function open_space(cmd: Command): Promise<SpaceState> {
   const name = typeof args.name === "string" && args.name.trim() ? args.name.trim() : "Task " + new Date().toLocaleTimeString();
   const url = typeof args.url === "string" && args.url.trim() ? args.url.trim() : "about:blank";
   const visible = wantsVisible(args);
-  const requestedState = args.state === "normal" ? "normal" : visible ? "maximized" : "minimized";
-  // 默认后台：新窗口不聚焦且最小化，避免抢占用户桌面；显式 visible 才前台最大化。
+  // 默认后台 = 可见但**不抢焦点**：窗口 normal 显示（用户可随时瞄 AI 进度），不激活到最前；
+  // 显式 visible/focus 才前台最大化。窗口内标签保持 active，页面按可见态正常渲染。
+  const requestedState = args.state === "normal" ? "normal" : visible ? "maximized" : "normal";
   const win = await chrome.windows.create({ url, focused: visible, state: requestedState });
   if (win.id === undefined) throw new Error("创建 Task Space 窗口失败");
+  // 实测窗口状态写入 SpaceState，供 list_spaces 只读诊断（不触发任何聚焦）。
+  const windowState = (await chrome.windows.get(win.id).catch(() => undefined))?.state ?? win.state;
   const spaceId = "space-" + crypto.randomUUID();
   const tab = win.tabs?.[0];
   const now = Date.now();
@@ -189,6 +198,7 @@ export async function open_space(cmd: Command): Promise<SpaceState> {
     ownerClientId: clientId,
     ownership: "agent",
     background: !visible,
+    windowState,
     createdAt: now,
     updatedAt: now,
   });
@@ -260,10 +270,9 @@ export async function open_tab(cmd: Command): Promise<{ tabId?: number; windowId
   if (space.windowId === undefined) throw new TaskSpaceError("SPACE_INACTIVE", "Task Space 没有活动窗口");
   const url = (cmd.args?.url as string) ?? "about:blank";
   const visible = wantsVisible(cmd.args);
-  // 默认后台：不聚焦/不恢复窗口；但后台空间（窗口最小化）内让标签保持 active，
-  // 页面才能正常渲染（visibilityState=visible），同时窗口不会弹到前台。
-  const activateInWindow = visible || space.background === true;
-  const tab = await chrome.tabs.create({ windowId: space.windowId, url, active: activateInWindow });
+  // 标签始终保持窗口内 active：页面按可见态渲染，用户也能看到 AI 在操作；
+  // 默认后台只保证不把窗口激活到最前（不聚焦）。
+  const tab = await chrome.tabs.create({ windowId: space.windowId, url, active: true });
   await patchSpace(space.spaceId, { tabId: tab.id });
   if (visible) await ensureTabVisible(tab.id as number).catch(() => {});
   return { tabId: tab.id, windowId: tab.windowId, spaceId: space.spaceId };
@@ -281,15 +290,9 @@ export async function switch_tab(cmd: Command): Promise<{ tabId: number; windowI
   const tabId = Number(cmd.args?.tabId);
   if (!Number.isFinite(tabId)) throw new Error("switch_tab 需要数字 tabId");
   const space = await assertTabInCommandSpace(cmd, tabId);
-  // 默认后台：不聚焦/不恢复窗口；后台空间（最小化窗口）内允许切换窗口内 active 标签以正常渲染。
-  let tab: chrome.tabs.Tab;
-  if (wantsVisible(cmd.args)) {
-    tab = await ensureTabVisible(tabId);
-  } else if (space.background === true) {
-    tab = await chrome.tabs.update(tabId, { active: true });
-  } else {
-    tab = await chrome.tabs.get(tabId);
-  }
+  // 标签始终切换为窗口内 active（渲染 + 用户可见）；默认后台不把窗口激活到最前。
+  const tab = await chrome.tabs.update(tabId, { active: true });
+  if (wantsVisible(cmd.args)) await ensureTabVisible(tabId);
   await patchSpace(space.spaceId, { tabId });
   return { tabId: tab.id as number, windowId: tab.windowId, url: tab.url, title: tab.title };
 }
@@ -304,7 +307,8 @@ export async function ensure_visible(cmd: Command): Promise<{ tabId: number; win
   if (!Number.isFinite(tabId)) throw new Error("ensure_visible 未找到当前 Task Space 的活动 tab");
   await assertTabInCommandSpace(cmd, tabId);
   const requestedState = cmd.args?.state === "maximized" ? "maximized" : cmd.args?.state === "normal" ? "normal" : undefined;
-  const tab = await ensureTabVisible(tabId, requestedState);
+  // 显式 ensure_visible 默认前台聚焦；run_template 的后台运行会带 focus:false（只恢复渲染，不抢焦点）。
+  const tab = await ensureTabVisible(tabId, requestedState, cmd.args?.focus !== false);
   const win = await chrome.windows.get(tab.windowId);
   return { tabId: tab.id as number, windowId: tab.windowId, state: win.state, focused: win.focused };
 }

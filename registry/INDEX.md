@@ -16,7 +16,7 @@
 | 模板 ID | 名称 | 版本 | Tag | 功能 | 风险 | 包目录 |
 |---|---|---|---|---|---|---|
 | `cls-telegraph` | 财联社电报 | 1.1.0 | finance, news | 抓取财联社电报页最新快讯（时间/标题/正文），返回指定条数（默认 20，最多 100；滚动加载）。无需登录。 | read | [templates/cls-telegraph/](templates/cls-telegraph/) |
-| `google-finance-search` | Google Finance Search | 1.1.0 | finance, search | Search Google Finance for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data. | read | [templates/google-finance-search/](templates/google-finance-search/) |
+| `google-finance-search` | Google Finance Search | 1.2.0 | finance, search | Search Google Finance (zh/en UI) for a ticker symbol or company name, return matching quote links with ticker, company, price, and change data. | read | [templates/google-finance-search/](templates/google-finance-search/) |
 | `guba-article` | 股吧帖子爬取 | 1.1.0 | finance | 爬取一篇股吧帖子的正文（标题+内容，最多8000字符）。无需登录。 | read | [templates/guba-article/](templates/guba-article/) |
 | `guba-list` | 个股吧帖子流 | 1.1.0 | finance | 按股票代码打开个股吧列表页，返回指定条数（默认 30，最多 100）。无需登录。 | read | [templates/guba-list/](templates/guba-list/) |
 | `guba-search` | 股吧搜索 | 1.2.0 | finance, search | 在东方财富股吧搜索关键词，返回指定条数帖子（标题+链接+摘要，默认 15，最多 100）。无需登录。 | read | [templates/guba-search/](templates/guba-search/) |

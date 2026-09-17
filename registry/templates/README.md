@@ -78,7 +78,7 @@ npm run browser:lease -- client <agent-name> <template-id> open_space '{"name":"
 npm run browser:lease -- client <agent-name> <template-id> list_tabs '{}'
 ```
 
-`open_space` / `open_tab` / `switch_tab` / `run_template` are **background by default** (minimized window, no focus steal, tabs stay active inside the window so pages render normally). Only pass `focus:true` / `keepVisible:true` / `visible:true` explicitly when the user asked to watch, or when a page genuinely requires foreground rendering; `ensure_visible` remains the explicit show command.
+`open_space` / `open_tab` / `switch_tab` / `run_template` are **background by default**: windows stay visible but are never focused or raised, the agent tab stays active inside its window so pages render normally, and background runs never restore or change existing window state. Only pass `focus:true` / `keepVisible:true` / `visible:true` (or `ensure_visible`) when the user asked to watch or a page genuinely requires foreground rendering. `smoke:template` reuses one persistent `BrowserPilot Smoke` window and opens tabs inside it (`--visible` raises it, `--fresh` closes it).
 
 2. Observe structure cheaply first:
 
@@ -217,7 +217,7 @@ Then convert the findings into a commands template:
 
 Do not add a new branch to `src/background/templates.ts` for ordinary search engines.
 
-For pages with virtual lists or lazy-loaded cards, such as X/Twitter, include deliberate scroll/wait logic in the template and verify with `screenshot`. BrowserPilot can restore a minimized window to `normal`, but it cannot force a site to render content that the site itself only loads after scroll or viewport exposure.
+For pages with virtual lists or lazy-loaded cards, such as X/Twitter, include deliberate scroll/wait logic in the template and verify with `screenshot`. BrowserPilot keeps the agent tab active inside its window (renders as visible even when the window is minimized) but it cannot force a site to render content that the site itself only loads after scroll or viewport exposure.
 
 ## AI Chat Adaptation Pattern
 

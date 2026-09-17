@@ -5,14 +5,18 @@ import { acquireBrowserLease, releaseBrowserLease } from "./browser-lease-lib.mj
 
 const root = process.cwd();
 const rawArgs = process.argv.slice(2);
-// 默认后台执行（窗口最小化、不聚焦），不打扰用户桌面；--visible 才前台运行（调试渲染问题时用）。
+// 默认后台执行：窗口可见但不抢焦点、不弹到最前；--visible 才把窗口激活到最前（偶尔需要盯着看时用）。
 const visible = rawArgs.includes("--visible");
+// 默认复用同一个常驻 smoke 窗口（同一窗口内开标签页）；--fresh 跑完关闭该窗口。
+const fresh = rawArgs.includes("--fresh");
 const ids = rawArgs.filter((arg) => !arg.startsWith("--"));
 
 if (!ids.length) {
-  console.error("Usage: npm run smoke:template -- [--visible] <template-id> [template-id...]");
+  console.error("Usage: npm run smoke:template -- [--visible] [--fresh] <template-id> [template-id...]");
   process.exit(2);
 }
+
+const SMOKE_SPACE_NAME = "BrowserPilot Smoke";
 
 function templateDir(id) {
   return path.join(root, "registry", "templates", id);
@@ -42,7 +46,8 @@ function client(command, args, leaseToken, timeoutMs = 120_000) {
       env: {
         ...process.env,
         BROWSERPILOT_BROWSER_LEASE_TOKEN: leaseToken,
-        BROWSERPILOT_AGENT_ID: ("smoke-template:" + ids.join(".")).slice(0, 80),
+        // 稳定 Agent 身份：跨多次 smoke 复用同一 space（同一窗口），不随模板列表变化。
+        BROWSERPILOT_AGENT_ID: "smoke-template",
       },
     });
     let stdout = "";
@@ -104,9 +109,42 @@ function checkExpect(data, expect = {}) {
   return failures;
 }
 
+function tabIdsOf(response) {
+  const tabs = response?.parsed?.data?.tabs;
+  return Array.isArray(tabs) ? tabs.map((t) => t.tabId).filter((id) => typeof id === "number") : [];
+}
+
 const results = [];
 let lease;
 let smokeSpaceId;
+let spaceMode = "unknown";
+let fatalError = null;
+
+async function ensureSmokeSpace() {
+  // 1) 复用已有常驻 smoke 空间（同一窗口）
+  const spaces = await client("list_spaces", {}, lease.token, 15_000);
+  const mine = Array.isArray(spaces.parsed?.data) ? spaces.parsed.data : [];
+  const reusable = mine.find((s) => s.windowId !== undefined && s.ownership === "agent");
+  if (reusable) {
+    const used = await client("use_space", { spaceId: reusable.spaceId }, lease.token, 15_000);
+    if (used.ok) {
+      const probe = await client("list_tabs", {}, lease.token, 15_000);
+      if (probe.ok) {
+        spaceMode = "reused";
+        return reusable.spaceId;
+      }
+    }
+  }
+  // 2) 没有可用空间才新建（默认不聚焦、窗口可见但不抢前台）
+  const openSpaceArgs = { name: SMOKE_SPACE_NAME, url: "about:blank" };
+  if (visible) openSpaceArgs.focus = true;
+  const opened = await client("open_space", openSpaceArgs, lease.token, 30_000);
+  if (opened.ok && typeof opened.parsed?.data?.spaceId === "string") {
+    spaceMode = "created";
+    return opened.parsed.data.spaceId;
+  }
+  throw new Error((opened.stderr || opened.stdout || "open_space failed").trim());
+}
 
 try {
   lease = acquireBrowserLease("smoke-template", ids.join(","));
@@ -115,80 +153,90 @@ try {
   if (!setupPing.ok) {
     setupError = (setupPing.stderr || setupPing.stdout || "BrowserPilot host unavailable").trim();
   } else {
-    const openSpaceArgs = { name: "Smoke: " + ids.join(", "), url: "about:blank" };
-    if (visible) openSpaceArgs.focus = true;
-    const opened = await client("open_space", openSpaceArgs, lease.token, 30_000);
-    if (opened.ok && typeof opened.parsed?.data?.spaceId === "string") {
-      smokeSpaceId = opened.parsed.data.spaceId;
-    } else {
-      setupError = (opened.stderr || opened.stdout || "open_space failed").trim();
+    try {
+      smokeSpaceId = await ensureSmokeSpace();
+    } catch (e) {
+      setupError = e instanceof Error ? e.message : String(e);
     }
   }
 
-for (const id of ids) {
-  const dir = templateDir(id);
-  const templateFile = path.join(dir, "template.json");
-  const smokeFile = smokeContractFile(id);
-  const item = { id, status: "pending", commands: [] };
-  results.push(item);
+  for (const id of ids) {
+    const dir = templateDir(id);
+    const templateFile = path.join(dir, "template.json");
+    const smokeFile = smokeContractFile(id);
+    const item = { id, status: "pending", commands: [] };
+    results.push(item);
 
-  if (setupError) {
-    item.status = "blocked";
-    item.error = setupError;
-    continue;
-  }
+    if (setupError) {
+      item.status = "blocked";
+      item.error = setupError;
+      continue;
+    }
 
-  if (!fs.existsSync(smokeFile)) {
-    item.status = "failed";
-    item.error = "missing smoke contract: " + path.relative(root, smokeFile);
-    continue;
-  }
+    if (!fs.existsSync(smokeFile)) {
+      item.status = "failed";
+      item.error = "missing smoke contract: " + path.relative(root, smokeFile);
+      continue;
+    }
 
-  const isRuntimePackage = fs.existsSync(templateFile);
-  const installCommand = isRuntimePackage ? "install_template" : "import_template";
-  const installArgs = isRuntimePackage
-    ? { content: fs.readFileSync(templateFile, "utf8") }
-    : { id };
-  const install = await client(installCommand, installArgs, lease.token, 30_000);
-  item.commands.push({ command: installCommand, ok: install.ok, error: install.stderr.trim() || undefined });
-  if (!install.ok) {
-    item.status = "failed";
-    item.error = (install.stderr || install.stdout || installCommand + " failed").trim();
-    continue;
-  }
+    const before = await client("list_tabs", {}, lease.token, 15_000);
+    const beforeIds = new Set(tabIdsOf(before));
+    const closeOpenedTabs = async () => {
+      const after = await client("list_tabs", {}, lease.token, 15_000);
+      const opened = tabIdsOf(after).filter((tabId) => !beforeIds.has(tabId));
+      for (const tabId of opened) await client("close_tab", { tabId }, lease.token, 15_000).catch(() => undefined);
+      item.tabsOpened = opened.length;
+    };
 
-  const smoke = readJson(smokeFile);
-  const runArgs = smoke.args ?? { id, params: smoke.params ?? {} };
-  // 与 client.mjs 内部的 run_template 10 分钟上限对齐：聊天类模板的流式等待可超过 3 分钟，
-  // 外层先杀会让 Adapter 拿不到真实失败现场（只剩 "timeout"）。
-  const run = await client("run_template", runArgs, lease.token, 600_000);
-  item.commands.push({ command: "run_template", ok: run.ok, error: run.stderr.trim() || undefined });
-  if (!run.ok) {
-    item.status = "failed";
-    item.error = (run.stderr || run.stdout || "run_template failed").trim();
-    continue;
-  }
-  const rawData = run.parsed?.data;
-  const data = rawData && typeof rawData === "object" && "value" in rawData ? rawData.value : rawData;
-  const failures = checkExpect(data, smoke.expect ?? {});
-  if (failures.length) {
-    item.status = "failed";
-    item.error = failures.join("; ");
+    const isRuntimePackage = fs.existsSync(templateFile);
+    const installCommand = isRuntimePackage ? "install_template" : "import_template";
+    const installArgs = isRuntimePackage
+      ? { content: fs.readFileSync(templateFile, "utf8") }
+      : { id };
+    const install = await client(installCommand, installArgs, lease.token, 30_000);
+    item.commands.push({ command: installCommand, ok: install.ok, error: install.stderr.trim() || undefined });
+    if (!install.ok) {
+      item.status = "failed";
+      item.error = (install.stderr || install.stdout || installCommand + " failed").trim();
+      await closeOpenedTabs();
+      continue;
+    }
+
+    const smoke = readJson(smokeFile);
+    const runArgs = smoke.args ?? { id, params: smoke.params ?? {} };
+    // 与 client.mjs 内部的 run_template 10 分钟上限对齐：聊天类模板的流式等待可超过 3 分钟，
+    // 外层先杀会让 Adapter 拿不到真实失败现场（只剩 "timeout"）。
+    const run = await client("run_template", runArgs, lease.token, 600_000);
+    item.commands.push({ command: "run_template", ok: run.ok, error: run.stderr.trim() || undefined });
+    await closeOpenedTabs();
+    if (!run.ok) {
+      item.status = "failed";
+      item.error = (run.stderr || run.stdout || "run_template failed").trim();
+      continue;
+    }
+    const rawData = run.parsed?.data;
+    const data = rawData && typeof rawData === "object" && "value" in rawData ? rawData.value : rawData;
+    const failures = checkExpect(data, smoke.expect ?? {});
+    if (failures.length) {
+      item.status = "failed";
+      item.error = failures.join("; ");
+      item.data = data;
+      continue;
+    }
+    item.status = "passed";
     item.data = data;
-    continue;
   }
-  item.status = "passed";
-  item.data = data;
-}
-
-console.log(JSON.stringify({ ok: results.every((r) => r.status === "passed"), results }, null, 2));
-process.exitCode = results.every((r) => r.status === "passed") ? 0 : 1;
 } catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+  fatalError = error instanceof Error ? error.message : String(error);
+  console.error(fatalError);
 } finally {
-  if (lease && smokeSpaceId) {
+  // 默认保留 smoke 窗口供下次复用（同一窗口开标签页）；--fresh 才关闭。
+  if (lease && smokeSpaceId && fresh) {
     await client("complete_space", { spaceId: smokeSpaceId, keep: false }, lease.token, 30_000).catch(() => undefined);
   }
   if (lease) releaseBrowserLease(lease.token);
 }
+
+const allPassed = !fatalError && results.every((r) => r.status === "passed");
+console.log(JSON.stringify({ ok: allPassed, fatalError: fatalError ?? undefined, spaceId: smokeSpaceId, spaceMode, results }, null, 2));
+process.exitCode = allPassed ? 0 : 1;
