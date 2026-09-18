@@ -15,9 +15,11 @@ async function init(): Promise<void> {
   await connectHost();
 }
 
-chrome.runtime.onInstalled.addListener((details) => {
+chrome.runtime.onInstalled.addListener(() => {
   void init();
-  if (details.reason === "install") void chrome.runtime.openOptionsPage();
+  // Do not open a tab on install. In a managed/background browser the first
+  // window may be created later, unexpectedly surfacing this onboarding page.
+  // The user can open it explicitly from the popup's Manage button.
 });
 
 chrome.runtime.onStartup.addListener(() => {

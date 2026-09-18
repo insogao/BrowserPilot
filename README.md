@@ -72,7 +72,7 @@ npm run register-host:mac -- --only-user-data-dir \
   --user-data-dir "$HOME/Library/Application Support/Backlight/spaces/default/profile"
 ```
 
-> **生效方式（2026-09-16 实测）**：native host 注册在目标 user-data-dir 上**不需要为生效而重启浏览器**——注册后扩展直接 `connectNative` 即可连通（Backlight 默认 profile 未重启即 `ping` 成功）。需要重载的是**扩展本身**：刚加载或更新 `dist/` 后在 `chrome://extensions` 点一次「重新加载」（或走 `npm run dev` 热更新流程）。首次安装（`onInstalled` reason=install）扩展会自动打开 onboarding/使用说明页。新 Backlight space 的 profile 需要单独定向注册，注册不会自动扩散。
+> **生效方式（2026-09-16 实测）**：native host 注册在目标 user-data-dir 上**不需要为生效而重启浏览器**——注册后扩展直接 `connectNative` 即可连通（Backlight 默认 profile 未重启即 `ping` 成功）。需要重载的是**扩展本身**：刚加载或更新 `dist/` 后在 `chrome://extensions` 点一次「重新加载」（或走 `npm run dev` 热更新流程）。onboarding/使用说明页只在用户从插件 popup 点击「管理」时打开，不再因首次安装自动开页。新 Backlight space 的 profile 需要单独定向注册，注册不会自动扩散。
 
 > 重复执行是幂等的（内容相同不重写）；目标位置已存在不属于 BrowserPilot 的 manifest/wrapper 时默认拒绝写入，确认后才用 `--force` 覆盖。
 

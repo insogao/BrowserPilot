@@ -65,7 +65,7 @@ macOS 适配完成且真机全链路已验证（扩展已由用户加载，host 
 ## 当前安装与验证（2026-09-16，macOS 真机实测）
 
 - 宿主：Backlight 默认实例（daemon pid 2695 / `http://127.0.0.1:9333`；品牌 Chrome for Testing 153.0.8010.47），user-data-dir `/Users/jiangao/Library/Application Support/Backlight/spaces/default/profile`（当前唯一 space `default`）。
-- 扩展：本 worktree `dist/` 已被 Backlight 加载，ID `nnollghpaggbcdkkgoieneffnlijinio`、版本 0.1.0、runtime `enabled=true`（`curl -s http://127.0.0.1:9333/api/extensions`）；首次安装（`onInstalled` reason=install）自动打开 onboarding/options 页。
+- 扩展：本 worktree `dist/` 已被 Backlight 加载，ID `nnollghpaggbcdkkgoieneffnlijinio`、版本 0.1.0、runtime `enabled=true`（`curl -s http://127.0.0.1:9333/api/extensions`）；onboarding/options 页仅由用户从 popup 的「管理」按钮主动打开。
 - native host：按 profile 定向注册（`--only-user-data-dir`），manifest 在默认 profile 的 `NativeMessagingHosts/`，wrapper 指向本 worktree `native-host/dist/host-mac.sh`；host 是品牌浏览器进程的直接子进程，监听 `127.0.0.1:47001`。
 - 验证（无启动、无重启）：`npm run client -- ping '{}' --no-launch` → `pong: true`；`npm run client -- list_templates '{}' --no-launch` → 31 个随扩展发布的 bundled 模板（带 tags；2026-09-17 起），未安装动态包。**native host 注册生效不需要重启浏览器**；需要重载的只是扩展本身（`chrome://extensions` reload 或 `npm run dev` 热更新；Backlight 也会在 dist 变化时自动热重载扩展）。
 - 复现/新目标定向注册命令（先 dry-run 核对，`--only-user-data-dir` 不写自动发现目录）：
