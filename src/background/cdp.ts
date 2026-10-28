@@ -1,12 +1,69 @@
 // CDP 辅助：页面求值 / ref->坐标 / glob 匹配 / 睡眠 / 受信输入的重用片段（M5）。
 import { attach, isAttached, sendCommand } from "./debugger-bridge";
-import { captureWithFallback, type ScreenshotResult } from "./screenshot-policy";
+import {
+  captureWithFallback,
+  type CaptureHooks,
+  type CapturePhase,
+  type ScreenshotResult,
+} from "./screenshot-policy";
 
 export async function ensureAttach(tabId: number): Promise<void> {
   if (!isAttached(tabId)) await attach(tabId);
 }
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// 截图请求表：超时必须清理，迟到的帧必须丢弃。
+//
+// chrome.debugger.sendCommand 的 promise 无法取消。超时后我们只能「放弃」它：
+//   1. 立即把这次 attempt 从 pending 表移除（pendingScreenshotAttempts 归零）；
+//   2. 给底层 promise 挂 then/catch 消费器（withTimeout 内），迟到结果不会变成
+//      unhandled rejection，也不会被当成后续请求的响应（每次 send 都是独立 promise）；
+//   3. 计数/告警，便于诊断“窗口被遮挡导致合成器帧挂住”的频次。
+// ---------------------------------------------------------------------------
+
+interface ScreenshotFlight {
+  id: number;
+  phase: CapturePhase;
+  startedAt: number;
+}
+
+const screenshotFlights = new Map<number, Set<ScreenshotFlight>>();
+let screenshotSeq = 0;
+let abandonedAttempts = 0;
+let lateSettles = 0;
+
+function trackFlight(tabId: number, phase: CapturePhase): ScreenshotFlight {
+  const flight: ScreenshotFlight = { id: ++screenshotSeq, phase, startedAt: Date.now() };
+  let set = screenshotFlights.get(tabId);
+  if (!set) {
+    set = new Set();
+    screenshotFlights.set(tabId, set);
+  }
+  set.add(flight);
+  return flight;
+}
+
+function settleFlight(tabId: number, flight: ScreenshotFlight): void {
+  const set = screenshotFlights.get(tabId);
+  if (!set) return;
+  set.delete(flight);
+  if (!set.size) screenshotFlights.delete(tabId);
+}
+
+/** 仍在 pending 的截图请求数（tabId 缺省 = 全部）。超时清理后必须归零。 */
+export function pendingScreenshotAttempts(tabId?: number): number {
+  if (tabId !== undefined) return screenshotFlights.get(tabId)?.size ?? 0;
+  let total = 0;
+  for (const set of screenshotFlights.values()) total += set.size;
+  return total;
+}
+
+/** 诊断计数：超时被放弃的请求 / 超时后才迟到的 settle。 */
+export function screenshotCleanupStats(): { abandoned: number; lateSettles: number; pending: number } {
+  return { abandoned: abandonedAttempts, lateSettles, pending: pendingScreenshotAttempts() };
+}
 
 /** "@N" -> '[data-bp-id="bp-N"]'；否则原样（当作 CSS selector）。 */
 export function selFrom(refOrSelector: string, snapshotId?: string): string {
@@ -77,6 +134,9 @@ export type { ScreenshotMeta, ScreenshotResult } from "./screenshot-policy";
  *
  * 刻意**不**调用 ensureTabVisible：截图不允许改变窗口可见状态、焦点或用户当前
  * 活动标签。隐藏/最小化窗口本身就能取帧（实测 1–4 秒）。
+ *
+ * 超时语义：fromSurface=true 挂住时按 timeoutMs 放弃并降级；被放弃的请求会从
+ * pending 表移除，迟到的帧只记日志，绝不串到下一次截图。
  */
 export async function captureScreenshot(
   tabId: number,
@@ -85,11 +145,39 @@ export async function captureScreenshot(
 ): Promise<ScreenshotResult> {
   await ensureAttach(tabId);
   const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 8000;
-  return captureWithFallback(
-    (params) => sendCommand(tabId, "Page.captureScreenshot", params) as Promise<{ data?: string }>,
-    format,
-    timeoutMs,
-  );
+  const flights = new Map<CapturePhase, ScreenshotFlight>();
+  const hooks: CaptureHooks = {
+    onAttemptStart(phase) {
+      flights.set(phase, trackFlight(tabId, phase));
+    },
+    onAttemptSettle(phase, outcome) {
+      const flight = flights.get(phase);
+      if (flight) {
+        settleFlight(tabId, flight);
+        flights.delete(phase);
+      }
+      if (outcome === "abandoned") abandonedAttempts += 1;
+    },
+    onTimeout(info) {
+      console.warn("[cdp] 截图请求超时被放弃: tab=" + tabId + " phase=" + info.phase + " timeout=" + info.timeoutMs + "ms");
+    },
+    onLateSettle(phase, outcome) {
+      lateSettles += 1;
+      console.warn("[cdp] 截图请求超时后才返回，已丢弃: tab=" + tabId + " phase=" + phase + " outcome=" + outcome);
+    },
+  };
+  try {
+    return await captureWithFallback(
+      (params) => sendCommand(tabId, "Page.captureScreenshot", params) as Promise<{ data?: string }>,
+      format,
+      timeoutMs,
+      hooks,
+    );
+  } finally {
+    // 兜底：任何未走正常 settle 的异常路径都不留下 pending 记录。
+    for (const flight of flights.values()) settleFlight(tabId, flight);
+    flights.clear();
+  }
 }
 
 /**
@@ -99,10 +187,29 @@ export async function captureScreenshot(
  * - gap：每次滚动后等待毫秒，留给懒加载触发；缺省 400ms。
  * - 返回一张完整长图 base64 + 尺寸 / 屏数。
  */
+export interface ScrollCaptureResult {
+  base64: string;
+  width: number;
+  height: number;
+  pageCount: number;
+  viewH: number;
+  docH: number;
+  /** 任一屏走了降级快照路径即为 true：调用方不得把整图当作实时画面。 */
+  possiblyStale: boolean;
+  /** 走降级的屏数 / 新鲜屏数。 */
+  staleTiles: number;
+  freshTiles: number;
+  /** 降级原因（去重）；上层 API 必须原样透传，不得把 stale 当 fresh。 */
+  staleReasons: string[];
+  /** 整段滚动截图耗时。 */
+  durationMs: number;
+}
+
 export async function scrollCaptureScreenshot(
   tabId: number,
   opts: { pages?: number; gap?: number; format?: string } = {}
-): Promise<{ base64: string; width: number; height: number; pageCount: number; viewH: number; docH: number; possiblyStale: boolean }> {
+): Promise<ScrollCaptureResult> {
+  const started = Date.now();
   await ensureAttach(tabId);
   const format = opts.format ?? "png";
   const gap = typeof opts.gap === "number" && opts.gap > 0 ? opts.gap : 400;
@@ -119,12 +226,17 @@ export async function scrollCaptureScreenshot(
   const pageCount = Math.max(1, Math.min(want, fullPages));
   const tiles: string[] = [];
   let staleTiles = 0;
+  const staleReasons: string[] = [];
   for (let i = 0; i < pageCount; i++) {
     await evalPage(tabId, "window.scrollTo(0," + i * viewH + ")").catch(() => {});
     await sleep(gap);
     const shot = await captureScreenshot(tabId, format);
     if (shot.base64) tiles.push(shot.base64);
-    if (shot.meta.possiblyStale) staleTiles += 1;
+    if (shot.meta.possiblyStale) {
+      staleTiles += 1;
+      const reason = shot.meta.reason ?? "possibly-stale";
+      if (!staleReasons.includes(reason)) staleReasons.push(reason);
+    }
   }
   if (!tiles.length) throw new Error("滚动截图失败：没有截到任何一屏");
   const stitched = await stitchTiles(tiles);
@@ -133,10 +245,13 @@ export async function scrollCaptureScreenshot(
     width: stitched.width,
     height: stitched.height,
     pageCount,
-    /** 有任一屏走了降级快照路径时为 true，调用方不得把它当作实时画面。 */
-    possiblyStale: staleTiles > 0,
     viewH,
     docH,
+    possiblyStale: staleTiles > 0,
+    staleTiles,
+    freshTiles: tiles.length - staleTiles,
+    staleReasons,
+    durationMs: Date.now() - started,
   };
 }
 

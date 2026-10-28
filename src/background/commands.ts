@@ -5,7 +5,7 @@ import { loadState, clearAllSpaces, mutateState, patchSpace } from "./state";
 import { drainEvents } from "./events";
 import * as sp from "./spaces";
 import { commandClientId } from "./spaces";
-import { acquireForegroundLease } from "./foreground-lease";
+import { acquireForegroundLease, deleteForegroundLeasesFor } from "./foreground-lease";
 import { resolveTargetTab } from "./tab-resolver";
 import { getL0Snapshot, readTextFromTab } from "./content-bridge";
 import { captureScreenshot, scrollCaptureScreenshot, ensureAttach } from "./cdp";
@@ -63,12 +63,20 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     return { tabId, text };
   },
   // 截图不改变窗口可见状态/焦点/活动标签；元数据里带上耗时、取帧路径与新鲜度，
-  // 让调用方自己决定能不能把这张图当作实时画面。
+  // 让调用方自己决定能不能把这张图当作实时画面。possiblyStale/reason 同时放在顶层，
+  // 避免上层 API 只看顶层字段时把降级帧误当新鲜帧。
   screenshot: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
     const format = ((cmd.args ?? {}) as { format?: string }).format ?? "png";
     const shot = await captureScreenshot(tabId, format);
-    return { tabId, format, base64: shot.base64, screenshot: shot.meta };
+    return {
+      tabId,
+      format,
+      base64: shot.base64,
+      screenshot: shot.meta,
+      possiblyStale: shot.meta.possiblyStale,
+      ...(shot.meta.reason ? { reason: shot.meta.reason } : {}),
+    };
   },
   scroll_screenshot: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
@@ -211,10 +219,11 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       if (space.windowId !== undefined) await chrome.windows.remove(space.windowId).catch(() => {});
       await patchSpace(space.spaceId, { ownership: "inactive", windowId: undefined, tabId: undefined, attached: false });
     }
-    // 模板运行权=前台租约：只有自己持有时取消运行代际，才不会误伤正在跑模板的其他 Agent。
-    if (state.foregroundLease?.ownerClientId === clientId) tpl.cancelTemplateRuns();
+    // 取消代际按 Agent 隔离：只取消该 Agent 自己的模板运行，不误伤其它 Agent 并行的模板。
+    tpl.cancelTemplateRuns(clientId);
     await mutateState((s) => {
-      if (s.foregroundLease?.ownerClientId === clientId) delete s.foregroundLease;
+      // 租约按 key 持有（space / global），只删除属于该 Agent 的记录。
+      deleteForegroundLeasesFor(s, clientId);
       if (s.activeSpaceIds?.[clientId]) delete s.activeSpaceIds[clientId];
       if (s.activeSpaceId && ownSpaceIds.has(s.activeSpaceId)) delete s.activeSpaceId;
     });
@@ -429,7 +438,7 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "- **发送验证**：`press` 返回焦点元素与输入框长度前后状态（valueCleared）；AI 模板内置输入框清空检查，输入框未清空=消息未发出。",
     "- `set_humanize`、L1/AX、脚本型模板当前尚未实现，不应调用。",
     "- **页面已变**：任何动作前若快照过期，返回 `page_updated`，重拍再动，避免盲操作。",
-    "- **并发保护**：需要前台、截图或输入的命令由插件侧全局前台租约串行化；模板的全部子步骤继承同一租约。异常中断后租约会自动过期。",
+    "- **并发保护**：窗口级租约按目标（Task Space）加锁——同一空间的两个流程互斥、不会交错破坏状态；不同空间可真实并行。只有 `ensure_visible` / 显式 `focus` 的 `open_space`/`open_tab`/`switch_tab` 这类真正改变前台窗口的操作才全进程串行。`run_template` 整段按 space 持有租约，内部子步骤继承；截图/点击/求值等后台命令不取前台租约。",
     "",
     "## 7. 本机信息",
     "",
@@ -450,7 +459,7 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "- **权限 / 调试横幅**: 只有用 `L1` 动作时标签页才出现「正在调试此浏览器」横幅, 这是 debugger API 固有, 纯 `L0` 观测无横幅。",
     "- **`SPACE_NOT_OWNED` / `TAB_OUTSIDE_SPACE`**：不要绕过；选择自己已有的 Space，或用 `open_space` 创建新空间。",
     "- **`SPACE_USER_IN_CONTROL`**：用户已经人工接管，必须等待用户明确允许后再调用 `claim_space`。",
-    "- **`FOREGROUND_BUSY`**：另一 Agent 正在进行可见浏览器操作，稍后重试，不要并发开页。",
+    "- **`FOREGROUND_BUSY`**：同一 Task Space 已有流程在运行（或另一个 Agent 正在切换前台窗口），稍后重试；不同 Task Space 不受影响。",
   ].join("\n");
 }
 

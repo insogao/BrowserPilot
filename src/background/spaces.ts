@@ -42,6 +42,16 @@ function findSpace(spaces: Record<string, SpaceState>, value: string): SpaceStat
   return spaces[value] ?? Object.values(spaces).find((space) => space.name === value);
 }
 
+/** 只读解析 space 选择器（spaceId 或 name），供租约 key 归一化复用；校验仍由各命令自己完成。 */
+export function resolveSpaceSelector(
+  spaces: Record<string, SpaceState>,
+  value: string,
+): SpaceState | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return findSpace(spaces, trimmed);
+}
+
 function assertOwnership(space: SpaceState, clientId: string, allowUser = false): void {
   if (space.ownership === "inactive") {
     throw new TaskSpaceError("SPACE_INACTIVE", "Task Space 已结束: " + space.spaceId);

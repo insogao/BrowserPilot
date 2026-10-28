@@ -23,10 +23,26 @@ export interface SpaceState {
   eventQueueTail: number;
 }
 
+/** 一条前台/目标租约。key 决定作用域：
+ *  - `global`：真正会改变“哪个窗口在前台”的呈现操作，全进程互斥；
+ *  - `space:<spaceId>`：只影响某个 Task Space（= 一个窗口）的操作，按目标互斥，不同 space 并行。
+ *  所有权仍复用 SpaceState 的 ownerClientId 语义，不引入第二套 ownership。 */
+export interface ForegroundLeaseRecord {
+  token: string;
+  /** `global` 或 `space:<spaceId>`。 */
+  key: string;
+  scope: "global" | "space";
+  ownerClientId: string;
+  spaceId?: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
 export interface GlobalState {
   spaces: Record<string, SpaceState>;
   activeSpaceId?: string;
   activeSpaceIds?: Record<string, string>;
+  /** 旧版单条进程级租约（v1）。只读兼容：新代码会把未过期记录迁移成 global keyed 租约。 */
   foregroundLease?: {
     token: string;
     ownerClientId: string;
@@ -34,6 +50,8 @@ export interface GlobalState {
     startedAt: number;
     expiresAt: number;
   };
+  /** 多 Agent keyed 租约：global（窗口呈现）+ 每 space 一条。 */
+  foregroundLeases?: Record<string, ForegroundLeaseRecord>;
   hostPort?: number;
   hostToken?: string;
   externalClients?: number;
@@ -122,6 +140,7 @@ export async function clearAllSpaces(): Promise<void> {
     s.activeSpaceIds = {};
     delete s.activeSpaceId;
     delete s.foregroundLease;
+    s.foregroundLeases = {};
     delete s.humanTakeoverTabIds;
   });
 }

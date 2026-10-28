@@ -906,9 +906,38 @@ export async function exportTemplate(cmd: Command): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 let runner: ((cmd: Command) => Promise<unknown>) | null = null;
-let runGeneration = 0;
-export function cancelTemplateRuns(): void {
-  runGeneration++;
+
+// 取消代际按 Agent 隔离：并发模型下，一个 Agent 的 stop 绝不能取消其它 Agent 正在
+// 不同 Task Space 并行运行的模板。无参调用 = 用户级全局取消（popup stop）。
+let globalRunGeneration = 0;
+const clientRunGenerations = new Map<string, number>();
+
+function runClientKey(cmd: Command): string {
+  return cmd._clientId?.trim() || "browserpilot-internal";
+}
+
+interface RunGeneration {
+  global: number;
+  client: number;
+}
+
+function currentRunGeneration(clientKey: string): RunGeneration {
+  return { global: globalRunGeneration, client: clientRunGenerations.get(clientKey) ?? 0 };
+}
+
+function isRunCancelled(generation: RunGeneration, clientKey: string): boolean {
+  return generation.global !== globalRunGeneration
+    || generation.client !== (clientRunGenerations.get(clientKey) ?? 0);
+}
+
+/** 不带 clientId = 全局取消；带 clientId = 只取消该 Agent 自己的模板运行。 */
+export function cancelTemplateRuns(clientId?: string): void {
+  if (!clientId) {
+    globalRunGeneration++;
+    return;
+  }
+  const key = clientId.trim() || "browserpilot-internal";
+  clientRunGenerations.set(key, (clientRunGenerations.get(key) ?? 0) + 1);
 }
 /** 由 commands.ts 在模块加载时注入 dispatch，避免循环依赖（templates.ts 不 import commands.ts）。 */
 export function setCommandRunner(fn: (cmd: Command) => Promise<unknown>): void {
@@ -1002,7 +1031,8 @@ async function buildFailback(
 }
 
 export async function runTemplate(cmd: Command): Promise<unknown> {
-  const generation = runGeneration;
+  const clientKey = runClientKey(cmd);
+  const generation = currentRunGeneration(clientKey);
   const args = (cmd.args ?? {}) as {
     id?: string;
     params?: Record<string, unknown>;
@@ -1041,7 +1071,7 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
 
   let lastResult: unknown = undefined;
   for (let i = 0; i < steps.length; i++) {
-    if (generation !== runGeneration) throw new Error("template_cancelled");
+    if (isRunCancelled(generation, clientKey)) throw new Error("template_cancelled");
     const step = steps[i];
     if (step.skipWhenParam && params[step.skipWhenParam]) continue;
 
@@ -1138,7 +1168,7 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     };
     try {
       lastResult = await runStepWithRetry(step, stepCmd);
-      if (generation !== runGeneration) throw new Error("template_cancelled");
+      if (isRunCancelled(generation, clientKey)) throw new Error("template_cancelled");
     } catch (e) {
       const fbTab = currentTab ?? baseTab ?? (typeof params.tabId === "number" ? Number(params.tabId) : undefined);
       throw await buildFailback(tpl, step, e, fbTab);

@@ -19,6 +19,7 @@
     "test:profile": "node native-host/test-profile.mjs",
     "test:register": "node scripts/test-register-host-mac.mjs",
     "test:core": "node scripts/test-core.mjs",
+    "test:concurrency:live": "node scripts/test-concurrency-live.mjs",
     "test:live": "node native-host/test-live.mjs",
     "smoke:template": "node scripts/smoke-template.mjs",
     "browser:lease": "node scripts/browser-lease.mjs",
