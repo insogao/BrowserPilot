@@ -3,6 +3,26 @@
 import type { ProfileInfo } from "../shared/types";
 import type { HostCapabilities } from "./capabilities";
 
+/** 一次性输入 grant：ASSIST 模式下放行 AI 输入的唯一凭据。
+ *  - actions：可放行的输入命令次数（每条命令消耗 1 次，不是每条 CDP 事件）；
+ *  - expiresAt：绝对到期时间；用尽/过期/ownership 变更即清；
+ *  - token：随机串，状态里保存完整值，对外只返回截断摘要。 */
+export interface AssistGrant {
+  token: string;
+  actions: number;
+  expiresAt: number;
+}
+
+/** ASSIST 租约：只是 `ownership==="agent"` 时的从属标记，**不是**新的 ownership 取值。
+ *  ownership 一变（handoff/claim/complete/close/窗口消失）必须由 patchSpace 一并清除。 */
+export interface AssistLease {
+  since: number;
+  reason?: string;
+  tabId?: number;
+  /** 只允许这一次输入：grant 用完即清。 */
+  grant?: AssistGrant;
+}
+
 export interface SpaceState {
   spaceId: string;
   name?: string;
@@ -10,6 +30,9 @@ export interface SpaceState {
   tabId?: number;
   ownerClientId?: string;
   ownership?: "agent" | "user" | "inactive";
+  /** ASSIST 派生视图的唯一来源：ownership 仍为 "agent"，人类临时在场。
+   *  输入权模式由 input-ownership.ts 的 inputModeForSpace() 派生，不落第二份状态。 */
+  assist?: AssistLease;
   /** true = 创建时即为后台空间：窗口可见（normal）但不抢焦点、不激活到最前；窗口内标签保持 active 以正常渲染。
    *  前台空间（显式 focus/保持可见）为 undefined。 */
   background?: boolean;
@@ -107,6 +130,31 @@ export async function getSpace(id: string): Promise<SpaceState | undefined> {
   return s.spaces[id];
 }
 
+/** ownership 写入的同步监听器。
+ *  用途仅限「作废与 ownership 绑定的临时态」（例如 input-ownership 里待触发的 human_presence
+ *  去抖定时器）。**监听器必须是同步的、不得调用 mutateState**，否则会在 mutation 队列里自锁。 */
+export type OwnershipWriteListener = (
+  spaceId: string,
+  ownership: SpaceState["ownership"] | undefined,
+) => void;
+
+const ownershipListeners = new Set<OwnershipWriteListener>();
+
+export function onOwnershipChanged(listener: OwnershipWriteListener): () => void {
+  ownershipListeners.add(listener);
+  return () => ownershipListeners.delete(listener);
+}
+
+function notifyOwnershipWritten(spaceId: string, ownership: SpaceState["ownership"] | undefined): void {
+  for (const listener of ownershipListeners) {
+    try {
+      listener(spaceId, ownership);
+    } catch {
+      /* 监听器失败不得影响状态写入 */
+    }
+  }
+}
+
 export async function patchSpace(id: string, p: Partial<SpaceState>): Promise<SpaceState> {
   let result!: SpaceState;
   await mutateState((s) => {
@@ -118,8 +166,18 @@ export async function patchSpace(id: string, p: Partial<SpaceState>): Promise<Sp
       eventQueueTail: 0,
     };
     result = { ...cur, ...p, updatedAt: Date.now() };
+    // 单一真源不变量：`assist` 只可能存在于 ownership==="agent"。
+    //  - ownership 被显式写入（handoff/claim/complete/close/窗口消失）→ 清空辅助租约；
+    //  - 任何非 agent 状态 → 清空（防止旧数据/并发写入留下脏状态）。
+    // 唯一例外：同一次 patch 显式给出了新的 assist（目前没有调用方这样做）。
+    if (result.ownership !== "agent") {
+      delete result.assist;
+    } else if (p.ownership !== undefined && p.assist === undefined) {
+      delete result.assist;
+    }
     s.spaces[id] = result;
   });
+  if (p.ownership !== undefined) notifyOwnershipWritten(id, p.ownership);
   return result;
 }
 
