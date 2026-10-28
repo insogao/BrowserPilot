@@ -380,7 +380,49 @@ export class CursorCaptureError extends Error {
 
 type HideToken = "content" | "dom" | "absent";
 
-async function hideForCapture(tabId: number): Promise<HideToken> {
+interface CaptureHold {
+  depth: number;
+  /** 第一次隐藏的共享 promise：并发截图都等它，绝不重复发隐藏消息。 */
+  hide: Promise<HideToken>;
+  /** 隐藏成功后解析出的具体方式，最后一个持有者据此恢复。 */
+  resolved?: HideToken;
+}
+
+// 同一 tab 可能同时有多个截图请求（多 Agent、或 scroll + viewport 重叠）。只隐藏一次、
+// 最后一个结束时才恢复；否则先结束的截图会把光标恢复出来，后结束的截图就会拍进光标。
+const captureHolds = new Map<number, CaptureHold>();
+
+async function hideForCapture(tabId: number): Promise<void> {
+  const existing = captureHolds.get(tabId);
+  if (existing) {
+    existing.depth += 1;
+    try {
+      await existing.hide;
+    } catch (e) {
+      existing.depth -= 1;
+      if (existing.depth <= 0) captureHolds.delete(tabId);
+      throw e;
+    }
+    return;
+  }
+
+  const hide = hideForCaptureOnce(tabId);
+  const hold: CaptureHold = { depth: 1, hide };
+  captureHolds.set(tabId, hold);
+  // 记录解析结果，供最后一个（可能是 shared）持有者恢复；失败由各自的 await 处理。
+  hide.then(
+    (token) => { hold.resolved = token; },
+    () => {},
+  );
+  try {
+    await hide;
+  } catch (e) {
+    captureHolds.delete(tabId);
+    throw e;
+  }
+}
+
+async function hideForCaptureOnce(tabId: number): Promise<HideToken> {
   const reasons: string[] = [];
   try {
     await callContent(tabId, { kind: CURSOR_MSG.captureHidden, hidden: true }, CAPTURE_CONTENT_TIMEOUT_MS);
@@ -410,7 +452,18 @@ async function hideForCapture(tabId: number): Promise<HideToken> {
   throw new CursorCaptureError("无法隐藏虚拟光标，拒绝返回可能包含光标的截图（" + reasons.join("; ") + "）");
 }
 
-async function restoreAfterCapture(tabId: number, token: HideToken): Promise<void> {
+async function restoreAfterCapture(tabId: number): Promise<void> {
+  const hold = captureHolds.get(tabId);
+  if (!hold) return;
+  hold.depth -= 1;
+  if (hold.depth > 0) return;
+  captureHolds.delete(tabId);
+  const token = hold.resolved;
+  if (!token || token === "absent") return;
+  await restoreAfterCaptureOnce(tabId, token);
+}
+
+async function restoreAfterCaptureOnce(tabId: number, token: HideToken): Promise<void> {
   const st = states.get(tabId);
   if (st) st.hiddenForCapture = false;
   try {
@@ -434,11 +487,11 @@ export async function withCursorHiddenForCapture<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   if (includeCursor === true) return fn();
-  const token = await hideForCapture(tabId);
+  await hideForCapture(tabId);
   try {
     return await fn();
   } finally {
-    await restoreAfterCapture(tabId, token);
+    await restoreAfterCapture(tabId);
   }
 }
 

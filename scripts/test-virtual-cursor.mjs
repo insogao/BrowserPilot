@@ -52,6 +52,8 @@ const transport = {
   resolveFails: false,
   resolve: { x: 800, y: 600 },
   captureCalls: 0,
+  captureDeferred: false,
+  captureWaiters: [],
 };
 function wireState(msg) {
   const hidden = msg.kind === "cursor_capture_hidden" ? msg.hidden === true : false;
@@ -95,6 +97,9 @@ globalThis.__vcTest = {
   captureScreenshot: async (tabId, format) => {
     transport.captureCalls += 1;
     transport.log.push({ op: "captureScreenshot", tabId, format });
+    if (transport.captureDeferred) {
+      await new Promise((resolve) => transport.captureWaiters.push(resolve));
+    }
     return { base64: "AAAA", meta: { fromSurface: true, durationMs: 1, possiblyStale: false } };
   },
 };
@@ -139,6 +144,9 @@ const reset = () => {
   transport.evalReturn = "hidden";
   transport.resolveFails = false;
   transport.captureCalls = 0;
+  transport.captureDeferred = false;
+  for (const release of transport.captureWaiters) release();
+  transport.captureWaiters = [];
   vc.__resetCursorStateForTests();
 };
 const ops = () => transport.log.map((e) => e.op);
@@ -237,6 +245,33 @@ const ops = () => transport.log.map((e) => e.op);
   assert.equal(shot.base64, "AAAA");
   assert.equal((await vc.getCursorState(1, { verify: false })).hiddenForCapture, false, "截图后没有恢复");
   console.log("PASS cursor: 默认截图隐藏光标、截完恢复，且报告 cursorIncluded=false");
+}
+
+// 2.4b 同一 tab 两个截图重叠：只隐藏一次，最后一个结束才恢复
+{
+  reset();
+  await vc.showCursor(1);
+  transport.log.length = 0;
+  transport.captureDeferred = true;
+  const p1 = vc.captureScreenshotWithCursorPolicy(1, "png");
+  const p2 = vc.captureScreenshotWithCursorPolicy(1, "png");
+  await new Promise((r) => setTimeout(r, 0));
+  const hides = transport.log.filter((e) => e.op === "cursor_capture_hidden" && e.msg.hidden === true);
+  assert.equal(hides.length, 1, "重叠截图重复发送了隐藏消息: " + hides.length);
+  assert.equal(transport.captureWaiters.length, 2, "两个截图没有同时进入等待");
+  transport.captureWaiters.shift()();
+  await p1;
+  const restoresAfterFirst = transport.log.filter(
+    (e) => e.op === "cursor_capture_hidden" && e.msg.hidden === false,
+  );
+  assert.equal(restoresAfterFirst.length, 0, "第一个截图结束后过早恢复了光标，第二个截图会拍到它");
+  transport.captureWaiters.shift()();
+  await p2;
+  const restoresAfterSecond = transport.log.filter(
+    (e) => e.op === "cursor_capture_hidden" && e.msg.hidden === false,
+  );
+  assert.equal(restoresAfterSecond.length, 1, "最后一个截图结束后没有恢复光标");
+  console.log("PASS cursor: 重叠截图只隐藏一次，最后一个结束才恢复");
 }
 
 // 2.5 includeCursor=true：不隐藏、报告 cursorIncluded=true
