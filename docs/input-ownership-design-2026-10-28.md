@@ -432,3 +432,473 @@ chrome.browserCli.inputOwnership.onOwnershipChanged(cb);
 `RenderWidgetHostImpl` 汇合点仲裁；最后接 `human_presence` 事件与审计日志。每一步都要有
 “关闭 Feature 后行为与今天完全一致”的回归证据。
 
+---
+
+## 12. P3 实施细节（扩展侧已落地，2026-10-28）
+
+状态：**扩展侧已实现并通过离线单测 + 真实 headless Chromium 集成测试；本轮仍不改
+`D:\c\src`，未生成任何 Chromium patch 文件。** 内核侧方案见 §13，等待主代理审核后实施。
+
+### 12.1 文件与职责
+
+| 文件 | 角色 |
+|---|---|
+| `src/background/state.ts` | `SpaceState.assist?: AssistLease`（唯一新增字段）；`patchSpace()` 在单一收口处保证「assist 只存在于 ownership==="agent"」；`onOwnershipChanged()` 同步回调只用于作废待触发的 presence 定时器 |
+| `src/background/input-ownership.ts`（新） | 模式派生 `inputModeForSpace()`、统一守卫 `guardInputCommand()`、`enterAssist()` / `exitAssist()` / `noteHumanPresence()`、grant 生命周期、`grant_input` / `input_status` / `human_presence` 三个命令、审计事件 |
+| `src/background/commands.ts` | `dispatch()` 在 handler 之前调用守卫；保留既有 `hasTakeover()` 检查（两者叠加）；新增三条命令；guide 增补 |
+| `src/shared/types.ts` | `CommandName` 增加 `grant_input` / `input_status` / `human_presence` |
+| `scripts/test-input-ownership.mjs`（新） | 离线单测（也由 `test-core.mjs` 末尾 import） |
+| `scripts/test-input-ownership-browser.mjs`（新） | 真实 headless Chromium 集成测试（真实 commands/actions/cdp + 真实 CDP 注入） |
+
+**未修改**（按边界要求）：`cdp.ts`、`screenshot-policy.ts`、`virtual-cursor.ts`、`mask.ts`、
+`actions.ts`、`debugger-bridge.ts`、`content/*`。守卫放在 `dispatch()`，不需要改动
+`debugger-bridge`；若未来要把守卫下沉到 `sendCommand()`，精确插入点是
+`debugger-bridge.ts::sendCommand()` 在 `chrome.debugger.sendCommand` 之前按 method 白名单
+（`Input.*`）调用 `guardInputCommand`，但当前方案不需要。
+
+### 12.2 单一状态机与不变量
+
+```ts
+// state.ts —— 唯一增量
+export interface SpaceState {
+  ownership?: "agent" | "user" | "inactive"; // 取值集合不变
+  assist?: {
+    since: number;
+    reason?: string;
+    tabId?: number;
+    grant?: { token: string; actions: number; expiresAt: number };
+  };
+}
+```
+
+`patchSpace()` 的收口规则：
+
+1. `result.ownership !== "agent"` → `delete result.assist`（覆盖 handoff / complete / close /
+   窗口消失 / 旧数据）；
+2. 同一 patch 显式写了 `ownership`（即使值相同，例如 `claim_space` 对已在 `agent` 的
+   ASSIST 空间）→ 清空 assist；
+3. 只有「单独写 assist」的路径（`enterAssist` 直接 `mutateState`）能保留 assist。
+
+所有迁移仍然只走既有命令/函数：`handoff_space`、`claim_space`、`complete_space`、
+`close_space`、`handoffSpaceForTab`、`claimSpaceForTab`、`registerSpaceLifecycleHandlers`。
+本模块**没有任何写 ownership 的代码**（离线测试用源码守卫锁定）。tab 级 mask/takeover
+只影响输入投递，从不写 ownership。
+
+去抖定时器的失效：`onOwnershipChanged()` 在 `patchSpace` 写 ownership 后同步触发，
+`input-ownership.ts` 注册的回调只做 `cancelPendingPresence(spaceId)`。这保证
+「`claim_space` 之后迟到的 human_presence 不会把空间重新拉回 ASSIST」。
+
+### 12.3 模式派生（纯函数，不落第二份状态）
+
+| `ownership` | `assist` | `inputModeForSpace()` | AI 输入 |
+|---|---|---|---|
+| `"user"` | 任意（不变量保证不存在） | `"human"` | 拒绝 |
+| `"agent"` | 不存在 | `"ai"` | 放行 |
+| `"agent"` | 存在（含/不含 grant） | `"assist"` | 无 grant 拒绝；有 grant 逐次消耗 |
+| `"inactive"` / `undefined` | — | `"human"`（fail closed） | 拒绝/交回既有 `SPACE_INACTIVE` 错误 |
+
+### 12.4 统一守卫
+
+`commands.ts::dispatch()` 顺序（**既有检查优先，新增守卫叠加**）：
+
+```
+try {
+  if (ACTION_NAMES.has(name) && hasTakeover()) { ...human_takeover_in_progress... }  // 原有
+  if (INPUT_COMMANDS.has(name)) await guardInputCommand(cmd);                        // 新增
+  return await KNOWN[name](cmd);
+}
+```
+
+`INPUT_COMMANDS`：`click`、`dblclick`、`hover`、`drag`、`wheel`、`down`、`up`、`press`、
+`type`、`fill`、`selectOption`、`check`、`uncheck`、`setChecked`、`js`、`tab_cdp_call`。
+`js` / `tab_cdp_call` 纳入的理由与既有 `ACTION_NAMES` 一致：它们能执行 `el.click()` 或直接
+`Input.dispatch*`，不纳入等于给 HUMAN/ASSIST 留旁路。`download_image` / `download_resource`
+只读页面/下载，不注入输入，继续只受 mask/takeover 约束。
+
+守卫的错误语义：
+
+| 模式 | 行为 | 错误码 |
+|---|---|---|
+| HUMAN | fail fast，不 attach、不发任何 CDP | `INPUT_HUMAN_OWNED`（`detail.reason = "ownership-user"`） |
+| ASSIST 无 grant | fail fast | `INPUT_ASSIST_REQUIRES_GRANT`（reason `no-grant` / `no-assist`） |
+| ASSIST grant 过期 | 清 grant 后拒绝 | `INPUT_ASSIST_REQUIRES_GRANT`（reason `expired`） |
+| ASSIST grant 用尽 | 清 grant 后拒绝 | `INPUT_ASSIST_REQUIRES_GRANT`（reason `exhausted`） |
+| ASSIST grant 可用 | 原子消耗 1 次后放行 | — |
+| AI | 放行 | — |
+| space 不存在 / inactive | 返回 `undefined`，交回既有路径给出 `SPACE_*` | — |
+
+守卫的 space 解析是**只读**的（不调用 `ensureCommandSpace`，避免它先把 HUMAN 报成
+`SPACE_USER_IN_CONTROL`）：显式 space 选择器（`cmd.space` / `args.spaceId` / `args.space` /
+`args.name`）> `args.tabId` 所在窗口 > 调用方 `activeSpaceIds[clientId]`。不回落全局
+`activeSpaceId`，避免把别的 Agent 的空间误当目标。
+
+归属校验先于模式判定：非 owner 的 Agent 显式指定别人的 space 时直接 `SPACE_NOT_OWNED`
+（与 `ensureCommandSpace` 的错误优先级一致），**不会消耗 owner 的 grant**，也不会泄露该
+space 的输入模式（防跨 Agent DoS/探测）。
+
+### 12.5 grant 生命周期
+
+- 参数：`actions` 必须是正整数（拒绝 `0` / 负数 / 小数 / 非 number），上限 `10000`；
+  `ttlMs` 正整数，默认 `60000`，上限 `600000`。
+- token：`crypto.randomUUID()` 存完整值；对外（返回值/审计）只给 `前 8 位 + "…"`。
+- 消耗：`mutateState` 内原子读改写，一条输入命令消耗 1 次（不是一条 CDP 事件）；
+  并发命令不会重复使用同一个 grant。
+- 用尽 / 过期 → 删除 `assist.grant`，保留 ASSIST 租约（人类仍在场，AI 只是需要重新申请）。
+- ownership 变更 → `patchSpace` 清空整个 `assist`（含 grant）。
+- 新的 `human_presence` / `enterAssist` → 清掉未用完的 grant（人类优先，AI 必须重新申请）。
+- `grant_input` 只在 ASSIST 下有意义：HUMAN → `INPUT_HUMAN_OWNED`（grant 不能绕过
+  ownership，必须先 `claim_space`）；AI → `INPUT_GRANT_NOT_IN_ASSIST`。仅 space owner 或
+  用户入口（`browserpilot-internal`）可发；非 owner → `SPACE_NOT_OWNED`。
+
+### 12.6 `human_presence`（内核事件/测试入口）
+
+- 授权：`_clientId === "browserpilot-internal"`（popup/用户入口）或显式 `args.internal === true`
+  （内核事件桥/测试）。非 owner 的 Agent 仍被 `SPACE_NOT_OWNED` 拦住，所以任何 Agent 最多
+  只能让自己的空间进入 ASSIST，不能替别人接管。
+- 目标解析：用户入口没有 `activeSpaceIds`，因此必须显式给 `space`/`spaceId` 或 `tabId`
+  （内核事件天然带 `tabId`）；否则返回 `SPACE_NOT_FOUND`。
+- 默认 trailing debounce 500ms（`args.debounceMs` 可覆盖，0–5000ms）；命令立即返回
+  `{scheduled:true, applyAt, debounceMs}`，到点后 `enterAssist()`。
+- `args.immediate === true` 立即进入（测试/未来 `preempt` 策略）。
+- HUMAN 空间是无操作（`mode:"human"`, `changed:false`, `reason:"already-human"`），
+  **永不改 ownership**。
+
+### 12.7 新命令协议
+
+```jsonc
+// grant_input  {space?|spaceId?, tabId?, actions, ttlMs?}
+{"type":"command","name":"grant_input","args":{"actions":1,"ttlMs":5000},"requestId":"1"}
+// → data
+{"spaceId":"space-test","mode":"assist","tabId":1,
+ "grant":{"token":"3e4bc7a4…","actions":1,"expiresAt":1793182927798}}
+
+// input_status  {space?|spaceId?, tabId?}
+// → data
+{"spaceId":"space-test","windowId":1,"tabId":1,"mode":"assist","ownership":"agent",
+ "ownerClientId":"agent:tester","assistSince":1793182927000,"assistReason":"kernel:mouse",
+ "assistExpiresAt":1793182927798,"grantActionsRemaining":1,
+ "grant":{"token":"3e4bc7a4…","actions":1,"expiresAt":1793182927798,"expiresInMs":4821}}
+
+// human_presence  {space?|spaceId?, tabId?, source?, immediate?, debounceMs?, internal?}
+// → data（默认去抖）
+{"spaceId":"space-test","tabId":1,"mode":"ai","ownership":"agent",
+ "changed":false,"scheduled":true,"source":"kernel:mouse","debounceMs":500,"applyAt":1793182927500}
+```
+
+错误码通过既有 native-bridge 路径透出：`errorCode` 字段与 `error` 文本同时存在
+（`InputOwnershipError.code`；`TaskSpaceError.code` 保持不变）。
+
+### 12.8 审计事件（`drainEvents` 可见）
+
+| 事件 | 何时 | 关键字段 |
+|---|---|---|
+| `input_command_rejected` | HUMAN / ASSIST 无 grant / 过期 / 用尽 | `spaceId, tabId, clientId, command, mode, code, reason, at` |
+| `input_grant_consumed` | grant 被消耗一次 | `spaceId, tabId, clientId, command, remaining, expiresAt, token(截断), at` |
+| `input_grant_issued` | `grant_input` 成功 | `spaceId, tabId, clientId, actions, ttlMs, expiresAt, token(截断), at` |
+| `input_assist_entered` | 进入 ASSIST | `spaceId, tabId, source, reason, at` |
+| `input_assist_exited` | `exitAssist` | `spaceId, reason, at` |
+| `input_presence_scheduled` | 收到内核/测试 presence | `spaceId, tabId, clientId, source, applyAt, debounceMs, at` |
+| `input_presence_ignored` | HUMAN 空间收到 presence | `spaceId, tabId, source, reason:"already-human", at` |
+
+事件只写 `events.ts` 的缓冲（`drainEvents`），不额外推 host，避免与 native 连接生命周期耦合；
+拒绝路径同时抛错，调用方无需轮询审计。
+
+### 12.9 测试与复现
+
+```bash
+npm run typecheck
+npm run build
+npm run test:core                 # 末尾 import 了 test-input-ownership.mjs
+npm run test:input-ownership      # 离线单测（独立脚本）
+npm run test:input-ownership:browser
+```
+
+真实 headless 运行隔离：`--headless=new --disable-gpu --in-process-gpu` + `mktemp` 独立
+`--user-data-dir`，不使用 `--no-sandbox`，不触碰用户真实 profile/Chrome。
+
+集成测试逐次记录页面状态（节选，原始输出见测试日志）：
+
+| 步骤 | `input_status.mode` | 命令结果 | 页面 `__clicks` / DOM `#count` |
+|---|---|---|---|
+| 初始 | `ai` | — | 0 / "0" |
+| AI click | `ai` | 成功 | **1 / "1"**（受信 click） |
+| `handoff_space` 后 click | `human` | `INPUT_HUMAN_OWNED` | **1 / "1"**（未点击） |
+| HUMAN 下 js | `human` | `INPUT_HUMAN_OWNED` | `__jsRuns` 仍为 0 |
+| HUMAN 下 grant_input | `human` | `INPUT_HUMAN_OWNED` | — |
+| `claim_space` → `human_presence`（500ms 去抖） | `assist` | — | — |
+| ASSIST 无 grant click | `assist` | `INPUT_ASSIST_REQUIRES_GRANT` | **1 / "1"** |
+| `grant_input {actions:1}` 后第一次 click | `assist` | 成功 | **2 / "2"** |
+| 第二次 click | `assist` | `INPUT_ASSIST_REQUIRES_GRANT`（no-grant） | **2 / "2"** |
+| `grant_input {actions:2, ttlMs:120}` + 等待 400ms 后 click | `assist` | `INPUT_ASSIST_REQUIRES_GRANT`（expired） | **2 / "2"** |
+| `claim_space` 后 click | `ai` | 成功 | **3 / "3"** |
+
+审计事件计数（同一次运行）：`input_command_rejected=6`、`input_grant_consumed=1`、
+`input_grant_issued=2`。最终 `SpaceState`：`ownership:"agent"`、`assist` 不存在。
+
+### 12.10 已知限制（扩展侧）
+
+1. **grant 在命令执行前消耗**：因此「授权了但动作失败（元素不存在等）」也会消耗一次；
+   语义是「投递尝试次数」，不是「成功次数」。
+2. **ASSIST 没有自动到期**：只有 ownership 变更、`exitAssist` 或人类再次输入（刷新租约）
+   才会改变；这是设计 §4.3 的保守选择（不擅自把输入权还给 AI）。
+3. **SW 重启**：`assist` 与 grant 在 `storage.session` 里，会随 SW 重启恢复；内存中的
+   去抖定时器会丢失，需要内核/调用方重发 presence（内核方案里由 30s 心跳兜底）。
+4. **`js` / `tab_cdp_call` 一律纳入**：即使只是 `Runtime.evaluate` 读数据，也会在 HUMAN/ASSIST
+   被拒；这是 fail-closed 的代价，调用方应先 `input_status`。
+5. **扩展层挡不住第三方 CDP**：这正是 §13 内核侧第二条防线存在的原因。
+6. **人类真实输入检测尚未接入**：本轮 `human_presence` 只有测试/未来内核入口；没有真实
+   OS 输入探测（扩展没有该 API），必须等内核 patch。
+
+---
+
+## 13. 内核侧待审 patch 方案（本轮不实施，不改 `D:\c\src`）
+
+> 本节只描述方案与精确插入点，**不生成、不应用任何 Chromium patch 文件**。所有改动默认由
+> `base::Feature kInputOwnershipEnforcement` 关闭；关闭时行为与今天逐字节一致。
+> 行号基于当前基线 156.0.8067.0 源码（`content/browser/renderer_host/render_widget_host_impl.cc`
+> 的 `ForwardMouseEventWithLatencyInfo` :1676、`ForwardWheelEventWithLatencyInfo` :1743、
+> `ForwardKeyboardEventWithCommands` :1811、`IsIgnoringWebInputEvents` :3883），实施时需按当时
+> 版本复核。
+
+### 13.1 新增模块与公共接口
+
+| # | 文件 | 内容 |
+|---|---|---|
+| K1 | `content/public/browser/input_ownership.h`（新） | 面向 chrome 层的公共门面：`InputOwnershipMode {kAi,kAssist,kHuman}`、`InputOwnershipSnapshot {mode, version}`、`struct InputOwnershipController` 的静态入口（见下）。只前置声明 `WebContents` / `RenderWidgetHost` / `blink::WebInputEvent`，**不 include** `web_contents.h`，因此 `renderer_host/DEPS` 允许其被 RWHI 引用 |
+| K2 | `content/browser/input_ownership/input_ownership_controller.{h,cc}`（新） | 每个 `WebContents` 一个 controller（`WebContentsUserData<InputOwnershipController>`）；保存 `{mode, version, last_update, tab_policies, debugger_grant, human_presence_debounce}`；提供 `Decide()` / `ConsumeDebuggerGrant()` / `NoteHumanPresence()`；**只读快照 + 单调 version** |
+| K3 | `content/browser/renderer_host/render_widget_host_delegate.h` | 新增虚函数 `virtual InputOwnershipController* GetInputOwnershipController() { return nullptr; }`（默认 nullptr = 不启用） |
+| K4 | `content/browser/web_contents/web_contents_impl.{h,cc}` | 实现 `GetInputOwnershipController()` 返回本 WebContents 的 controller；在 WebContents 构造/销毁时创建/释放（覆盖 OOPIF、导航、窗口关闭） |
+| K5 | `content/browser/renderer_host/render_widget_host_impl.cc` | 三个 `Forward*` 汇合点调用 `Decide()`（见 §13.3） |
+| K6 | `content/browser/devtools/protocol/input_handler.cc` | `Input.insertText` 显式走同一 controller（它绕过 `ForwardKeyboardEvent`，见 §13.4）；`GetEventModifiers` / `GetMouseEventButton` 的 `kFromDebugger` 语义保持不变 |
+| K7 | `chrome/browser/extensions/api/browser_cli/browser_cli_input_ownership_api.{h,cc}` + `chrome/common/extensions/api/browser_cli.json` | 受信扩展 API：`browserCli.inputOwnership.setOwnership / setTabPolicy / getOwnership` 与 `onHumanPresence` 事件；继承现有 `BrowserCliGetCapabilitiesFunction` 的注册模式，额外校验扩展 ID + managed mode |
+
+公共门面（K1）形状：
+
+```cpp
+namespace content {
+
+class RenderWidgetHost;
+class WebContents;
+
+enum class InputOwnershipMode { kAi, kAssist, kHuman };
+
+struct InputOwnershipSnapshot {
+  InputOwnershipMode mode = InputOwnershipMode::kAssist;  // 未知 → ASSIST（fail closed）
+  uint64_t version = 0;
+  bool stale = true;  // 超过 30s 没收到 setOwnership
+};
+
+// 全部为静态入口；内部通过 WebContentsUserData 找到 controller。
+void SetInputOwnership(WebContents* contents,
+                       InputOwnershipMode mode,
+                       uint64_t version);          // version 必须严格递增
+InputOwnershipSnapshot GetInputOwnership(WebContents* contents);
+void GrantDebuggerInput(WebContents* contents, uint32_t actions,
+                        base::TimeDelta ttl);      // 仅受信扩展可调用
+void SetInputOwnershipTabPolicy(WebContents* contents, int tab_id,
+                                TabInputPolicy policy);  // P3 可选，先留空实现
+void SetHumanPresenceCallback(
+    base::RepeatingCallback<void(WebContents*, InputEventKind)> cb);
+
+}  // namespace content
+```
+
+### 13.2 controller 内部状态与不变量
+
+```cpp
+class InputOwnershipController {
+ public:
+  enum class EventKind { kMouse, kWheel, kKey, kText, kTouch };
+  enum class Decision { kDeliver, kDrop };
+
+  Decision Decide(const blink::WebInputEvent& event, EventKind kind,
+                  base::TimeTicks now);
+  bool ConsumeDebuggerGrant(EventKind kind, base::TimeTicks now);
+  void NoteHumanPresence(const blink::WebInputEvent& event);
+
+ private:
+  InputOwnershipMode mode_ = InputOwnershipMode::kAssist;
+  uint64_t version_ = 0;
+  base::TimeTicks last_extension_update_;
+  struct DebuggerGrant {
+    uint32_t remaining = 0;
+    base::TimeTicks expires_at;
+    base::TimeTicks gesture_open_until;   // 一次手势内不再重复扣减
+  } grant_;
+};
+```
+
+不变量：
+
+1. **人类输入永不丢弃**（除非 tab 级 `block-human`，P3 不接）：`!(mods & kFromDebugger)` →
+   `kDeliver` + `NoteHumanPresence()`（300ms 去抖）。
+2. `version_` 单调；`SetInputOwnership` 只接受更大的 version，重复/乱序幂等丢弃。
+3. `now - last_extension_update_ > 30s` → 视为 `kAssist`（AI 输入丢弃，人类始终可用）。
+4. controller 随 WebContents 销毁；不跨导航保存，不做全局单例。
+5. Feature 关闭 → `Decide()` 恒 `kDeliver`，`NoteHumanPresence()` 不触发，没有任何 IPC/事件。
+
+### 13.3 三个汇合点的精确插入位置
+
+**(A) `RenderWidgetHostImpl::ForwardMouseEventWithLatencyInfo`（:1676）** — 放在类型 CHECK 之后、
+`mouse_event_callbacks_` 循环之前（保证被丢弃的事件不会触发任何 observer/callback）：
+
+```cpp
+  CHECK_GE(mouse_event.GetType(), WebInputEvent::Type::kMouseTypeFirst);
+  CHECK_LE(mouse_event.GetType(), WebInputEvent::Type::kMouseTypeLast);
+
+  if (base::FeatureList::IsEnabled(features::kInputOwnershipEnforcement)) {
+    if (auto* controller = delegate_ ? delegate_->GetInputOwnershipController() : nullptr) {
+      if (controller->Decide(mouse_event, EventKind::kMouse, base::TimeTicks::Now()) ==
+          Decision::kDrop) {
+        return;
+      }
+    }
+  }
+
+  for (auto& mouse_event_callback : mouse_event_callbacks_) { ... }
+  if (IsIgnoringWebInputEvents(mouse_event)) return;
+```
+
+**(B) `ForwardWheelEventWithLatencyInfo`（:1743）** — 放在 `ScopedSafetyChecksExclusion` 之后、
+`IsIgnoringWebInputEvents` 之前：同上，`EventKind::kWheel`。
+
+**(C) `ForwardKeyboardEventWithCommands`（:1811）** — **必须放在浏览器 UI 预处理之后**，
+否则 Ctrl+L / Ctrl+T / Ctrl+W 会被页面输入权拦掉（设计 §4.1 不变量 4）：
+
+```cpp
+  // 既有：owner_delegate_->MayRenderWidgetForwardKeyboardEvent
+  // 既有：IsIgnoringWebInputEvents
+  // 既有：Escape 关闭 unbounded surface
+  // 既有：KeyPressListenersHandleEvent
+  // 既有：suppress_events_until_keydown_ 处理
+  // 既有：delegate_->PreHandleKeyboardEvent()  ← Ctrl+L/T/W/F5 在这里被浏览器 UI 处理并 return
+
+  // ↓ 新增：浏览器快捷键已经处理完，剩下的才是“要进页面”的键盘输入
+  if (base::FeatureList::IsEnabled(features::kInputOwnershipEnforcement)) {
+    if (auto* controller = delegate_ ? delegate_->GetInputOwnershipController() : nullptr) {
+      if (controller->Decide(key_event, EventKind::kKey, base::TimeTicks::Now()) ==
+          Decision::kDrop) {
+        // 丢掉 RawKeyDown 后，同一物理键的后续 Char/KeyUp 必须一起丢，
+        // 否则页面会看到“只抬起没按下”的残键。
+        if (key_event.GetType() == WebKeyboardEvent::Type::kRawKeyDown ||
+            key_event.GetType() == WebKeyboardEvent::Type::kKeyDown) {
+          suppress_events_until_keydown_ = true;
+        }
+        return;
+      }
+    }
+  }
+
+  // 既有：touch_emulator->HandleKeyboardEvent / SendKeyboardEvent
+```
+
+> 注意：`delegate_` 就是 `RenderWidgetHostDelegate*`（FrameTree 的 render_widget_delegate，
+> 即 `WebContentsImpl`），主帧与 local child root 都拿得到；`owner_delegate_`（RenderViewHostImpl）
+> 不用于该查询。
+
+### 13.4 `Input.insertText` 是必须显式补的第四条路径
+
+`actions.ts` 的 `type` / `fill` 走 `Input.insertText`，它在
+`content/browser/devtools/protocol/input_handler.cc::InputHandler::InsertText`（:1281）里直接
+`widget_host->GetWidgetInputHandler()->ImeCommitText(...)`，**不经过**
+`ForwardKeyboardEventWithCommands`。若只改三个 `Forward*`，`type`/`fill` 会绕过输入权。
+方案：在 `InputHandler::InsertText` 取到 `widget_host` 之后：
+
+```cpp
+  if (base::FeatureList::IsEnabled(features::kInputOwnershipEnforcement)) {
+    auto* controller = widget_host->delegate()
+        ? widget_host->delegate()->GetInputOwnershipController() : nullptr;
+    if (controller && !controller->ConsumeDebuggerGrant(EventKind::kText,
+                                                        base::TimeTicks::Now())) {
+      callback->sendFailure(Response::ServerError(
+          "InputOwnership: insertText rejected (grant required)"));
+      return;
+    }
+  }
+```
+
+`Input.dispatchTouchEvent` / `DispatchWebTouchEvent`（:1655）在 P3 暂不纳入（见 §13.10）。
+
+### 13.5 `kFromDebugger` 判定与 grant 粒度
+
+判定只有一处：`(event.GetModifiers() & blink::WebInputEvent::kFromDebugger) != 0`。
+`GetEventModifiers()`（:97）与 `GetMouseEventButton()`（:165）已经给所有 `Input.dispatch*`
+事件置位；`InputInjector::OnInputEventAck()`（:839）已经用同一位过滤 ack。**不新增 modifier 位**
+（§11 决定 4）。
+
+grant 计数按**输入手势**，而不是按单个 `WebInputEvent`（否则一次 click 的
+pressed+released、一次 press 的 keyDown+keyUp+char 会吃掉多次 grant）：
+
+| 手势 | 扣减时机 | 同一手势内免扣 |
+|---|---|---|
+| 鼠标 | `kMouseDown`（无按键的 `kMouseMove`/hover 每次扣 1） | 直到 `kMouseUp` 后 200ms 内的 move/up/click |
+| 滚轮 | 每个 `kMouseWheel` 扣 1 | — |
+| 键盘 | `RawKeyDown` / `KeyDown` 扣 1 | 同一物理键的 Char/KeyUp 直到下一个 RawKeyDown |
+| 文本 | 每次 `Input.insertText` 扣 1 | 300ms 内的连续 insertText 只扣一次（覆盖 `type` 逐字输入） |
+
+语义边界：内核 grant 是**第二道防线**，计数与扩展命令不是 1:1；权威的「每条命令一次」预算
+仍在扩展层（§12.5）。内核只需要保证「没有 grant 时绝不投递 AI 输入」。
+
+被丢弃事件的 DevTools 回调语义：事件在 `Forward*` 前直接 return，`InputInjector` 的
+`OnInputEvent` observer 不会收到事件，`input_queued_` 保持 false，注入器会立即
+`sendSuccess()`（既有逻辑）。也就是说第三方 CDP 会收到成功应答但页面没有输入——这是
+有意的 fail-closed；`insertText` 路径则显式返回 `ServerError`，便于第三方诊断。
+
+### 13.6 `human_presence` 上报
+
+复用既有 `RenderWidgetHost::InputEventObserver`（`content/public/browser/render_widget_host.h:250`），
+或在 `Decide()` 的人类分支里直接调用 `controller->NoteHumanPresence(event)`：
+
+1. 仅对 `!kFromDebugger` 事件调用；浏览器 UI 快捷键不会到 RWHI，因此不会误报。
+2. controller 内 300ms 去抖（鼠标 move 洪泛只保留最后一个），去抖后通过
+   `SetHumanPresenceCallback()` 注册的回调上报；chrome 层把它转成
+   `browserCli.inputOwnership.onHumanPresence({windowId, tabId, kind, at})`。
+3. 扩展收到后按 §12.6 走 500ms 去抖 → `enterAssist()`；默认 `pause` 策略下人类输入照常投递。
+4. 内核**不**自行改 mode；人类输入只产生事件，不产生状态迁移。
+
+### 13.7 Feature、灰度与回滚
+
+- `base::Feature kInputOwnershipEnforcement` 放 `content/public/common/content_features.{h,cc}`，
+  `FEATURE_DISABLED_BY_DEFAULT`。
+- 关闭时：`SetInputOwnership` / `GrantDebuggerInput` 直接 return；`Decide()` 恒 `kDeliver`；
+  不注册 observer、不发事件、不增加任何分支开销（一次 feature 检查）。
+- 灰度：先只开 `human_presence` 上报（只读），确认误报率；再开 HUMAN 丢弃；最后开 ASSIST grant。
+- 回滚：一个编号 patch 集合整体 revert；扩展侧守卫独立存在，回滚内核后仍是「今天的语义 +
+  更严格的命令门禁」（`host_capabilities.mode === "generic"` 时只启用命令层守卫）。
+- 数据面：`SpaceState.assist` 是可选字段，回滚不需要迁移 `storage.session`。
+
+### 13.8 失败模式（内核侧）
+
+| 失败 | 现象 | 处理 |
+|---|---|---|
+| Feature 关闭 / 未注入 API | 扩展拿不到内核能力 | 只启用扩展命令层守卫；内核行为与今天一致 |
+| 扩展与内核失联 > 30s | 快照过期 | 降级 ASSIST：AI 输入丢弃，人类始终可用 |
+| version 回退/乱序 | 旧快照 | 拒绝，保持当前 mode |
+| SW 重启 | 扩展内存态清空 | `assist` 在 `storage.session`；扩展重连后重推 `setOwnership`（version 继续递增） |
+| 第三方 CDP | 注入带 `kFromDebugger` | 与自有 AI 一视同仁：HUMAN 丢弃、ASSIST 需 grant；来源不可区分是已知限制 |
+| OOPIF / 子帧 | 是否绕过 | controller 属于 WebContents，主帧与 local child root 的 `delegate_` 都是 `WebContentsImpl`；实施时必须加 OOPIF browser test 验证 |
+| 人类用快捷键关窗 | 空间消失 | `windows.onRemoved` → ownership inactive；controller 随 WebContents 销毁 |
+| grant 泄漏 | AI 持续操作 | 计数 + 绝对 TTL；手势级扣减；ownership 变更/新 presence 清空 |
+| 事件洪泛 | 大量 presence | controller 300ms 去抖 + 扩展 500ms 去抖 |
+
+### 13.9 内核 patch 的验证计划（实施时）
+
+1. `InputOwnershipBrowserTest`：真实 `Input.dispatchMouseEvent`/`insertText`，断言 AI 可点、
+   HUMAN 不点（DOM 计数不变）、ASSIST 无 grant 不点、grant 后恰好一次。
+2. `human_presence`：用不带 `kFromDebugger` 的 `RenderWidgetHostImpl::ForwardMouseEvent`
+   模拟人类输入，断言 300ms 去抖后只上报一次。
+3. OOPIF：iframe 内按钮 + 主帧/子帧输入，断言同一 controller 生效。
+4. Feature-off 回归：同一套测试在 feature 关闭时全部恢复今天的行为。
+5. 浏览器 UI 快捷键：HUMAN 下 Ctrl+L / Ctrl+T / F5 仍生效（不属于页面输入权）。
+
+### 13.10 明确未覆盖（待后续 patch）
+
+1. **触摸 / 手势注入**（`Input.dispatchTouchEvent`、`ForwardGestureEvent`）：P3 不纳入，
+   需要单独的 controller 检查点。
+2. **IME 组合输入**（`ImeSetComposition` / `ImeCommitText` 的其它调用方）：P3 只覆盖
+   `InputHandler::InsertText` 这一条 DevTools 路径。
+3. **自动化来源细分**（DevTools 手工调试 vs 插件 AI）：沿用 `kFromDebugger` 不区分（§11 决定 4）。
+4. **grant token 的跨进程校验**：P3 内核 grant 表由受信扩展 API 写入，token 只用于扩展侧
+   审计；内核按 `{remaining, ttl}` 计数，不解析 token。
+5. **内核侧审计事件**：P3 只做 UMA/`TRACE_EVENT` 与 `human_presence` 回调，不新增 DevTools
+   domain；扩展仍是审计真源。

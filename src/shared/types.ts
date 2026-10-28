@@ -54,6 +54,10 @@ export type CommandName =
   | "handoff_space" // {spaceId|name?} 把空间交给用户，暂停 Agent 命令
   | "complete_space" // {spaceId|name?,keep?} 保留给用户或关闭空间
   | "close_space" // {spaceId|name?} 关闭当前 Agent 空间
+  // 输入权仲裁（P3）：HUMAN/ASSIST/AI 是 ownership(+assist) 的派生视图，不是新的 ownership 取值
+  | "grant_input" // {space?,tabId?,actions,ttlMs?} ASSIST 下发放一次性输入 grant（仅 owner/用户入口）
+  | "input_status" // {space?,tabId?} 返回 mode / assist 到期时间 / 剩余 grant actions
+  | "human_presence" // {space?,tabId?,source?,immediate?,debounceMs?,internal?} 内核事件/测试入口：进入 ASSIST
   // 插件化操作模版（新需求，M9）
   | "import_template"
   | "install_template"

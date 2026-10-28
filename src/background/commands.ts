@@ -25,6 +25,13 @@ import * as tpl from "./templates";
 import { downloadResource } from "./download-resource";
 import { transcribeMedia } from "./groq";
 import { genericCapabilities } from "./capabilities";
+import {
+  INPUT_COMMANDS,
+  grantInputCommand,
+  guardInputCommand,
+  humanPresenceCommand,
+  inputStatusCommand,
+} from "./input-ownership";
 
 function getManifestVersion(): string {
   try {
@@ -171,6 +178,11 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   ensure_visible: (cmd) => sp.ensure_visible(cmd),
   list_spaces: (cmd) => sp.list_spaces(cmd),
 
+  // 输入权仲裁（P3）：HUMAN/ASSIST/AI 只是 ownership(+assist) 的派生视图。
+  grant_input: (cmd) => grantInputCommand(cmd),
+  input_status: (cmd) => inputStatusCommand(cmd),
+  human_presence: (cmd) => humanPresenceCommand(cmd),
+
   import_template: (cmd) => tpl.importTemplate(cmd),
   install_template: (cmd) => tpl.installTemplate(cmd),
   list_templates: () => tpl.listTemplates(),
@@ -290,6 +302,11 @@ export async function dispatch(cmd: Command): Promise<unknown> {
       const tabId = await resolveTargetTab(cmd).catch(() => undefined);
       if (tabId !== undefined && isHumanTakeover(tabId)) throw new Error("human_takeover_in_progress");
     }
+    // 输入权仲裁（P3）：与上面的 mask/takeover 检查**叠加**，不是替代。
+    // HUMAN → INPUT_HUMAN_OWNED；ASSIST 无 grant → INPUT_ASSIST_REQUIRES_GRANT；
+    // ASSIST 有 grant → 消耗一次后放行；AI → 放行。守卫放在 handler 之前，
+    // 因此被拒绝时不会 attach/不会发任何 CDP Input.*。
+    if (INPUT_COMMANDS.has(name)) await guardInputCommand(cmd);
     return await KNOWN[name](cmd);
   } finally {
     endMaskActivity();
@@ -466,6 +483,9 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `run_template` | `{id, params?, focus?}` | 一键跑流程模版(省 token); **默认后台执行**（不恢复/不聚焦窗口），显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才前台运行（AI 聊天类模板内部已显式声明前台）; 聊天模版续问传 conversationUrl(上次返回的 url) 校验仍指向同一会话; 失灵返回结构化失败上下文 |",
     "| `start_mask` | `{tabId?}` | 开「人工接管遮罩」：蓝色半透明 + 拦截用户 + 底部「人工接管」按钮 |",
     "| `stop_mask` | `{tabId?}` | 关遮罩 / 清除接管态（人解完验证码后让 AI 继续） |",
+    "| `input_status` | `{space?\\|spaceId?, tabId?}` | 输入权状态：`mode`(human/assist/ai)、`ownership`、`assistSince`、`assistExpiresAt`、剩余 `grantActionsRemaining` |",
+    "| `grant_input` | `{space?\\|spaceId?, tabId?, actions, ttlMs?}` | **仅 ASSIST 下**、仅空间 owner/用户入口可发：发放一次性输入 grant（`actions` 次数 + TTL，默认 60s）。返回截断 token 摘要 |",
+    "| `human_presence` | `{space?\\|spaceId?, tabId?, source?, immediate?, debounceMs?, internal?}` | 内核事件/测试入口：人类在页面里输入 → 500ms 去抖后进入 ASSIST（ownership 不变）；默认只接受用户入口或 `internal:true` |",
     "| `cursor` | `{action:\"show\"\\|\"move\"\\|\"hide\"\\|\"remove\"\\|\"state\", tabId?, ref?, selector?, x?, y?, style?, durationMs?}` | 插件级 AI 虚拟光标（只画不点）：show/move/hide/remove/state；轨迹与真实 CDP 点击坐标一致，不移动系统鼠标 |",
     "| 事件`mask_takeover` | `{tabId}` | 用户点了遮罩上的「人工接管」→ 暂停 AI，等 `stop_mask` 续跑 |",
     "| `export_guide` | `{}` | 导出本说明 |",
@@ -501,6 +521,9 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "- **权限 / 调试横幅**: 只有用 `L1` 动作时标签页才出现「正在调试此浏览器」横幅, 这是 debugger API 固有, 纯 `L0` 观测无横幅。",
     "- **`SPACE_NOT_OWNED` / `TAB_OUTSIDE_SPACE`**：不要绕过；选择自己已有的 Space，或用 `open_space` 创建新空间。",
     "- **`SPACE_USER_IN_CONTROL`**：用户已经人工接管，必须等待用户明确允许后再调用 `claim_space`。",
+    "- **`INPUT_HUMAN_OWNED`**：输入权为 HUMAN（`ownership=user`）时 Agent 的输入类命令（click/type/fill/js/tab_cdp_call 等）被直接拒绝；不排队、不降级，需用户 `claim_space` 后才能恢复。",
+    "- **`INPUT_ASSIST_REQUIRES_GRANT`**：输入权为 ASSIST（人类临时在场，ownership 仍为 agent）时，Agent 必须先 `input_status` 确认，再由空间 owner/用户入口 `grant_input` 发放一次性 grant（按命令次数消耗，默认 TTL 60s）；过期/用尽/ownership 变化都会清空。",
+    "- **输入权速查**：`input_status` 返回 `mode`：`ai`（Agent 自主，输入放行）/ `assist`（人类在场，AI 需 grant）/ `human`（用户完全接管，AI 输入全拒）。人类真实输入按 pause 策略照常投递，`human_presence` 500ms 去抖后进入 ASSIST。",
     "- **`FOREGROUND_BUSY`**：同一 Task Space 已有流程在运行（或另一个 Agent 正在切换前台窗口），稍后重试；不同 Task Space 不受影响。",
   ].join("\n");
 }

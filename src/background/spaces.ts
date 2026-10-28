@@ -119,6 +119,8 @@ async function bindFocusedWindow(clientId: string): Promise<SpaceState> {
         createdAt: legacy?.createdAt ?? Date.now(),
         updatedAt: Date.now(),
       };
+      // 绑定/重建窗口等价于一次 ownership 写入：不得把旧记录的 assist 租约带进新绑定。
+      delete bound.assist;
       if (legacy && legacy.spaceId !== spaceId) delete state.spaces[legacy.spaceId];
       state.spaces[spaceId] = bound;
     }

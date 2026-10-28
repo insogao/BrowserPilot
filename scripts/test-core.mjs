@@ -966,3 +966,7 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
 
 // ---------- AI 虚拟鼠标（虚拟光标 overlay / 截图排除 / 清理）----------
 await import("./test-virtual-cursor.mjs");
+
+// ---------- 输入权仲裁（P3，扩展侧）：HUMAN / ASSIST / AI 派生视图 + grant ----------
+// 与独立的 test:input-ownership 共用同一份用例，避免两处漂移。
+await import("./test-input-ownership.mjs");
