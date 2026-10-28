@@ -5,6 +5,7 @@ export type CommandName =
   // 基础 / 握手
   | "ping"
   | "version"
+  | "host_capabilities" // 宿主能力探测结果（Phase 7）：enhanced / generic + 降级原因
   | "get_profile" // 探测当前 profile（profile 感知，F1-1）
   | "export_guide" // 导出使用文档 Markdown（F1-2/F1-3）
   // 观测

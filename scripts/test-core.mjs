@@ -555,3 +555,110 @@ assert.match(pagedExpr, /pageDelay=900/, "paged @results must honor the polite p
 assert.match(googleExpr, /#pnnext/, "google fallback results must auto-paginate via #pnnext");
 console.log("PASS core: @results page expressions are syntactically valid and filter Google UI links");
 }
+
+// ---------- 宿主能力探测：三种结果 + 禁止用 UA/产品名旁路（Phase 7） ----------
+{
+  // 探测模块直接读 chrome.browserCli；用可替换的 stub 覆盖各分支。
+  const capsMod = await importTs("src/background/capabilities.ts");
+
+  const withApi = async (impl) => {
+    globalThis.chrome = {
+      ...globalThis.chrome,
+      browserCli: impl === undefined ? undefined : { getCapabilities: impl },
+    };
+    // 接口存在时无需等待；只有 api-absent 分支会走满重试窗口，用 0 避免测试变慢。
+    return capsMod.detectHostCapabilities({ apiAppearTimeoutMs: 0 });
+  };
+
+  // 1. 接口不存在（普通 Chrome 的正常形态）→ generic
+  delete globalThis.chrome.browserCli;
+  const absent = await capsMod.detectHostCapabilities({ apiAppearTimeoutMs: 0 });
+  assert.equal(absent.mode, "generic", "absent API must degrade to generic");
+  assert.equal(absent.degradeReason, "api-absent", "absent API must record why");
+  assert.equal(absent.protocolVersion, 0, "generic mode has no host protocol");
+  assert.equal(absent.maxConcurrentWindows, 1, "generic mode allows exactly one window");
+  for (const flag of ["managedMode", "backgroundWindows", "backgroundCapture", "hardFocusIsolation", "foregroundAssist"]) {
+    assert.equal(absent[flag], false, `generic mode must report ${flag}=false`);
+  }
+
+  // 1b. 注入竞态：API 延迟出现时必须等到它，而不是误判成普通 Chrome。
+  //     （实测内核在 SW 创建后约 0.5s 才注入 browserCli。）
+  {
+    const saved = globalThis.chrome;
+    globalThis.chrome = { ...saved };
+    delete globalThis.chrome.browserCli;
+    const appeared = setTimeout(() => {
+      globalThis.chrome.browserCli = {
+        getCapabilities: async () => ({
+          protocolVersion: 1, managedMode: true, backgroundWindows: true,
+          backgroundCapture: true, hardFocusIsolation: true, foregroundAssist: true,
+          maxConcurrentWindows: 8,
+        }),
+      };
+    }, 150);
+    const late = await capsMod.detectHostCapabilities({ apiAppearTimeoutMs: 3000 });
+    clearTimeout(appeared);
+    assert.equal(late.mode, "enhanced", "API appearing after startup must not be misread as generic");
+    globalThis.chrome = saved;
+  }
+
+  // 2. 调用抛异常 → generic + 记录错误，绝不向上抛
+  const failed = await withApi(async () => { throw new Error("boom"); });
+  assert.equal(failed.mode, "generic", "throwing API must degrade, not propagate");
+  assert.match(failed.degradeReason, /call-failed: boom/, "call failure must be recorded");
+
+  // 3. 协议版本不认识 → generic（猜测能力正是该接口要防的事）
+  const wrongProtocol = await withApi(async () => ({
+    protocolVersion: 2, managedMode: true, backgroundWindows: true,
+    maxConcurrentWindows: 8,
+  }));
+  assert.equal(wrongProtocol.mode, "generic", "unknown protocol must degrade");
+  assert.match(wrongProtocol.degradeReason, /unsupported-protocol: 2/);
+  const badProtocolType = await withApi(async () => ({ protocolVersion: "1", managedMode: true }));
+  assert.equal(badProtocolType.mode, "generic", "non-numeric protocol must degrade");
+
+  // 4. 协议正确但 managedMode=false → generic（内核没有策略保护时不得相信其它标志）
+  const unmanaged = await withApi(async () => ({
+    protocolVersion: 1, managedMode: false,
+    backgroundWindows: true, backgroundCapture: true,
+    hardFocusIsolation: true, foregroundAssist: true,
+    maxConcurrentWindows: 8,
+  }));
+  assert.equal(unmanaged.mode, "generic", "managedMode=false must degrade even if flags claim otherwise");
+  assert.equal(unmanaged.degradeReason, "managed-mode-disabled");
+  assert.equal(unmanaged.backgroundWindows, false, "unmanaged mode must not trust host flags");
+
+  // 5. 全绿 → enhanced，字段透传
+  const enhanced = await withApi(async () => ({
+    product: "Browser CLI", browserVersion: "156.0.8067.0",
+    protocolVersion: 1, managedMode: true,
+    backgroundWindows: true, backgroundCapture: true,
+    hardFocusIsolation: true, foregroundAssist: true,
+    maxConcurrentWindows: 8,
+  }));
+  assert.equal(enhanced.mode, "enhanced");
+  assert.equal(enhanced.product, "Browser CLI");
+  assert.equal(enhanced.maxConcurrentWindows, 8);
+  assert.equal(capsMod.concurrencyLimit(enhanced), 8, "enhanced limit must come from the host");
+  assert.equal(capsMod.concurrencyLimit(absent), 1, "generic limit is exactly one");
+
+  // 6. 上限缺失/非法 → 退回 1，不得等于 0 或 NaN
+  const badMax = await withApi(async () => ({
+    protocolVersion: 1, managedMode: true, backgroundWindows: true,
+    backgroundCapture: true, hardFocusIsolation: true, foregroundAssist: true,
+    maxConcurrentWindows: 0,
+  }));
+  assert.equal(badMax.maxConcurrentWindows, 1, "non-positive host limit must fall back to 1");
+  assert.equal(capsMod.concurrencyLimit(badMax), 1);
+
+  // 7. 源码守卫：禁止用 UA / 产品名推断增强能力（要求 5）
+  const capsSource = fs.readFileSync("src/background/capabilities.ts", "utf8");
+  assert.doesNotMatch(capsSource, /userAgent|navigator\.platform|vendor/,
+    "capability detection must not read User-Agent or platform");
+  // product 只作为日志字段透传，源码里不得出现基于它的分支
+  assert.doesNotMatch(capsSource, /product\s*===\s*["']/,
+    "product name must never gate a capability decision");
+
+  delete globalThis.chrome.browserCli;
+  console.log("PASS core: host capability probe degrades safely and never trusts UA or product name");
+}

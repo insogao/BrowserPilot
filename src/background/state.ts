@@ -1,6 +1,7 @@
 // SW 唯一权威状态：storage.session 持久化（attach/层级/命名空间/host 端口/profile）。
 // 参考技术路径 §4.10 / §4.11。
 import type { ProfileInfo } from "../shared/types";
+import type { HostCapabilities } from "./capabilities";
 
 export interface SpaceState {
   spaceId: string;
@@ -39,6 +40,9 @@ export interface GlobalState {
   agentActive?: boolean;
   lastAgentActivity?: number;
   profile?: ProfileInfo;
+  /** 宿主浏览器能力探测结果（Phase 7）。换浏览器或换启动参数都会改变它，
+   *  因此每次 SW 启动重新探测，不做跨会话持久化假设。 */
+  hostCapabilities?: HostCapabilities;
   /** 人工接管中的 tabId：takeover Set 的持久层，SW 重启后由 mask.restoreMaskState 恢复。 */
   humanTakeoverTabIds?: number[];
   startTime: number;

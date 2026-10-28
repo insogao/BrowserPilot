@@ -17,6 +17,7 @@ import { detach, detachAll, listAttachedTabs } from "./debugger-bridge";
 import * as tpl from "./templates";
 import { downloadResource } from "./download-resource";
 import { transcribeMedia } from "./groq";
+import { genericCapabilities } from "./capabilities";
 
 function getManifestVersion(): string {
   try {
@@ -30,6 +31,13 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   ping: () => Promise.resolve({ pong: true, at: Date.now() }),
   version: () =>
     Promise.resolve({ name: "BrowserPilot", version: getManifestVersion() }),
+
+  // 宿主能力：普通 Chrome 返回 generic + 原因，Browser CLI 返回 enhanced。
+  // 这是判断增强能力的唯一入口，禁止用 UA/产品名旁路（Phase 7 要求 5）。
+  host_capabilities: async () => {
+    const s = await loadState();
+    return s.hostCapabilities ?? genericCapabilities("not-probed");
+  },
 
   get_profile: async () => {
     const s = await loadState();

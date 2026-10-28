@@ -7,11 +7,28 @@ import { registerMaskHandlers, requestTakeover, isHumanTakeover, maskOff } from 
 import { isAttached } from "./debugger-bridge";
 import type { PopupGuide, PopupRequest, PopupStatus } from "../shared/types";
 import { claimSpaceForTab, registerSpaceLifecycleHandlers } from "./spaces";
+import { detectHostCapabilities } from "./capabilities";
 
 const HEARTBEAT = "browserpilot.heartbeat";
 
+// 宿主能力探测只做一次：普通 Chrome 上 chrome.browserCli 不存在（generic），
+// Browser CLI 上返回增强能力。探测本身永不抛异常，失败即降级。
+let capabilitiesProbe: Promise<void> | undefined;
+
+function ensureCapabilitiesProbed(): Promise<void> {
+  capabilitiesProbe ??= detectHostCapabilities().then(async (caps) => {
+    await patchState({ hostCapabilities: caps });
+    console.info(
+      `[capabilities] mode=${caps.mode} protocol=${caps.protocolVersion}` +
+        (caps.degradeReason ? ` reason=${caps.degradeReason}` : ""),
+    );
+  });
+  return capabilitiesProbe;
+}
+
 async function init(): Promise<void> {
   await chrome.alarms.create(HEARTBEAT, { periodInMinutes: 0.5 }); // ~30s
+  await ensureCapabilitiesProbed();
   await connectHost();
 }
 
