@@ -851,7 +851,6 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   console.log("PASS core: screenshots time out, degrade with an explicit stale flag, and never touch window focus");
 }
 
-<<<<<<< HEAD
 // ---------- 截图超时清理：pending 表清空 / 迟到帧丢弃 / 错误两段原因 ----------
 {
   const policy = await importTs("src/background/screenshot-policy.ts");
@@ -939,6 +938,30 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   const mismatch = registry.describeMismatch("a\nb\n", "a\nc\n");
   assert.equal(mismatch?.line, 2, "mismatch reports the first differing line");
   console.log("PASS core: registry check normalizes CRLF/LF instead of rewriting every generated file");
+}
+
+// ---------- 虚拟光标接线守卫：截图命令必须走 cursor-aware 策略 ----------
+{
+  const commandsSource = fs.readFileSync("src/background/commands.ts", "utf8");
+  assert.ok(
+    commandsSource.includes("captureScreenshotWithCursorPolicy("),
+    "screenshot must use the cursor-aware capture policy",
+  );
+  assert.ok(
+    commandsSource.includes("withCursorHiddenForCapture("),
+    "scroll_screenshot must hide the cursor for the whole capture",
+  );
+  assert.ok(commandsSource.includes("handleCursorCommand"), "commands.ts must expose the cursor command");
+  assert.ok(
+    !/\bcaptureScreenshot\(/.test(commandsSource),
+    "commands.ts must not bypass the cursor policy with a raw captureScreenshot call",
+  );
+  const indexSource = fs.readFileSync("src/background/index.ts", "utf8");
+  assert.ok(
+    indexSource.includes("registerVirtualCursorHandlers()"),
+    "index.ts must register cursor lifecycle handlers",
+  );
+  console.log("PASS core: virtual cursor is wired into screenshot, scroll capture, stop, and SW startup");
 }
 
 // ---------- AI 虚拟鼠标（虚拟光标 overlay / 截图排除 / 清理）----------

@@ -75,8 +75,8 @@ export type CommandName =
   // 人工接管遮罩（新需求，参考 Manus ActionMask）：拦截用户 + 蓝色半透明 + 「人工接管」按钮
   | "start_mask" // {tabId?} 开启遮罩（冻结用户，AI 用 CDP 操作）
   | "stop_mask" // {tabId?} 关闭遮罩 / 清除接管状态（人类解决验证码后 AI 继续）
-  // 注：AI 虚拟鼠标命令名 "cursor" 由集成方（commands.ts 属 Agent C）注册；
-  // 处理函数已实现于 background/virtual-cursor.ts: handleCursorCommand。
+  // AI 虚拟光标（插件级，只画不点）：show/move/hide/remove/state。
+  | "cursor"
   // 图片下载：下载页面中的图片（data:/http:）
   | "download_image" // {url, filename?, tabId?} 下载图片到本地
   // 图片下载（通道 B）：页面上下文取字节后落盘（blob canvas 提取 / 登录态 http fetch，绕开 1MB 命令上限与 cookie 假成功）

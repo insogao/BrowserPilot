@@ -8,7 +8,14 @@ import { commandClientId } from "./spaces";
 import { acquireForegroundLease, deleteForegroundLeasesFor } from "./foreground-lease";
 import { resolveTargetTab } from "./tab-resolver";
 import { getL0Snapshot, readTextFromTab } from "./content-bridge";
-import { captureScreenshot, scrollCaptureScreenshot, ensureAttach } from "./cdp";
+import { scrollCaptureScreenshot, ensureAttach } from "./cdp";
+import {
+  captureScreenshotWithCursorPolicy,
+  withCursorHiddenForCapture,
+  handleCursorCommand,
+  clearAllCursors,
+  clearCursorsForTabs,
+} from "./virtual-cursor";
 import { sendCommand } from "./debugger-bridge";
 import * as act from "./actions";
 import * as ev from "./eval";
@@ -65,10 +72,14 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   // 截图不改变窗口可见状态/焦点/活动标签；元数据里带上耗时、取帧路径与新鲜度，
   // 让调用方自己决定能不能把这张图当作实时画面。possiblyStale/reason 同时放在顶层，
   // 避免上层 API 只看顶层字段时把降级帧误当新鲜帧。
+  // 默认先隐藏 AI 虚拟光标再截图（includeCursor=true 才显式包含）。
   screenshot: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
-    const format = ((cmd.args ?? {}) as { format?: string }).format ?? "png";
-    const shot = await captureScreenshot(tabId, format);
+    const args = (cmd.args ?? {}) as { format?: string; includeCursor?: boolean };
+    const format = args.format ?? "png";
+    const shot = await captureScreenshotWithCursorPolicy(tabId, format, {
+      includeCursor: args.includeCursor === true,
+    });
     return {
       tabId,
       format,
@@ -76,14 +87,21 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       screenshot: shot.meta,
       possiblyStale: shot.meta.possiblyStale,
       ...(shot.meta.reason ? { reason: shot.meta.reason } : {}),
+      cursorIncluded: shot.cursorIncluded,
     };
   },
   scroll_screenshot: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
-    const { pages, gap, format } = (cmd.args ?? {}) as { pages?: number; gap?: number; format?: string };
-    const r = await scrollCaptureScreenshot(tabId, { pages, gap, format });
-    return { tabId, ...r };
+    const { pages, gap, format, includeCursor } = (cmd.args ?? {}) as {
+      pages?: number; gap?: number; format?: string; includeCursor?: boolean;
+    };
+    // 整段滚动截图只隐藏/恢复一次，避免逐屏来回闪。
+    const r = await withCursorHiddenForCapture(tabId, includeCursor === true, () =>
+      scrollCaptureScreenshot(tabId, { pages, gap, format }),
+    );
+    return { tabId, ...r, cursorIncluded: includeCursor === true };
   },
+  cursor: (cmd) => handleCursorCommand(cmd),
   tab_cdp_call: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
     const { method, params } = (cmd.args ?? {}) as { method?: string; params?: Record<string, unknown> };
@@ -195,9 +213,13 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       tpl.cancelTemplateRuns();
       const attachedTabs = listAttachedTabs();
       await Promise.all(attachedTabs.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
-      const [maskedTabs, detachedTabs] = await Promise.all([resetAllMasks(), detachAll()]);
+      const [maskedTabs, detachedTabs, cursorTabs] = await Promise.all([
+        resetAllMasks(),
+        detachAll(),
+        clearAllCursors(),
+      ]);
       await clearAllSpaces();
-      return { stopped: true, scoped: false, detachedTabs, maskedTabs };
+      return { stopped: true, scoped: false, detachedTabs, maskedTabs, cursorTabs };
     }
 
     const state = await loadState();
@@ -213,8 +235,18 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       const tab = await chrome.tabs.get(tabId).catch(() => undefined);
       if (tab?.windowId !== undefined && ownWindowIds.has(tab.windowId)) ownAttached.push(tabId);
     }
+    // 光标可能由 cursor 命令直接显示（不经过 CDP attach），按窗口枚举全部 tab 再清理。
+    const ownWindowTabs: number[] = [];
+    for (const windowId of ownWindowIds) {
+      const tabs = await chrome.tabs.query({ windowId }).catch(() => []);
+      for (const tab of tabs) if (typeof tab.id === "number") ownWindowTabs.push(tab.id);
+    }
     await Promise.all(ownAttached.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
-    const [maskedTabs] = await Promise.all([resetMasksForTabs(ownAttached), Promise.all(ownAttached.map((tabId) => detach(tabId).catch(() => undefined)))]);
+    const [maskedTabs, , cursorTabs] = await Promise.all([
+      resetMasksForTabs(ownAttached),
+      Promise.all(ownAttached.map((tabId) => detach(tabId).catch(() => undefined))),
+      clearCursorsForTabs(ownWindowTabs),
+    ]);
     for (const space of ownSpaces) {
       if (space.windowId !== undefined) await chrome.windows.remove(space.windowId).catch(() => {});
       await patchSpace(space.spaceId, { ownership: "inactive", windowId: undefined, tabId: undefined, attached: false });
@@ -227,7 +259,7 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       if (s.activeSpaceIds?.[clientId]) delete s.activeSpaceIds[clientId];
       if (s.activeSpaceId && ownSpaceIds.has(s.activeSpaceId)) delete s.activeSpaceId;
     });
-    return { stopped: true, scoped: true, closedSpaces: [...ownSpaceIds], detachedTabs: ownAttached, maskedTabs };
+    return { stopped: true, scoped: true, closedSpaces: [...ownSpaceIds], detachedTabs: ownAttached, maskedTabs, cursorTabs };
   },
 };
 
@@ -415,8 +447,8 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `waitForURL` / `waitForSelector` / `waitForTimeout` | `{...}` | 等 URL/元素/时间 |",
     "| `wait_dom_idle` | `{idleMs?,timeoutMs?,selector?}` | 等 DOM 静默（MutationObserver）：AI 聊天流式输出结束后内容才停止变化；超时返回 idle:false |",
     "| `drainEvents` | `{after_sequence?, methods?, limit?}` | 拉取事件游标 `{events,cursor,hasMore}` |",
-    "| `screenshot` | `{format?}` | 视口截图(返回 base64) |",
-    "| `scroll_screenshot` | `{pages?, gap?, format?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量 |",
+    "| `screenshot` | `{format?, includeCursor?}` | 视口截图(返回 base64)；默认隐藏 AI 虚拟光标，`includeCursor:true` 才把光标画进图里 |",
+    "| `scroll_screenshot` | `{pages?, gap?, format?, includeCursor?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量；默认隐藏虚拟光标 |",
     "| `tab_cdp_call` | `{tabId?, method, params?}` | 任意底层 CDP 透传(如 Network.enable/Network.getResponseBody/Runtime.evaluate), 全权交给 AI/CLI |",
     "| `download_image` | `{url, filename?}` | 下载 URL 到本地(支持 data:/http:), 配合模版回收的 images[] 落盘; blob: 明确拒绝 |",
     "| `download_resource` | `{url?\|urls?...[], selector?, filename?, tabId?}` | 页面上下文取字节后落盘：blob 图用 canvas 全尺寸提取(PNG)、登录态 http 用页面内 fetch 带 cookie；文件名可控；`urls[]` 传多张自动编号（AI 一次出多图 / Gemini Choice A/B 全收） |",
@@ -425,6 +457,7 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `run_template` | `{id, params?, focus?}` | 一键跑流程模版(省 token); **默认后台执行**（不恢复/不聚焦窗口），显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才前台运行（AI 聊天类模板内部已显式声明前台）; 聊天模版续问传 conversationUrl(上次返回的 url) 校验仍指向同一会话; 失灵返回结构化失败上下文 |",
     "| `start_mask` | `{tabId?}` | 开「人工接管遮罩」：蓝色半透明 + 拦截用户 + 底部「人工接管」按钮 |",
     "| `stop_mask` | `{tabId?}` | 关遮罩 / 清除接管态（人解完验证码后让 AI 继续） |",
+    "| `cursor` | `{action:\"show\"\\|\"move\"\\|\"hide\"\\|\"remove\"\\|\"state\", tabId?, ref?, selector?, x?, y?, style?, durationMs?}` | 插件级 AI 虚拟光标（只画不点）：show/move/hide/remove/state；轨迹与真实 CDP 点击坐标一致，不移动系统鼠标 |",
     "| 事件`mask_takeover` | `{tabId}` | 用户点了遮罩上的「人工接管」→ 暂停 AI，等 `stop_mask` 续跑 |",
     "| `export_guide` | `{}` | 导出本说明 |",
     "| `stop` | `{}` | 清理会话：Agent 身份调用=只清自己的空间/租约/遮罩；popup 全局停止=清全部 |",

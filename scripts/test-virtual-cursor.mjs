@@ -288,6 +288,7 @@ const ops = () => transport.log.map((e) => e.op);
     onUpdated: { addListener: (fn) => listeners.onUpdated.push(fn) },
     onActivated: { addListener: (fn) => listeners.onActivated.push(fn) },
     onRemoved: { addListener: (fn) => listeners.onRemoved.push(fn) },
+    query: async ({ windowId }) => [{ id: 1, windowId }, { id: 2, windowId }],
   };
   vc.registerVirtualCursorHandlers();
   assert.equal(listeners.onUpdated.length, 1);

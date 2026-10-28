@@ -4,6 +4,7 @@ import { connectHost, isHostConnected } from "./native-bridge";
 import { loadState, patchState } from "./state";
 import { buildGuideFromCmd, buildSkillBootstrap, dispatch } from "./commands";
 import { registerMaskHandlers, requestTakeover, isHumanTakeover, maskOff } from "./mask";
+import { registerVirtualCursorHandlers } from "./virtual-cursor";
 import { isAttached } from "./debugger-bridge";
 import type { PopupGuide, PopupRequest, PopupStatus } from "../shared/types";
 import { claimSpaceForTab, registerSpaceLifecycleHandlers } from "./spaces";
@@ -148,4 +149,5 @@ async function handlePopup(msg: PopupRequest): Promise<unknown> {
 
 registerMaskHandlers();
 registerSpaceLifecycleHandlers();
+registerVirtualCursorHandlers();
 void init();

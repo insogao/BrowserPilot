@@ -259,6 +259,7 @@ async function main() {
         onUpdated: { addListener: (fn) => tabListeners.onUpdated.push(fn) },
         onActivated: { addListener: (fn) => tabListeners.onActivated.push(fn) },
         onRemoved: { addListener: (fn) => tabListeners.onRemoved.push(fn) },
+        query: async ({ windowId }) => [{ id: 1, windowId }],
       },
     };
 

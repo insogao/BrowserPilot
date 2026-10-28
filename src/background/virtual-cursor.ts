@@ -403,6 +403,10 @@ async function hideForCapture(tabId: number): Promise<HideToken> {
     reasons.push("dom: " + (e as Error).message);
   }
   // fail closed：宁可让截图失败，也不返回可能带光标的画面。
+  // 例外：内容脚本不可注入且本地从未记录过光标（chrome:// 等页面）——该文档里不可能
+  // 存在 overlay，按 absent 处理，避免把“无光标的页面”误判成隐藏失败。
+  const st = states.get(tabId);
+  if (st?.unavailable && !st.mounted && !st.enabled && !st.visible) return "absent";
   throw new CursorCaptureError("无法隐藏虚拟光标，拒绝返回可能包含光标的截图（" + reasons.join("; ") + "）");
 }
 
@@ -509,12 +513,19 @@ export function registerVirtualCursorHandlers(): void {
   }
   try {
     chrome.tabs.onActivated?.addListener((info) => {
-      for (const [tabId, st] of states) {
-        if (tabId !== info.tabId && (st.visible || st.enabled)) {
-          // 只临时收起：切回该 tab 后下一次动作会自动恢复（不是用户意图关闭）。
-          void hideCursor(tabId, { disable: false }).catch(() => undefined);
+      // 只收起同一窗口里被切走的 tab：不同窗口的 Agent 各自保留自己的光标，
+      // 否则用户在一个窗口切 tab 会把另一个窗口 AI 的光标一起藏掉。
+      void chrome.tabs.query({ windowId: info.windowId }).then((tabs) => {
+        const sameWindow = new Set(
+          tabs.map((tab) => tab.id).filter((id): id is number => typeof id === "number"),
+        );
+        for (const [tabId, st] of states) {
+          if (tabId !== info.tabId && sameWindow.has(tabId) && (st.visible || st.enabled)) {
+            // 只临时收起：切回该 tab 后下一次动作会自动恢复（不是用户意图关闭）。
+            void hideCursor(tabId, { disable: false }).catch(() => undefined);
+          }
         }
-      }
+      }).catch(() => undefined);
     });
   } catch {
     /* ignore */
