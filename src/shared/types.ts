@@ -40,6 +40,7 @@ export type CommandName =
   | "pageInfo"
   | "drainEvents"
   | "tab_cdp_call" // {tabId?, method, params?} 任意底层 CDP 透传（交给外部 AI/CLI 全权使用）
+  | "detach" // {tabId?} 释放 chrome.debugger（不关标签；下一次动作会自动重新 attach）
   // Task Space / 浏览器级接管（v1.2 定案，M7 实现）
   | "list_tabs" // {space?} 列出浏览器所有窗口/标签（Space=整台浏览器）
   | "open_tab" // {url, newWindow?} 开新标签/窗口并聚焦

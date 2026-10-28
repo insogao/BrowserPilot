@@ -20,7 +20,7 @@ import { sendCommand } from "./debugger-bridge";
 import * as act from "./actions";
 import * as ev from "./eval";
 import { maskOn, maskOff, isHumanTakeover, hasTakeover, touchMaskActivity, endMaskActivity, resetAllMasks, resetMasksForTabs } from "./mask";
-import { detach, detachAll, listAttachedTabs } from "./debugger-bridge";
+import { detach, detachAll, isAttached, listAttachedTabs } from "./debugger-bridge";
 import * as tpl from "./templates";
 import { downloadResource } from "./download-resource";
 import { transcribeMedia } from "./groq";
@@ -109,6 +109,14 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     await ensureAttach(tabId);
     const result = await sendCommand(tabId, method, params ?? {});
     return { tabId, method, result };
+  },
+  // 释放 chrome.debugger 会话但不关闭标签（与 stop 的 detachAll 不同）。
+  // 未 attach 时也返回成功，wasAttached 告诉调用方是否真的释放过。
+  detach: async (cmd) => {
+    const tabId = await resolveTargetTab(cmd);
+    const wasAttached = isAttached(tabId);
+    await detach(tabId);
+    return { detached: true, wasAttached, tabId };
   },
   download_image: async (cmd) => {
     const { url, filename } = (cmd.args ?? {}) as { url?: string; filename?: string; tabId?: number };
@@ -450,6 +458,7 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `screenshot` | `{format?, includeCursor?}` | 视口截图(返回 base64)；默认隐藏 AI 虚拟光标，`includeCursor:true` 才把光标画进图里 |",
     "| `scroll_screenshot` | `{pages?, gap?, format?, includeCursor?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量；默认隐藏虚拟光标 |",
     "| `tab_cdp_call` | `{tabId?, method, params?}` | 任意底层 CDP 透传(如 Network.enable/Network.getResponseBody/Runtime.evaluate), 全权交给 AI/CLI |",
+    "| `detach` | `{tabId?}` | 释放 chrome.debugger（不关标签）；下一次动作会自动重新 attach |",
     "| `download_image` | `{url, filename?}` | 下载 URL 到本地(支持 data:/http:), 配合模版回收的 images[] 落盘; blob: 明确拒绝 |",
     "| `download_resource` | `{url?\|urls?...[], selector?, filename?, tabId?}` | 页面上下文取字节后落盘：blob 图用 canvas 全尺寸提取(PNG)、登录态 http 用页面内 fetch 带 cookie；文件名可控；`urls[]` 传多张自动编号（AI 一次出多图 / Gemini Choice A/B 全收） |",
     "| `list_templates` | `{}` | 列出全部模板（ID/名称/输入/输出）——**写操作序列前必查** |",
