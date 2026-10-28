@@ -112,6 +112,97 @@ export function withTimeout<T>(promise: Promise<T>, ms: number, label: string, o
 }
 
 /**
+ * 遮挡/不产帧窗口的冷却器。
+ *
+ * 背景（2026-10-28 内核实测）：被完全遮挡的 Windows 窗口不会产生合成帧，
+ * `Page.captureScreenshot(fromSurface=true)` 会一直挂到调用方超时；更严重的是每次
+ * 尝试都会在渲染进程累积一个 presentation-time 回调，累积到 60 个（
+ * `cc::PresentationTimeCallbackBuffer::kMaxBufferSize`）会 DCHECK 崩溃。
+ *
+ * 因此对某个 tab 的合成器路径超时后进入冷却：冷却期内直接走浏览器进程快照，
+ * 结果仍然标记 `possiblyStale=true`，绝不把旧帧当成功。一次成功的合成器截图会清除冷却。
+ */
+export interface SurfaceCooldownOptions {
+  /** 第一次超时后的冷却时长；连续超时按 2 倍退避。 */
+  baseMs?: number;
+  /** 退避上限。 */
+  maxMs?: number;
+  /**
+   * 连续超时达到该次数后彻底停止尝试合成器路径，直到 reset()。
+   * 这是防崩硬闸：每次 fromSurface 都会在渲染进程累积 presentation 回调，
+   * 而渲染进程的缓冲上限是 60（cc::PresentationTimeCallbackBuffer::kMaxBufferSize）。
+   */
+  maxConsecutiveTimeouts?: number;
+}
+
+export class SurfaceCooldown {
+  private readonly baseMs: number;
+  private readonly maxMs: number;
+  private readonly maxConsecutiveTimeouts: number;
+  private until = 0;
+  private currentMs: number;
+  private timeouts = 0;
+  private hardStopped = false;
+
+  constructor(
+    options: SurfaceCooldownOptions = {},
+    private readonly now: () => number = Date.now,
+  ) {
+    this.baseMs = options.baseMs ?? 30_000;
+    this.maxMs = options.maxMs ?? 10 * 60_000;
+    this.maxConsecutiveTimeouts = options.maxConsecutiveTimeouts ?? 4;
+    this.currentMs = this.baseMs;
+  }
+
+  shouldSkip(): boolean {
+    return this.hardStopped || this.now() < this.until;
+  }
+
+  recordTimeout(): void {
+    this.timeouts += 1;
+    if (this.timeouts >= this.maxConsecutiveTimeouts) {
+      // 硬闸：不再向渲染进程发新的 fromSurface 请求，避免回调继续累积到 60。
+      this.hardStopped = true;
+      this.until = 0;
+      return;
+    }
+    this.until = this.now() + this.currentMs;
+    this.currentMs = Math.min(this.currentMs * 2, this.maxMs);
+  }
+
+  recordSuccess(): void {
+    this.reset();
+  }
+
+  reset(): void {
+    this.until = 0;
+    this.currentMs = this.baseMs;
+    this.timeouts = 0;
+    this.hardStopped = false;
+  }
+
+  get consecutiveTimeouts(): number {
+    return this.timeouts;
+  }
+
+  get remainingMs(): number {
+    if (this.hardStopped) return 0;
+    return Math.max(0, this.until - this.now());
+  }
+
+  get isHardStopped(): boolean {
+    return this.hardStopped;
+  }
+}
+
+export interface CaptureFallbackOptions {
+  /** 跳过合成器路径，直接取浏览器进程快照（冷却期内的安全路径）。 */
+  skipFromSurface?: boolean;
+  /** 跳过原因，写进 meta.reason，调用方据此判断这是降级帧。 */
+  skipReason?: string;
+}
+
+/**
  * 先取合成器帧，超时/失败后退回浏览器进程快照。
  *
  * 两条路径都拿不到数据时抛 ScreenshotCaptureError（带两段原始原因），不返回空图。
@@ -123,22 +214,27 @@ export async function captureWithFallback(
   format: string,
   timeoutMs: number,
   hooks: CaptureHooks = {},
+  options: CaptureFallbackOptions = {},
 ): Promise<ScreenshotResult> {
   const started = Date.now();
-  hooks.onAttemptStart?.("fromSurface");
   let firstReason: string;
-  try {
-    const res = await withTimeout(
-      send({ format, fromSurface: true }),
-      timeoutMs,
-      "Page.captureScreenshot(fromSurface=true)",
-      { phase: "fromSurface", hooks },
-    );
-    const base64 = res?.data ?? "";
-    if (!base64) throw new Error("Page.captureScreenshot 返回空数据");
-    return { base64, meta: { fromSurface: true, durationMs: Date.now() - started, possiblyStale: false } };
-  } catch (error) {
-    firstReason = errorMessage(error);
+  if (options.skipFromSurface === true) {
+    firstReason = options.skipReason ?? "fromSurface-skipped";
+  } else {
+    hooks.onAttemptStart?.("fromSurface");
+    try {
+      const res = await withTimeout(
+        send({ format, fromSurface: true }),
+        timeoutMs,
+        "Page.captureScreenshot(fromSurface=true)",
+        { phase: "fromSurface", hooks },
+      );
+      const base64 = res?.data ?? "";
+      if (!base64) throw new Error("Page.captureScreenshot 返回空数据");
+      return { base64, meta: { fromSurface: true, durationMs: Date.now() - started, possiblyStale: false } };
+    } catch (error) {
+      firstReason = errorMessage(error);
+    }
   }
 
   hooks.onAttemptStart?.("snapshot");

@@ -839,7 +839,48 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
     /空数据|两种路径/,
   );
 
-  // 5. 源码守卫：截图路径不得再调用 ensureTabVisible（会把窗口拉到前台）。
+  // 5. 遮挡冷却：合成器超时后，冷却期内直接走快照，不重复挂起/累积 presentation 回调。
+  let clock = 1_000;
+  const cool = new policy.SurfaceCooldown({ baseMs: 5_000, maxMs: 20_000, maxConsecutiveTimeouts: 4 }, () => clock);
+  assert.equal(cool.shouldSkip(), false);
+  cool.recordTimeout();
+  assert.equal(cool.shouldSkip(), true);
+  assert.equal(cool.consecutiveTimeouts, 1);
+  assert.equal(cool.remainingMs, 5_000);
+  clock += 4_999;
+  assert.equal(cool.shouldSkip(), true);
+  clock += 1;
+  assert.equal(cool.shouldSkip(), false, "冷却到期后必须重新尝试合成器路径");
+  cool.recordTimeout();
+  assert.equal(cool.remainingMs, 10_000, "连续超时必须按 2 倍退避");
+  cool.recordSuccess();
+  assert.equal(cool.shouldSkip(), false, "合成器成功后必须清除冷却");
+  assert.equal(cool.consecutiveTimeouts, 0);
+
+  // 5b. 硬闸：连续超时达到上限后彻底停止尝试，直到显式 reset。
+  let hardClock = 1_000;
+  const hard = new policy.SurfaceCooldown({ baseMs: 1_000, maxMs: 8_000, maxConsecutiveTimeouts: 3 }, () => hardClock);
+  hard.recordTimeout();
+  hard.recordTimeout();
+  hard.recordTimeout();
+  assert.equal(hard.shouldSkip(), true);
+  assert.equal(hard.isHardStopped, true);
+  hardClock += 1_000_000;
+  assert.equal(hard.shouldSkip(), true, "硬闸不能被时间自动解除");
+  hard.reset();
+  assert.equal(hard.shouldSkip(), false, "reset 后必须恢复合成器尝试");
+
+  // 6. 冷却期内的降级路径：不调用 fromSurface=true，但仍然明确标记 stale。
+  const skippedCalls = [];
+  const skipped = await policy.captureWithFallback(async (params) => {
+    skippedCalls.push(params.fromSurface);
+    return { data: "SNAPSHOT-PNG" };
+  }, "png", T, {}, { skipFromSurface: true, skipReason: "fromSurface-cooldown-after-timeout" });
+  assert.deepEqual(skippedCalls, [false], "冷却期必须跳过合成器路径");
+  assert.equal(skipped.meta.possiblyStale, true);
+  assert.equal(skipped.meta.reason, "fromSurface-cooldown-after-timeout");
+
+  // 7. 源码守卫：截图路径不得再调用 ensureTabVisible（会把窗口拉到前台）。
   const cdpSource = fs.readFileSync("src/background/cdp.ts", "utf8");
   const activeLines = cdpSource
     .split("\n")
@@ -847,6 +888,18 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   assert.ok(
     !activeLines.some((line) => line.includes("ensureTabVisible(")),
     "captureScreenshot must never call ensureTabVisible",
+  );
+  assert.ok(
+    cdpSource.includes("SurfaceCooldown") && cdpSource.includes("skipFromSurface"),
+    "cdp.ts must throttle repeated fromSurface attempts on a tab that timed out",
+  );
+  assert.ok(
+    cdpSource.includes("withTabCaptureLock"),
+    "cdp.ts must serialise captures per tab so concurrent callers cannot stack fromSurface requests",
+  );
+  assert.ok(
+    cdpSource.includes("resetSurfaceCooldown"),
+    "cdp.ts must expose an explicit reset for the hard-stop cooldown",
   );
   console.log("PASS core: screenshots time out, degrade with an explicit stale flag, and never touch window focus");
 }
@@ -919,11 +972,54 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   globalThis.chrome.debugger.sendCommand = async (_target, method, params) =>
     method === "Page.captureScreenshot" ? { data: params.fromSurface ? "FRESH-2" : "OLD-2" } : { result: { value: true } };
   const second = await cdp.captureScreenshot(11, "png", { timeoutMs: 500 });
-  assert.equal(second.base64, "FRESH-2", "a late frame must never leak into the next capture");
-  assert.equal(second.meta.possiblyStale, false);
+  assert.equal(second.base64, "OLD-2", "cooldown must go straight to the snapshot path");
+  assert.equal(second.meta.possiblyStale, true, "cooldown snapshot must stay explicitly stale");
+  assert.equal(second.meta.reason, "fromSurface-cooldown-after-timeout");
+  cdp.__resetSurfaceCooldownsForTests();
+  const third = await cdp.captureScreenshot(11, "png", { timeoutMs: 500 });
+  assert.equal(third.base64, "FRESH-2", "a late frame must never leak into the next capture");
+  assert.equal(third.meta.possiblyStale, false);
   assert.equal(cdp.pendingScreenshotAttempts(11), 0);
   assert.ok(captured >= 2);
   console.log("PASS core: timed-out CDP screenshots are removed from the pending table and late frames are discarded");
+}
+
+// ---------- 同一 tab 截图串行 / 不同 tab 互不阻塞 / 冷却阻止重复 fromSurface ----------
+{
+  const cdp = await importTs("src/background/cdp.ts");
+  cdp.__resetSurfaceCooldownsForTests();
+  const surfaceCalls = new Map([[21, 0], [22, 0]]);
+  globalThis.chrome.debugger.sendCommand = async (target, method, params) => {
+    if (method === "Runtime.evaluate") return { result: { value: true } };
+    if (method !== "Page.captureScreenshot") return {};
+    const tabId = target.tabId;
+    if (params.fromSurface === true) {
+      surfaceCalls.set(tabId, (surfaceCalls.get(tabId) ?? 0) + 1);
+      if (tabId === 21) return new Promise(() => {}); // hangs forever
+      return { data: "FRESH-" + tabId };
+    }
+    return { data: "SNAPSHOT-" + tabId };
+  };
+
+  let firstSettled = false;
+  const first = cdp.captureScreenshot(21, "png", { timeoutMs: 500 });
+  void first.then(() => { firstSettled = true; }, () => { firstSettled = true; });
+  const second = cdp.captureScreenshot(21, "png", { timeoutMs: 500 });
+
+  const other = await cdp.captureScreenshot(22, "png", { timeoutMs: 500 });
+  assert.equal(other.base64, "FRESH-22");
+  assert.equal(other.meta.possiblyStale, false);
+  assert.equal(firstSettled, false, "a hanging tab must not block screenshots on other tabs");
+
+  const firstShot = await first;
+  assert.equal(firstShot.base64, "SNAPSHOT-21");
+  assert.equal(firstShot.meta.possiblyStale, true);
+  const secondShot = await second;
+  assert.equal(secondShot.base64, "SNAPSHOT-21");
+  assert.equal(secondShot.meta.possiblyStale, true);
+  assert.equal(secondShot.meta.reason, "fromSurface-cooldown-after-timeout");
+  assert.equal(surfaceCalls.get(21), 1, "same-tab concurrent captures issued more than one fromSurface request");
+  console.log("PASS core: same-tab captures serialise, other tabs stay independent, cooldown blocks repeat fromSurface");
 }
 
 // ---------- registry:check：CRLF 检出不得被误判为生成文件过期 ----------

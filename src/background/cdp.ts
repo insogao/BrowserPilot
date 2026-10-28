@@ -2,6 +2,7 @@
 import { attach, isAttached, sendCommand } from "./debugger-bridge";
 import {
   captureWithFallback,
+  SurfaceCooldown,
   type CaptureHooks,
   type CapturePhase,
   type ScreenshotResult,
@@ -63,6 +64,71 @@ export function pendingScreenshotAttempts(tabId?: number): number {
 /** 诊断计数：超时被放弃的请求 / 超时后才迟到的 settle。 */
 export function screenshotCleanupStats(): { abandoned: number; lateSettles: number; pending: number } {
   return { abandoned: abandonedAttempts, lateSettles, pending: pendingScreenshotAttempts() };
+}
+
+// 遮挡窗口不产帧：合成器路径超时后冷却 30s，期间直接走浏览器快照（仍标记 possiblyStale）。
+// 这既避免每次截图都挂满 timeout，也避免渲染进程累积 presentation-time 回调
+// （60 个即 DCHECK 崩溃，见 docs/windows-occluded-capture-2026-10-28.md §4.1）。
+const SURFACE_TIMEOUT_COOLDOWN_MS = 30_000;
+const surfaceCooldowns = new Map<number, SurfaceCooldown>();
+
+function surfaceCooldownFor(tabId: number): SurfaceCooldown {
+  let cooldown = surfaceCooldowns.get(tabId);
+  if (!cooldown) {
+    cooldown = new SurfaceCooldown({
+      baseMs: SURFACE_TIMEOUT_COOLDOWN_MS,
+      maxMs: 10 * 60_000,
+      maxConsecutiveTimeouts: 4,
+    });
+    surfaceCooldowns.set(tabId, cooldown);
+  }
+  return cooldown;
+}
+
+export interface SurfaceCooldownStats {
+  tabId: number;
+  active: boolean;
+  remainingMs: number;
+  consecutiveTimeouts: number;
+  /** true = 已触发防崩硬闸，直到 resetSurfaceCooldown() 前不再尝试合成器路径。 */
+  hardStopped: boolean;
+}
+
+/** 诊断：哪些 tab 正处于“合成器路径冷却”状态。 */
+export function surfaceCooldownStats(): SurfaceCooldownStats[] {
+  return [...surfaceCooldowns.entries()].map(([tabId, cooldown]) => ({
+    tabId,
+    active: cooldown.shouldSkip(),
+    remainingMs: cooldown.remainingMs,
+    consecutiveTimeouts: cooldown.consecutiveTimeouts,
+    hardStopped: cooldown.isHardStopped,
+  }));
+}
+
+/** 明确恢复某个 tab 的合成器尝试（例如 ensure_visible 之后）。 */
+export function resetSurfaceCooldown(tabId: number): void {
+  surfaceCooldowns.get(tabId)?.reset();
+}
+
+/** 测试/诊断：清空所有 tab 的冷却状态（不影响真实截图）。 */
+export function __resetSurfaceCooldownsForTests(): void {
+  surfaceCooldowns.clear();
+}
+
+// 同一个 tab 的截图串行执行：并发调用（多 Agent / scroll + viewport）不得各自发起
+// fromSurface 请求，否则一次超时窗口内会累积多个 presentation 回调。
+// 不同 tab 使用各自的链，互不阻塞。
+const captureQueues = new Map<number, Promise<void>>();
+
+function withTabCaptureLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> {
+  const previous = captureQueues.get(tabId) ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  const tail = run.then(() => undefined, () => undefined);
+  captureQueues.set(tabId, tail);
+  void tail.then(() => {
+    if (captureQueues.get(tabId) === tail) captureQueues.delete(tabId);
+  });
+  return run;
 }
 
 /** "@N" -> '[data-bp-id="bp-N"]'；否则原样（当作 CSS selector）。 */
@@ -138,13 +204,25 @@ export type { ScreenshotMeta, ScreenshotResult } from "./screenshot-policy";
  * 超时语义：fromSurface=true 挂住时按 timeoutMs 放弃并降级；被放弃的请求会从
  * pending 表移除，迟到的帧只记日志，绝不串到下一次截图。
  */
-export async function captureScreenshot(
+export function captureScreenshot(
+  tabId: number,
+  format = "png",
+  opts: { timeoutMs?: number } = {}
+): Promise<ScreenshotResult> {
+  // 同一 tab 串行：第二个调用会等第一个结束（超时/降级完成）后再判断冷却，
+  // 不会在同一个超时窗口里再发一个 fromSurface 请求。
+  return withTabCaptureLock(tabId, () => captureScreenshotUnlocked(tabId, format, opts));
+}
+
+async function captureScreenshotUnlocked(
   tabId: number,
   format = "png",
   opts: { timeoutMs?: number } = {}
 ): Promise<ScreenshotResult> {
   await ensureAttach(tabId);
   const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 8000;
+  const cooldown = surfaceCooldownFor(tabId);
+  const skipSurface = cooldown.shouldSkip();
   const flights = new Map<CapturePhase, ScreenshotFlight>();
   const hooks: CaptureHooks = {
     onAttemptStart(phase) {
@@ -157,9 +235,14 @@ export async function captureScreenshot(
         flights.delete(phase);
       }
       if (outcome === "abandoned") abandonedAttempts += 1;
+      // 合成器路径真的返回了（哪怕数据为空）：清掉冷却，下次重新尝试新帧。
+      if (phase === "fromSurface" && outcome === "ok") cooldown.recordSuccess();
     },
     onTimeout(info) {
-      console.warn("[cdp] 截图请求超时被放弃: tab=" + tabId + " phase=" + info.phase + " timeout=" + info.timeoutMs + "ms");
+      if (info.phase === "fromSurface") cooldown.recordTimeout();
+      console.warn("[cdp] 截图请求超时被放弃: tab=" + tabId + " phase=" + info.phase
+        + " timeout=" + info.timeoutMs + "ms"
+        + (info.phase === "fromSurface" ? " surfaceCooldown=" + cooldown.remainingMs + "ms" : ""));
     },
     onLateSettle(phase, outcome) {
       lateSettles += 1;
@@ -172,6 +255,10 @@ export async function captureScreenshot(
       format,
       timeoutMs,
       hooks,
+      {
+        skipFromSurface: skipSurface,
+        skipReason: skipSurface ? "fromSurface-cooldown-after-timeout" : undefined,
+      },
     );
   } finally {
     // 兜底：任何未走正常 settle 的异常路径都不留下 pending 记录。

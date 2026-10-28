@@ -8,7 +8,7 @@ import { commandClientId } from "./spaces";
 import { acquireForegroundLease, deleteForegroundLeasesFor } from "./foreground-lease";
 import { resolveTargetTab } from "./tab-resolver";
 import { getL0Snapshot, readTextFromTab } from "./content-bridge";
-import { scrollCaptureScreenshot, ensureAttach } from "./cdp";
+import { scrollCaptureScreenshot, ensureAttach, resetSurfaceCooldown } from "./cdp";
 import {
   captureScreenshotWithCursorPolicy,
   withCursorHiddenForCapture,
@@ -168,7 +168,12 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   open_tab: (cmd) => sp.open_tab(cmd),
   close_tab: (cmd) => sp.close_tab(cmd),
   switch_tab: (cmd) => sp.switch_tab(cmd),
-  ensure_visible: (cmd) => sp.ensure_visible(cmd),
+  ensure_visible: async (cmd) => {
+    const result = await sp.ensure_visible(cmd);
+    // 显式恢复窗口后，允许重新尝试合成器路径（冷却可能是遮挡期间留下的）。
+    resetSurfaceCooldown(result.tabId);
+    return result;
+  },
   list_spaces: (cmd) => sp.list_spaces(cmd),
 
   import_template: (cmd) => tpl.importTemplate(cmd),
