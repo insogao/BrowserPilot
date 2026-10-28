@@ -410,3 +410,25 @@ chrome.browserCli.inputOwnership.onOwnershipChanged(cb);
    （例如 HUMAN 模式下允许，AI 模式下禁止 Agent 触发）？本设计默认不纳入。
 7. **多 Agent**：同一窗口只有一个 ownership，但可能有多个 Agent 客户端。是否允许「Agent 之间
    抢同一个 space」？当前 `assertOwnership` 已经按 `ownerClientId` 拒绝，无需新增。
+
+---
+
+## 11. 主代理审核决定（2026-10-28，P3 实施前）
+
+状态：**方案通过，按以下决定进入 P3；本轮不修改 Chromium 源码。** 任何内核改动仍须由
+`base::Feature` 默认关闭，并作为编号 patch 入 `chromium/patches/`。
+
+| # | 决定 | 理由 |
+| --- | --- | --- |
+| 1 | grant **双层执行**：扩展命令层先 fail-fast；内核在 DevTools 会话上维护一次性 grant 表，并在 HUMAN/ASSIST 下二次拦截 | 只靠扩展层挡不住第三方 CDP；内核只认 token/计数，不认业务语义，复杂度可控 |
+| 2 | 默认 `pause`：人类输入照常投递，500ms 去抖后转 ASSIST；`preempt` 作为可配选项 | 人类输入永远不能被丢弃；AI 长任务不会在第一次滚轮时被打断 |
+| 3 | HUMAN 时 AI 输入命令 **fail-fast**（`INPUT_HUMAN_OWNED`），不排队 | 排队会让“人类操作之后 AI 突然继续点”不可预测；调用方重试语义清晰 |
+| 4 | **不新增**自动化来源位；沿用 `kFromDebugger` | 现有位已能区分“内核派发的人类输入”与“DevTools 注入”；新增位要改 blink 掩码与序列化，收益低 |
+| 5 | 允许人类输入自动进入 ASSIST（去抖 500ms），但 AI 必须拿 grant 才能继续输入 | 符合“人类随时可接管”；AI 停止输入而不是被强制失败，恢复路径明确 |
+| 6 | 浏览器 UI 输入（Ctrl+L/T/N、F5 等）**不纳入**页面输入权；由窗口级 ownership 的现有命令层约束 | 页面输入权只解决“谁往页面里打字/点击”；浏览器 UI 属于窗口呈现与导航，交给 space ownership |
+| 7 | 同一窗口只允许一个 owner；多 Agent 抢同一 space 继续由 `assertOwnership` 拒绝 | 不新增第二套所有权；keyed 租约已保证同目标命令互斥 |
+
+实施顺序（P3）：先扩展层 guard + `assist` 租约字段 + grant 协议；再引入内核快照 API 与
+`RenderWidgetHostImpl` 汇合点仲裁；最后接 `human_presence` 事件与审计日志。每一步都要有
+“关闭 Feature 后行为与今天完全一致”的回归证据。
+
