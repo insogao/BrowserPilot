@@ -317,7 +317,7 @@ async function main() {
     const p2b = await pageState("step2 HUMAN js rejected");
     assert.equal(p2b.jsRuns, 0, "HUMAN 模式下 js 仍在页面执行");
     // HUMAN 下不能靠 grant 绕过
-    await expectCode(call("grant_input", { actions: 1 }), "INPUT_HUMAN_OWNED", "HUMAN grant_input");
+    await expectCode(call("grant_input", { actions: 1, tabId: 1 }, INTERNAL), "INPUT_HUMAN_OWNED", "HUMAN grant_input");
     console.log("PASS input-ownership-browser: HUMAN rejects clicks/js/grant without touching the page");
 
     // ---------------- 3) claim_space → AI；human_presence → ASSIST ----------------
@@ -329,6 +329,11 @@ async function main() {
       "INPUT_PRESENCE_FORBIDDEN",
       "普通 Agent 直接 human_presence",
     );
+    await expectCode(
+      call("human_presence", { source: "test", internal: true }),
+      "INPUT_PRESENCE_FORBIDDEN",
+      "owner Agent 加 internal:true 也不能伪造 human_presence",
+    );
     const presence = await call("human_presence", { tabId: 1, source: "kernel:mouse" }, INTERNAL);
     assert.equal(presence.scheduled, true);
     assert.equal(presence.debounceMs, 500);
@@ -337,12 +342,17 @@ async function main() {
     assert.equal(s3.mode, "assist", "human_presence 去抖后没有进入 ASSIST");
     assert.ok(typeof s3.assistSince === "number");
     await expectCode(call("click", { selector: "#target", cursor: false }), "INPUT_ASSIST_REQUIRES_GRANT", "ASSIST 无 grant");
+    await expectCode(
+      call("grant_input", { actions: 1 }),
+      "INPUT_GRANT_FORBIDDEN",
+      "ASSIST 下 Agent 不能自行发放 grant",
+    );
     const p3 = await pageState("step3 ASSIST click without grant");
     assert.equal(p3.clicks, 1, "ASSIST 无 grant 时页面仍被点击");
     console.log("PASS input-ownership-browser: human_presence debounces into ASSIST and blocks AI input");
 
     // ---------------- 4) grant_input actions:1 → 第一次成功、第二次被拒 ----------------
-    const granted = await call("grant_input", { actions: 1, ttlMs: 5000 });
+    const granted = await call("grant_input", { actions: 1, ttlMs: 5000, tabId: 1 }, INTERNAL);
     assert.equal(granted.mode, "assist");
     assert.equal(granted.grant.actions, 1);
     assert.match(granted.grant.token, /…$/, "grant token 必须截断返回");
@@ -358,7 +368,7 @@ async function main() {
     console.log("PASS input-ownership-browser: one grant action delivers exactly one real click");
 
     // ---------------- 5) grant 过期后被拒 ----------------
-    const shortGrant = await call("grant_input", { actions: 2, ttlMs: 120 });
+    const shortGrant = await call("grant_input", { actions: 2, ttlMs: 120, tabId: 1 }, INTERNAL);
     assert.equal(shortGrant.grant.actions, 2);
     await sleep(400);
     const expiredError = await expectCode(

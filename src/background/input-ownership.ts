@@ -34,6 +34,7 @@ export type InputOwnershipErrorCode =
   | "INPUT_ASSIST_REQUIRES_GRANT"
   | "INPUT_GRANT_INVALID"
   | "INPUT_GRANT_NOT_IN_ASSIST"
+  | "INPUT_GRANT_FORBIDDEN"
   | "INPUT_PRESENCE_FORBIDDEN";
 
 export class InputOwnershipError extends Error {
@@ -441,13 +442,26 @@ function parseGrantArgs(args: Record<string, unknown>): { actions: number; ttlMs
 
 /**
  * grant_input：在 ASSIST 下发放一次性 grant。
- * 仅 space owner 或用户入口可发；HUMAN 下不能发放（grant 不能绕过 ownership，必须先 claim_space）；
+ * 仅用户入口可发；HUMAN 下不能发放（grant 不能绕过 ownership，必须先 claim_space）；
  * AI 下无意义（返回 INPUT_GRANT_NOT_IN_ASSIST）。
+ *
+ * 不能让 owner Agent 自己发放：grant 是“人类允许 AI 这一次输入”的凭据，
+ * 若 AI 能自证，ASSIST 就失去意义。
  */
 export async function grantInputCommand(cmd: Command): Promise<GrantInputResult> {
   const space = await requireSpace(cmd);
   const clientId = commandClientId(cmd);
   assertCallerMayAdminister(space, clientId);
+  if (clientId !== INTERNAL_CLIENT_ID) {
+    audit("input_command_rejected", {
+      spaceId: space.spaceId, clientId, command: "grant_input", code: "INPUT_GRANT_FORBIDDEN", reason: "agent-self-grant",
+    });
+    throw new InputOwnershipError(
+      "INPUT_GRANT_FORBIDDEN",
+      "grant_input 只能由用户入口（" + INTERNAL_CLIENT_ID + "）发放；Agent 不能自行授权覆盖人类的 ASSIST 输入权",
+      { spaceId: space.spaceId, clientId },
+    );
+  }
   if (space.ownership === "user") {
     audit("input_command_rejected", {
       spaceId: space.spaceId, clientId, command: "grant_input", mode: "human", code: "INPUT_HUMAN_OWNED", reason: "ownership-user",
@@ -569,10 +583,10 @@ export async function humanPresenceCommand(cmd: Command): Promise<HumanPresenceR
   const clientId = commandClientId(cmd);
   assertCallerMayAdminister(space, clientId);
   const args = cmd.args ?? {};
-  if (clientId !== INTERNAL_CLIENT_ID && args.internal !== true) {
+  if (clientId !== INTERNAL_CLIENT_ID) {
     throw new InputOwnershipError(
       "INPUT_PRESENCE_FORBIDDEN",
-      "human_presence 只接受用户入口（" + INTERNAL_CLIENT_ID + "）或显式 internal:true 的内核/测试调用",
+      "human_presence 只接受用户入口（" + INTERNAL_CLIENT_ID + "）或内核桥；Agent 不能伪造人类在场",
       { spaceId: space.spaceId, clientId },
     );
   }

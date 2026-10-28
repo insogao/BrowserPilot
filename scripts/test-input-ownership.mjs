@@ -224,22 +224,35 @@ export async function runInputOwnershipTests() {
     // 4. grant_input 参数校验 / 授权 / 摘要
     // ------------------------------------------------------------------
     await setState(makeState({ "space-a": { ownership: "user" } }));
-    await expectCode(io.grantInputCommand(cmd("grant_input", { actions: 1 })), "INPUT_HUMAN_OWNED", "HUMAN 下 grant_input");
+    await expectCode(
+      io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions: 1 }, { _clientId: "browserpilot-internal" })),
+      "INPUT_HUMAN_OWNED",
+      "HUMAN 下 grant_input",
+    );
 
     await setState(makeState());
-    await expectCode(io.grantInputCommand(cmd("grant_input", { actions: 1 })), "INPUT_GRANT_NOT_IN_ASSIST", "AI 下 grant_input");
+    await expectCode(
+      io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions: 1 }, { _clientId: "browserpilot-internal" })),
+      "INPUT_GRANT_NOT_IN_ASSIST",
+      "AI 下 grant_input",
+    );
 
     await setState(makeState({ "space-a": { assist: { since: Date.now() } } }));
+    await expectCode(
+      io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions: 1 })),
+      "INPUT_GRANT_FORBIDDEN",
+      "owner Agent 不得自行发放 grant（否则 ASSIST 自证）",
+    );
     for (const actions of [0, -1, 1.5, "3", NaN]) {
       await expectCode(
-        io.grantInputCommand(cmd("grant_input", { actions })),
+        io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions }, { _clientId: "browserpilot-internal" })),
         "INPUT_GRANT_INVALID",
         "非法 actions=" + String(actions),
       );
     }
     for (const ttlMs of [0, -5, 1.5, 700_000]) {
       await expectCode(
-        io.grantInputCommand(cmd("grant_input", { actions: 1, ttlMs })),
+        io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions: 1, ttlMs }, { _clientId: "browserpilot-internal" })),
         "INPUT_GRANT_INVALID",
         "非法 ttlMs=" + String(ttlMs),
       );
@@ -250,7 +263,9 @@ export async function runInputOwnershipTests() {
       "非 owner 发放 grant",
     );
 
-    const issued = await io.grantInputCommand(cmd("grant_input", { actions: 2, ttlMs: 5000 }));
+    const issued = await io.grantInputCommand(
+      cmd("grant_input", { spaceId: "space-a", actions: 2, ttlMs: 5000 }, { _clientId: "browserpilot-internal" }),
+    );
     assert.equal(issued.mode, "assist");
     assert.equal(issued.grant.actions, 2);
     assert.ok(issued.grant.expiresAt > Date.now());
@@ -277,7 +292,7 @@ export async function runInputOwnershipTests() {
     assert.equal(consumedOnce.grantRemaining, 2);
     const statusAfter = await io.inputStatusCommand(cmd("input_status"));
     assert.equal(statusAfter.grantActionsRemaining, 2);
-    console.log("PASS input-ownership: grant_input validates counts/TTL, is owner-only, and returns a truncated token");
+    console.log("PASS input-ownership: grant_input validates counts/TTL, is user-entry-only, and returns a truncated token");
 
     // ------------------------------------------------------------------
     // 5. ownership 变更清空 assist/grant（claim_space 是既有迁移，不是新状态机）
@@ -325,7 +340,9 @@ export async function runInputOwnershipTests() {
     assert.equal(io.inputModeForSpace(assistSpace), "assist");
     assert.ok(audit("input_assist_entered").some((e) => e.args.reason === "kernel:mouse"));
 
-    await io.grantInputCommand(cmd("grant_input", { actions: 5, ttlMs: 5000 }));
+    await io.grantInputCommand(
+      cmd("grant_input", { spaceId: "space-a", actions: 5, ttlMs: 5000 }, { _clientId: "browserpilot-internal" }),
+    );
     assert.ok((await readSpace()).assist.grant, "grant 应存在");
     await io.enterAssist("space-a", { reason: "more-human-input" });
     assert.equal((await readSpace()).assist.grant, undefined, "新的人类在场必须清掉未用完的 grant（人类优先）");
@@ -349,6 +366,11 @@ export async function runInputOwnershipTests() {
       io.humanPresenceCommand(cmd("human_presence", { space: "space-a", source: "test", internal: true }, { _clientId: "agent:b" })),
       "SPACE_NOT_OWNED",
       "非 owner 即使 internal:true 也不能替别人进 ASSIST",
+    );
+    await expectCode(
+      io.humanPresenceCommand(cmd("human_presence", { space: "space-a", source: "test", internal: true })),
+      "INPUT_PRESENCE_FORBIDDEN",
+      "owner Agent 加 internal:true 也不能伪造 human_presence",
     );
 
     const scheduled = await io.humanPresenceCommand({
@@ -437,14 +459,18 @@ export async function runInputOwnershipTests() {
       "外部 Agent 的拒绝不得消耗 owner 的 grant（防 DoS）",
     );
     await expectCode(
-      io.grantInputCommand(cmd("grant_input", { tabId: 22, actions: 1 })),
+      io.grantInputCommand(
+        cmd("grant_input", { tabId: 22, actions: 1 }, { _clientId: "browserpilot-internal" }),
+      ),
       "INPUT_HUMAN_OWNED",
       "显式 tabId 的 grant_input 命中自己的 HUMAN 空间",
     );
 
     await setState(makeState({ "space-a": { assist: { since: Date.now() } } }));
     await expectCode(
-      io.grantInputCommand(cmd("grant_input", { tabId: 999, actions: 1 })),
+      io.grantInputCommand(
+        cmd("grant_input", { tabId: 999, spaceId: "space-a", actions: 1 }, { _clientId: "browserpilot-internal" }),
+      ),
       "TAB_OUTSIDE_SPACE",
       "tabId 不属于该 space",
     );

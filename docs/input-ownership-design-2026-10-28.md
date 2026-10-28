@@ -547,14 +547,16 @@ space 的输入模式（防跨 Agent DoS/探测）。
 - ownership 变更 → `patchSpace` 清空整个 `assist`（含 grant）。
 - 新的 `human_presence` / `enterAssist` → 清掉未用完的 grant（人类优先，AI 必须重新申请）。
 - `grant_input` 只在 ASSIST 下有意义：HUMAN → `INPUT_HUMAN_OWNED`（grant 不能绕过
-  ownership，必须先 `claim_space`）；AI → `INPUT_GRANT_NOT_IN_ASSIST`。仅 space owner 或
-  用户入口（`browserpilot-internal`）可发；非 owner → `SPACE_NOT_OWNED`。
+  ownership，必须先 `claim_space`）；AI → `INPUT_GRANT_NOT_IN_ASSIST`。
+  **仅用户入口（`browserpilot-internal`）可发**；非 owner → `SPACE_NOT_OWNED`；
+  owner Agent 自己调用 → `INPUT_GRANT_FORBIDDEN`。grant 是“人类允许 AI 这一次输入”的
+  凭据，如果 Agent 能自证，ASSIST 就失去意义。
 
 ### 12.6 `human_presence`（内核事件/测试入口）
 
-- 授权：`_clientId === "browserpilot-internal"`（popup/用户入口）或显式 `args.internal === true`
-  （内核事件桥/测试）。非 owner 的 Agent 仍被 `SPACE_NOT_OWNED` 拦住，所以任何 Agent 最多
-  只能让自己的空间进入 ASSIST，不能替别人接管。
+- 授权：**只接受用户入口（`browserpilot-internal`）或内核事件桥**。`args.internal === true`
+  不再构成旁路；owner Agent 即使带 `internal:true` 也会得到 `INPUT_PRESENCE_FORBIDDEN`。
+  非 owner 的 Agent 先被 `SPACE_NOT_OWNED` 拦住，不能替别人进入 ASSIST。
 - 目标解析：用户入口没有 `activeSpaceIds`，因此必须显式给 `space`/`spaceId` 或 `tabId`
   （内核事件天然带 `tabId`）；否则返回 `SPACE_NOT_FOUND`。
 - 默认 trailing debounce 500ms（`args.debounceMs` 可覆盖，0–5000ms）；命令立即返回
@@ -626,8 +628,10 @@ npm run test:input-ownership:browser
 | HUMAN 下 js | `human` | `INPUT_HUMAN_OWNED` | `__jsRuns` 仍为 0 |
 | HUMAN 下 grant_input | `human` | `INPUT_HUMAN_OWNED` | — |
 | `claim_space` → `human_presence`（500ms 去抖） | `assist` | — | — |
+| owner Agent 的 `human_presence`（含 `internal:true`） | `ai` | `INPUT_PRESENCE_FORBIDDEN` | — |
 | ASSIST 无 grant click | `assist` | `INPUT_ASSIST_REQUIRES_GRANT` | **1 / "1"** |
-| `grant_input {actions:1}` 后第一次 click | `assist` | 成功 | **2 / "2"** |
+| ASSIST 下 Agent 自行 `grant_input` | `assist` | `INPUT_GRANT_FORBIDDEN` | **1 / "1"** |
+| 用户入口 `grant_input {actions:1}` 后第一次 click | `assist` | 成功 | **2 / "2"** |
 | 第二次 click | `assist` | `INPUT_ASSIST_REQUIRES_GRANT`（no-grant） | **2 / "2"** |
 | `grant_input {actions:2, ttlMs:120}` + 等待 400ms 后 click | `assist` | `INPUT_ASSIST_REQUIRES_GRANT`（expired） | **2 / "2"** |
 | `claim_space` 后 click | `ai` | 成功 | **3 / "3"** |
