@@ -62,7 +62,14 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     const text = await readTextFromTab(tabId, { ref, selector });
     return { tabId, text };
   },
-  screenshot: async (cmd) => { const tabId = await resolveTargetTab(cmd); const format = ((cmd.args ?? {}) as { format?: string }).format ?? "png"; const base64 = await captureScreenshot(tabId, format); return { tabId, format, base64 }; },
+  // 截图不改变窗口可见状态/焦点/活动标签；元数据里带上耗时、取帧路径与新鲜度，
+  // 让调用方自己决定能不能把这张图当作实时画面。
+  screenshot: async (cmd) => {
+    const tabId = await resolveTargetTab(cmd);
+    const format = ((cmd.args ?? {}) as { format?: string }).format ?? "png";
+    const shot = await captureScreenshot(tabId, format);
+    return { tabId, format, base64: shot.base64, screenshot: shot.meta };
+  },
   scroll_screenshot: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
     const { pages, gap, format } = (cmd.args ?? {}) as { pages?: number; gap?: number; format?: string };

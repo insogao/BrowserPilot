@@ -367,7 +367,7 @@ await assert.rejects(
 );
 const nestedLease = await foreground.acquireForegroundLease({
   type: "command",
-  name: "snapshot",
+  name: "ensure_visible",
   requestId: "lease-a:nested",
   _clientId: "agent:a",
   _foregroundLeaseToken: outer._foregroundLeaseToken,
@@ -377,6 +377,21 @@ await outerLease.release();
 const afterRelease = await foreground.acquireForegroundLease({ type: "command", name: "open_space", requestId: "lease-b2", _clientId: "agent:b" });
 await afterRelease.release();
 console.log("PASS core: foreground lease is exclusive, reentrant for templates, self-releasing, and distinguishes self-concurrency");
+
+// 后台能力不得进入前台租约：否则不同窗口上的两个 Agent 会被进程级租约串行化。
+{
+  const background = ["snapshot", "readText", "screenshot", "scroll_screenshot", "getElementInfo",
+    "click", "type", "press", "drag", "wheel", "js", "pageInfo", "tab_cdp_call",
+    "open_tab", "switch_tab", "close_tab", "download_image", "download_resource",
+    "waitForSelector", "waitForTimeout", "waitForURL"];
+  for (const name of background) {
+    const a = await foreground.acquireForegroundLease({ type: "command", name, requestId: "bg-a", _clientId: "agent:x" });
+    const b = await foreground.acquireForegroundLease({ type: "command", name, requestId: "bg-b", _clientId: "agent:y" });
+    assert.equal(a, undefined, name + " must not take a foreground lease (agent A)");
+    assert.equal(b, undefined, name + " must not take a foreground lease (agent B) — two agents must not serialise");
+  }
+  console.log("PASS core: background commands take no foreground lease, so two agents work in parallel");
+}
 
 const boardHtml = fs.readFileSync("dist/onboarding/index.html", "utf8");
 for (const id of ["template-list", "install-content", "install-github", "load-catalog", "catalog-template", "template-search", "check-updates", "tag-filter", "updates-panel", "updates-list", "install-selected", "close-updates"]) {
@@ -661,4 +676,59 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
 
   delete globalThis.chrome.browserCli;
   console.log("PASS core: host capability probe degrades safely and never trusts UA or product name");
+}
+
+// ---------- 截图策略：超时 / 降级 / 新鲜度（P0 后台截图链路） ----------
+{
+  const policy = await importTs("src/background/screenshot-policy.ts");
+  const T = 60;
+
+  // 1. 正常路径：合成器给帧，必须标记为新鲜。
+  const fresh = await policy.captureWithFallback(async (params) => {
+    assert.equal(params.fromSurface, true, "第一条路径必须尝试 fromSurface=true");
+    return { data: "FRESH-PNG" };
+  }, "png", T);
+  assert.equal(fresh.base64, "FRESH-PNG");
+  assert.equal(fresh.meta.possiblyStale, false, "合成器帧必须标记为新鲜");
+  assert.equal(fresh.meta.fromSurface, true);
+
+  // 2. 遮挡场景：fromSurface=true 永不返回 -> 必须超时并降级，且明确标注可能过期。
+  let seen = [];
+  const degraded = await policy.captureWithFallback(async (params) => {
+    seen.push(params.fromSurface);
+    if (params.fromSurface === true) return new Promise(() => {}); // 永不 resolve
+    return { data: "CACHED-PNG" };
+  }, "png", T);
+  assert.equal(degraded.base64, "CACHED-PNG");
+  assert.equal(degraded.meta.fromSurface, false, "超时后必须降级到浏览器进程快照");
+  assert.equal(degraded.meta.possiblyStale, true, "降级得到的图必须标记 possiblyStale");
+  assert.match(String(degraded.meta.reason), /60ms|没有返回/, "必须记录降级原因");
+  assert.deepEqual(seen, [true, false], "两条路径都必须被尝试");
+
+  // 3. 两条路径都失败 -> 抛错（带首次失败原因），不得返回空图。
+  await assert.rejects(
+    () => policy.captureWithFallback(async (params) => {
+      if (params.fromSurface === true) return new Promise(() => {});
+      throw new Error("snapshot unavailable");
+    }, "png", T),
+    /snapshot unavailable|两种路径/,
+    "both paths failing must throw, never return an empty image",
+  );
+
+  // 4. 返回空数据同样视为失败（不能把空串当作成功画面）。
+  await assert.rejects(
+    () => policy.captureWithFallback(async () => ({ data: "" }), "png", T),
+    /空数据|两种路径/,
+  );
+
+  // 5. 源码守卫：截图路径不得再调用 ensureTabVisible（会把窗口拉到前台）。
+  const cdpSource = fs.readFileSync("src/background/cdp.ts", "utf8");
+  const activeLines = cdpSource
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("*") && !line.trim().startsWith("//"));
+  assert.ok(
+    !activeLines.some((line) => line.includes("ensureTabVisible(")),
+    "captureScreenshot must never call ensureTabVisible",
+  );
+  console.log("PASS core: screenshots time out, degrade with an explicit stale flag, and never touch window focus");
 }

@@ -5,13 +5,15 @@ import { commandClientId } from "./spaces";
 const LEASE_TTL_MS = 90_000;
 const RENEW_MS = 30_000;
 
+// 只覆盖"会改变窗口展示状态"的命令。后台能力（DOM 读写、点击/输入、截图、求值、
+// 等待、CDP 透传、下载）刻意不在其中：它们不需要前台，若也去抢一个进程级租约，
+// 不同窗口上的两个 Agent 会被无谓地串行化——那正是"多 Agent 并行"要避免的。
+//
+// 同一窗口内的输入冲突不靠这个租约解决：space 归属已经保证一个 space 只有一个
+// owner；人类与 AI 争同一 Tab 的控制权由插件遮罩 + 后续内核侧输入仲裁负责。
 const FOREGROUND_COMMANDS = new Set<CommandName>([
-  "snapshot", "readText", "screenshot", "scroll_screenshot", "getElementInfo",
-  "click", "dblclick", "hover", "drag", "wheel", "down", "up", "press", "type", "fill",
-  "selectOption", "check", "uncheck", "setChecked", "js", "waitForURL", "waitForSelector",
-  "waitForTimeout", "pageInfo", "tab_cdp_call", "open_tab", "close_tab", "switch_tab",
-  "ensure_visible", "open_space", "close_space", "complete_space", "run_template",
-  "start_mask", "stop_mask", "download_image", "download_resource",
+  "ensure_visible", "open_space", "close_space", "complete_space", "handoff_space",
+  "run_template", "start_mask", "stop_mask",
 ]);
 
 export class ForegroundLeaseError extends Error {

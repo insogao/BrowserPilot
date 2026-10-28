@@ -1,6 +1,6 @@
 // CDP 辅助：页面求值 / ref->坐标 / glob 匹配 / 睡眠 / 受信输入的重用片段（M5）。
 import { attach, isAttached, sendCommand } from "./debugger-bridge";
-import { ensureTabVisible } from "./spaces";
+import { captureWithFallback, type ScreenshotResult } from "./screenshot-policy";
 
 export async function ensureAttach(tabId: number): Promise<void> {
   if (!isAttached(tabId)) await attach(tabId);
@@ -69,17 +69,32 @@ export async function resolveCoord(
   return out && typeof out.x === "number" && typeof out.y === "number" ? { x: out.x, y: out.y } : null;
 }
 
-/** Page.captureScreenshot：视口截图，返回 base64（PNG）。 */
-export async function captureScreenshot(tabId: number, format = "png"): Promise<string> {
+/** @see screenshot-policy.ts —— 策略（超时/降级/新鲜度）与传输分离，便于离线测试。 */
+export type { ScreenshotMeta, ScreenshotResult } from "./screenshot-policy";
+
+/**
+ * Page.captureScreenshot：视口截图。
+ *
+ * 刻意**不**调用 ensureTabVisible：截图不允许改变窗口可见状态、焦点或用户当前
+ * 活动标签。隐藏/最小化窗口本身就能取帧（实测 1–4 秒）。
+ */
+export async function captureScreenshot(
+  tabId: number,
+  format = "png",
+  opts: { timeoutMs?: number } = {}
+): Promise<ScreenshotResult> {
   await ensureAttach(tabId);
-  await ensureTabVisible(tabId).catch(() => {});
-  const res = (await sendCommand(tabId, "Page.captureScreenshot", { format })) as { data?: string };
-  return res.data ?? "";
+  const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 8000;
+  return captureWithFallback(
+    (params) => sendCommand(tabId, "Page.captureScreenshot", params) as Promise<{ data?: string }>,
+    format,
+    timeoutMs,
+  );
 }
 
 /**
  * 滚动拼接长截图（N 屏一屏屏滚、一屏屏拼）。
- * - 先把目标窗口带到前台：Chrome 对未聚焦窗口做合成节流，Page.captureScreenshot 会挂起，必须先聚焦。
+ * - 不改变窗口前台状态：不聚焦、不恢复、不切换活动标签（见 captureScreenshot 的说明）。
  * - pages：要截几屏（按视口高度计）。缺省 = 3（建议上限，长图别过长）；传 0 则整页全量；传 N 截前 N 屏。
  * - gap：每次滚动后等待毫秒，留给懒加载触发；缺省 400ms。
  * - 返回一张完整长图 base64 + 尺寸 / 屏数。
@@ -87,10 +102,8 @@ export async function captureScreenshot(tabId: number, format = "png"): Promise<
 export async function scrollCaptureScreenshot(
   tabId: number,
   opts: { pages?: number; gap?: number; format?: string } = {}
-): Promise<{ base64: string; width: number; height: number; pageCount: number; viewH: number; docH: number }> {
+): Promise<{ base64: string; width: number; height: number; pageCount: number; viewH: number; docH: number; possiblyStale: boolean }> {
   await ensureAttach(tabId);
-  // 恢复并聚焦窗口，避免最小化/后台窗口导致截图和懒加载被节流。
-  await ensureTabVisible(tabId).catch(() => {});
   const format = opts.format ?? "png";
   const gap = typeof opts.gap === "number" && opts.gap > 0 ? opts.gap : 400;
   const m = (await evalPage(
@@ -105,11 +118,13 @@ export async function scrollCaptureScreenshot(
   const want = opts.pages === undefined ? 3 : opts.pages === 0 ? fullPages : opts.pages;
   const pageCount = Math.max(1, Math.min(want, fullPages));
   const tiles: string[] = [];
+  let staleTiles = 0;
   for (let i = 0; i < pageCount; i++) {
     await evalPage(tabId, "window.scrollTo(0," + i * viewH + ")").catch(() => {});
     await sleep(gap);
-    const b64 = await captureScreenshot(tabId, format);
-    if (b64) tiles.push(b64);
+    const shot = await captureScreenshot(tabId, format);
+    if (shot.base64) tiles.push(shot.base64);
+    if (shot.meta.possiblyStale) staleTiles += 1;
   }
   if (!tiles.length) throw new Error("滚动截图失败：没有截到任何一屏");
   const stitched = await stitchTiles(tiles);
@@ -118,6 +133,8 @@ export async function scrollCaptureScreenshot(
     width: stitched.width,
     height: stitched.height,
     pageCount,
+    /** 有任一屏走了降级快照路径时为 true，调用方不得把它当作实时画面。 */
+    possiblyStale: staleTiles > 0,
     viewH,
     docH,
   };
