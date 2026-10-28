@@ -3,6 +3,16 @@
 // 幂等守卫：用 window 全局标记，避免 manifest 声明 + executeScript 注入重复注册 listener。
 import { buildL0Snapshot } from "./snapshot-l0";
 import { maskOn, maskOff, maskAllowCdp, maskBlockCdp, isMaskShowing } from "./mask";
+import {
+  getCursorState,
+  hideCursor,
+  moveCursorTo,
+  pulseCursor,
+  removeCursor,
+  setCursorHiddenForCapture,
+  showCursor,
+} from "./cursor";
+import { CURSOR_MSG, type CursorStyle } from "../shared/cursor-contract";
 
 declare global {
   interface Window {
@@ -30,6 +40,71 @@ if (!(window as Window).__BP_CONTENT__) {
       }
       // 人工接管遮罩（只在 main frame，避免 iframe 各自叠一层）。
       const top = window === window.top;
+      // 虚拟光标（插件级 AI 鼠标）：只在 main frame 画一层，坐标与 CDP Input.* 同一 CSS 像素系。
+      // 注意：这些消息**不产生任何输入**，真实点击/输入由 SW 走 CDP。
+      if (kind === CURSOR_MSG.show) {
+        if (!top) return false;
+        const style = (msg as { style?: CursorStyle }).style;
+        const at = (msg as { at?: { x?: number; y?: number } }).at;
+        sendResponse({
+          ok: true,
+          state: showCursor({
+            ...(style === "arrow" || style === "dot" ? { style } : {}),
+            ...(at && Number.isFinite(at.x) && Number.isFinite(at.y) ? { at: { x: Number(at.x), y: Number(at.y) } } : {}),
+          }),
+        });
+        return false;
+      }
+      if (kind === CURSOR_MSG.hide) {
+        if (!top) return false;
+        sendResponse({ ok: true, state: hideCursor() });
+        return false;
+      }
+      if (kind === CURSOR_MSG.remove) {
+        if (!top) return false;
+        sendResponse({ ok: true, state: removeCursor() });
+        return false;
+      }
+      if (kind === CURSOR_MSG.status) {
+        if (!top) return false;
+        sendResponse({ ok: true, state: getCursorState() });
+        return false;
+      }
+      if (kind === CURSOR_MSG.move) {
+        if (!top) return false;
+        const m = msg as { x?: number; y?: number; durationMs?: number; animate?: boolean };
+        void moveCursorTo(
+          { x: Number(m.x), y: Number(m.y) },
+          {
+            ...(typeof m.durationMs === "number" ? { durationMs: m.durationMs } : {}),
+            ...(m.animate === false ? { animate: false } : {}),
+          }
+        ).then(
+          (state) => sendResponse({ ok: true, state }),
+          (e) => sendResponse({ ok: false, error: (e as Error).message })
+        );
+        return true; // 异步响应
+      }
+      if (kind === CURSOR_MSG.pulse) {
+        if (!top) return false;
+        const p = msg as { x?: number; y?: number };
+        sendResponse({
+          ok: true,
+          state: pulseCursor(
+            Number.isFinite(p.x) && Number.isFinite(p.y) ? { x: Number(p.x), y: Number(p.y) } : undefined
+          ),
+        });
+        return false;
+      }
+      if (kind === CURSOR_MSG.captureHidden) {
+        if (!top) return false;
+        const hidden = (msg as { hidden?: boolean }).hidden === true;
+        void setCursorHiddenForCapture(hidden).then(
+          (state) => sendResponse({ ok: true, state }),
+          (e) => sendResponse({ ok: false, error: (e as Error).message })
+        );
+        return true; // 异步响应（等一帧）
+      }
       if (kind === "mask_on") {
         if (!top) return false;
         const shown = maskOn();

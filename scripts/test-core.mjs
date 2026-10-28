@@ -61,8 +61,8 @@ const maskBuild = await build({
           : args.path === "native"
             ? "export const pushEvent=()=>{};"
             : args.path === "spaces"
-              ? "export const handoffSpaceForTab=async()=>{};"
-              : "export const interruptTab=async()=>{};",
+              ? "export const handoffSpaceForTab=async()=>{};export const assertTabInCommandSpace=async()=>{};export const ensureCommandSpace=async()=>({spaceId:'stub'});"
+              : "export const interruptTab=async()=>{};export const attach=async()=>{};export const isAttached=()=>false;export const sendCommand=async()=>({});",
       }));
     },
   }],
@@ -732,3 +732,6 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   );
   console.log("PASS core: screenshots time out, degrade with an explicit stale flag, and never touch window focus");
 }
+
+// ---------- AI 虚拟鼠标（虚拟光标 overlay / 截图排除 / 清理）----------
+await import("./test-virtual-cursor.mjs");
