@@ -1,8 +1,14 @@
 // M5 动作全集：CDP Input.* 受信输入（click/type/fill/press/hover/dblclick/wheel/down/up/drag/selectOption/check/uncheck/setChecked）。
 // 目标定位：优先 ref("@N") 或 selector；也可传 {x,y} 坐标。
+//
+// 虚拟光标（插件级 AI 鼠标，见 virtual-cursor.ts）：鼠标类动作在发出 CDP 事件前，先把页面内
+// overlay 光标按同一个真实 rect 坐标移过去（纯视觉，fail-open）。**真实点击/输入仍然只由
+// 本文件的 Input.dispatchMouseEvent / dispatchKeyEvent 发出**；overlay 绝不产生输入、
+// 也绝不移动系统鼠标。传 `cursor:false` 可对单次动作关闭光标。
 import { sendCommand } from "./debugger-bridge";
 import { ensureAttach, evalPage, resolveCoord, selFrom, sleep } from "./cdp";
 import { withCdpAllow } from "./mask";
+import { moveCursorForAction, pulseClick } from "./virtual-cursor";
 
 type Args = Record<string, unknown>;
 
@@ -18,6 +24,19 @@ function pickTarget(a: Args): { x?: number; y?: number } | string | undefined {
   if (typeof a.selector === "string") return a.selector;
   if (typeof a.x === "number" && typeof a.y === "number") return { x: a.x, y: a.y };
   return undefined;
+}
+
+/** 动作前的光标移动：用真实坐标、短时长（默认 240ms）控制动作延迟；任何失败都不影响真实输入。 */
+async function cursorTo(tabId: number, at: { x: number; y: number }, a: Args): Promise<void> {
+  if (a.cursor === false) return;
+  const durationMs = typeof a.cursorDurationMs === "number" ? Number(a.cursorDurationMs) : 240;
+  await moveCursorForAction(tabId, at, { durationMs });
+}
+
+/** 动作后的点击涟漪（纯视觉，fire-and-forget）。 */
+function cursorPulse(tabId: number, at: { x: number; y: number }, a: Args): void {
+  if (a.cursor === false) return;
+  void pulseClick(tabId, at);
 }
 
 async function mouseEvent(
@@ -38,10 +57,12 @@ export async function click(tabId: number, a: Args): Promise<unknown> {
     const target = pickTarget(a);
     const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("click 无法定位目标（需 ref/selector/x,y）");
+    await cursorTo(tabId, coord, a);
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mousePressed", coord.x, coord.y, button, 1);
     await sleep(30);
     await mouseEvent(tabId, "mouseReleased", coord.x, coord.y, button, 1);
+    cursorPulse(tabId, coord, a);
     return { clicked: true, x: coord.x, y: coord.y, button };
   });
 }
@@ -52,6 +73,7 @@ export async function dblclick(tabId: number, a: Args): Promise<unknown> {
     const target = pickTarget(a);
     const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("dblclick 无法定位目标");
+    await cursorTo(tabId, coord, a);
     const button = (a.button as string) ?? "left";
     for (let i = 1; i <= 2; i++) {
       await mouseEvent(tabId, "mousePressed", coord.x, coord.y, button, i);
@@ -59,6 +81,7 @@ export async function dblclick(tabId: number, a: Args): Promise<unknown> {
       await mouseEvent(tabId, "mouseReleased", coord.x, coord.y, button, i);
       await sleep(25);
     }
+    cursorPulse(tabId, coord, a);
     return { dblClicked: true, x: coord.x, y: coord.y };
   });
 }
@@ -69,6 +92,7 @@ export async function hover(tabId: number, a: Args): Promise<unknown> {
     const target = pickTarget(a);
     const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("hover 无法定位目标");
+    await cursorTo(tabId, coord, a);
     await mouseEvent(tabId, "mouseMoved", coord.x, coord.y, "none", 0);
     return { hovered: true, x: coord.x, y: coord.y };
   });
@@ -94,6 +118,7 @@ export async function down(tabId: number, a: Args): Promise<unknown> {
     const target = pickTarget(a);
     const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("down 无法定位目标");
+    await cursorTo(tabId, coord, a);
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mousePressed", coord.x, coord.y, button, 1);
     return { pressed: true, x: coord.x, y: coord.y, button };
@@ -106,6 +131,7 @@ export async function up(tabId: number, a: Args): Promise<unknown> {
     const target = pickTarget(a);
     const coord = await resolveCoord(tabId, target, snapshotOpts(a));
     if (!coord) throw new Error("up 无法定位目标");
+    await cursorTo(tabId, coord, a);
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mouseReleased", coord.x, coord.y, button, 1);
     return { released: true, x: coord.x, y: coord.y, button };
@@ -120,6 +146,7 @@ export async function drag(tabId: number, a: Args): Promise<unknown> {
     const fromC = await resolveCoord(tabId, from, snapshotOpts(a));
     const toC = await resolveCoord(tabId, to, snapshotOpts(a));
     if (!fromC || !toC) throw new Error("drag 需要 from/to 或 ref/x,y");
+    await cursorTo(tabId, fromC, a);
     const button = (a.button as string) ?? "left";
     await mouseEvent(tabId, "mousePressed", fromC.x, fromC.y, button, 1);
     await sleep(40);

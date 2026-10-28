@@ -61,8 +61,8 @@ const maskBuild = await build({
           : args.path === "native"
             ? "export const pushEvent=()=>{};"
             : args.path === "spaces"
-              ? "export const handoffSpaceForTab=async()=>{};"
-              : "export const interruptTab=async()=>{};",
+              ? "export const handoffSpaceForTab=async()=>{};export const assertTabInCommandSpace=async()=>{};export const ensureCommandSpace=async()=>({spaceId:'stub'});"
+              : "export const interruptTab=async()=>{};export const attach=async()=>{};export const isAttached=()=>false;export const sendCommand=async()=>({});",
       }));
     },
   }],
@@ -851,6 +851,7 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   console.log("PASS core: screenshots time out, degrade with an explicit stale flag, and never touch window focus");
 }
 
+<<<<<<< HEAD
 // ---------- 截图超时清理：pending 表清空 / 迟到帧丢弃 / 错误两段原因 ----------
 {
   const policy = await importTs("src/background/screenshot-policy.ts");
@@ -939,3 +940,6 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   assert.equal(mismatch?.line, 2, "mismatch reports the first differing line");
   console.log("PASS core: registry check normalizes CRLF/LF instead of rewriting every generated file");
 }
+
+// ---------- AI 虚拟鼠标（虚拟光标 overlay / 截图排除 / 清理）----------
+await import("./test-virtual-cursor.mjs");
