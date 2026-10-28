@@ -1,0 +1,9 @@
+{
+  "name": "com.browserpilot.browseragent",
+  "description": "BrowserPilot native messaging host",
+  "type": "stdio",
+  "path": "__HOST_EXE__",
+  "allowed_origins": [
+    "chrome-extension://__EXTENSION_ID__/"
+  ]
+}

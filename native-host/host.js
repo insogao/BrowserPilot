@@ -114,11 +114,7 @@ function handleFromExtension(msg) {
   } else if (msg.type === "command") {
     // 扩展主动问 host（如 get_profile 由扩展侧触发时不常见；此处兜底回 profile）
     if (msg.name === "get_profile" || msg.name === "get_ready_state") {
-      const profile = detectProfile();
-      writeProfileCache(profile);
-      const data = msg.name === "get_ready_state"
-        ? { port: activePort, authToken, profile }
-        : profile;
+      const data = msg.name === "get_ready_state" ? readyStatePayload() : profilePayload();
       sendToExtension({ type: "result", requestId: msg.requestId, ok: true, data });
     }
   }
@@ -198,6 +194,12 @@ function handleFromClient(msg, socket) {
   }
   if (tokenMatches(supplied)) socket.bpAuthenticated = true;
   if (socket.bpAuthenticated && !publicCommand) markAgentActivity();
+  // get_ready_state 是 host 自身的握手命令（不属于扩展命令表）：已认证客户端直接取
+  // port/authToken/profile，不必绕到 SW 再报 unknown command。
+  if (msg.name === "get_ready_state") {
+    socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: true, data: readyStatePayload() }) + "\n");
+    return;
+  }
   // 未应答请求设上限：异常客户端不能无限膨胀 pending 表。
   if (pending.size >= 512) {
     socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: false, error: "too_many_pending_requests" }) + "\n");
@@ -262,6 +264,18 @@ function writeProfileCache(profile) {
   }
 }
 
+/** profile 的唯一读取入口：探测 + 写缓存，扩展与外部客户端看到同一份结果。 */
+function profilePayload() {
+  const profile = detectProfile();
+  writeProfileCache(profile);
+  return profile;
+}
+
+/** 握手信息：端口 / capability token / profile。扩展与已认证 TCP 客户端共用。 */
+function readyStatePayload() {
+  return { port: activePort, authToken, profile: profilePayload() };
+}
+
 function cleanupSessionFile() {
   if (!sessionFile) return;
   try { fs.unlinkSync(sessionFile); } catch {}
@@ -273,6 +287,21 @@ function main() {
   startServer(DEFAULT_PORT);
   console.error("[host] com.browserpilot.browseragent up, pid=" + process.pid);
 }
+
+// Chrome 关闭 native port（SW 停止 / 浏览器退出）时 stdin 会 EOF。
+// 这时必须主动退出并清理 session 文件，否则旧的 host 会一直占着端口和 session 记录，
+// 让下一次 connectNative 的发现逻辑看到两个“活着”的 host。
+let shuttingDown = false;
+function shutdownFromPort(reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error("[host] native port closed (" + reason + "), shutting down");
+  cleanupSessionFile();
+  process.exit(0);
+}
+process.stdin.on("end", () => shutdownFromPort("stdin end"));
+process.stdin.on("close", () => shutdownFromPort("stdin close"));
+process.stdout.on("error", () => shutdownFromPort("stdout error"));
 
 process.on("exit", cleanupSessionFile);
 process.on("SIGTERM", () => { cleanupSessionFile(); process.exit(0); });
