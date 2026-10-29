@@ -148,8 +148,15 @@ managed 后台窗口上桌面的产品路径是用户显式启动
 | `#input-grant` | 剩余次数 + 过期秒数，或 `无（未授权）` |
 | `#input-kernel` | `ready` / `degraded（fail closed）` / `unsupported（…）` |
 | `#input-target` | 目标 space 名称 + `/ tab <id>` |
-| `#input-toast` | 最近一次动作结果；`data-code` = 错误码，`data-ok` = `1/0` |
+| `#input-toast` | 最近一次动作结果：成功 `data-ok="true"` + `data-code=""`；失败 `data-ok="false"` + `data-code="<错误码>"`；另有 `data-action`、`data-at`、`data-seq` |
 | `#input-hint` | 无目标 / `input_status` 读取失败时的持久提示 |
+
+按钮请求在途时带 `data-busy="true"` 并临时 disabled；响应落地后移除。自动化建议等待：
+
+```js
+await waitFor(() => document.querySelector('#input-toast').dataset.ok === "true"
+  && document.querySelector('#input-toast').dataset.code === "");
+```
 
 ### 5.2 点击流程
 
@@ -198,6 +205,44 @@ await chrome.runtime.sendMessage({ kind: "input_status", spaceId });
 从非 popup 页面（content script / options / 普通标签页）发送三个动作会得到
 `PERMISSION_DENIED`（sender 校验）。
 
+### 5.4 A1 按钮回归修复与 A3 TTL 结论（2026-10-29 追加）
+
+真实 E2E 首轮结果：A2（直接 `chrome.runtime.sendMessage`）全 PASS；A1 的 `human_presence`
+按钮 PASS，但 `#grant-input` 按钮没有产生 grant；A3 的 60s 过期项失败。根因与修复：
+
+1. **点击时读取 `#space-select` 当前值**：原实现点击使用内存里的 `selectedSpaceId`。
+   自动化只设置 `select.value`（不派发 `change`）时，内存值仍是初始化/自动选择的空间，
+   grant 发到了错误 space（通常是 popup 自己所在的 space），随后 Agent 在目标 space
+   点击自然得到 `INPUT_ASSIST_REQUIRES_GRANT`。现在 `requireSpaceId()` 每次点击都调用
+   `currentSpaceId()` 读取 `select.value`。
+2. **轮询重建 option 不再清掉选择**：`renderSpaces()` 在重建 `<option>` 前记住
+   `select.value`，重建后若仍有效立即恢复；SW 返回的 `spaces` 也改为稳定顺序
+   （`createdAt`/`spaceId`，不再按 `updatedAt` 抖动）。
+3. **按钮不再因瞬态状态置灰**：只有 `liveSpaceCount === 0`（完全没有 Task Space）才
+   disabled；存在 space 但尚未选择时点击会明确报 `SPACE_NOT_FOUND`，不会静默无响应。
+   请求在途用 `data-busy="true"` 临时禁用，完成后恢复。
+4. **完成信号**：成功后 `#input-toast[data-ok="true"][data-code=""]`，并更新
+   `#input-mode` / `#input-grant`；同时 `data-action` / `data-at` / `data-seq` 可供等待。
+5. **TTL**：`grant_input` 不传 `ttlMs`，命令层默认 60000ms；popup 的 1s 轮询只调用
+   `get_status` / `input_status`（只读），不会重新发放 grant，也不会改写 `expiresAt`。
+   新增假时钟单测：grant 后 30s 仍可用且 `assistExpiresAt` 不变；60.001s 后命令层以
+   `INPUT_ASSIST_REQUIRES_GRANT`（reason `expired`）拒绝并清空 grant。首轮 A3 失败是
+   A1 未发出 grant 的连带结果，修复按钮后应按该语义通过。
+
+Headless 验证（真实构建产物 + mock SW，不是直接消息）：
+
+```bash
+npm run test:popup-ui
+```
+
+脚本 `scripts/test-popup-ui-headless.mjs` 用 headless Chrome 加载
+`dist/popup/index.html` + `index.js`，注入 mock `chrome.runtime.sendMessage`，然后：
+设置 `select.value="space-test"`（**不派发 change**）→ 等待 1.2s 让轮询强制重建 option
+→ 点击 `#grant-input` → 断言消息 `{kind:"grant_input", spaceId:"space-test"}`、SW 返回
+`actions:1`、`#input-grant` 显示 `1 次`、`#input-mode` 显示 ASSIST、toast 成功信号与
+`data-busy` 生命周期正确；再用 `change` 事件选择另一 space 点击 `#human-presence`，
+断言目标随选择变化。
+
 ---
 
 ## 6. 变更文件
@@ -208,8 +253,10 @@ await chrome.runtime.sendMessage({ kind: "input_status", spaceId });
 | `src/background/index.ts` | `handlePopup` 新增 `input_status` / `grant_input` / `human_presence` / `ensure_visible`；popup sender 校验；目标解析；稳定错误响应；managed 显示窗口后置校验 |
 | `src/background/spaces.ts` | `ensureTabVisible` 返回 `updateError`（不再静默）；`ensure_visible` 透出；`assertOwnership` 允许 internal 用户入口操作任意 space |
 | `src/shared/types.ts` | `PopupRequest` 新增四个 kind；`PopupInputView` / `PopupSpaceOption` / `PopupErrorInfo`；`PopupStatus` 增加 input/spaces/target/inputError |
-| `src/popup/index.ts` / `index.html` | 输入权状态卡、space 下拉框、三个动作按钮、刷新按钮、错误码展示 |
-| `scripts/test-input-ownership.mjs` | 新增 §12：构造器运行时测试、JSON 标记丢失、popup 源码守卫、SW case/sender 守卫、外部通道守卫 |
+| `src/popup/index.ts` / `index.html` | 输入权状态卡、space 下拉框、三个动作按钮、刷新按钮、错误码展示；点击时读取 `select.value`；成功后 `data-ok="true"`/`data-code=""`，请求中 `data-busy` |
+| `scripts/test-input-ownership.mjs` | 新增 §12：构造器运行时测试、JSON 标记丢失、60s TTL 假时钟、popup 源码守卫（点击读 DOM、稳定信号、轮询不 grant）、SW case/sender 守卫、外部通道守卫 |
+| `scripts/test-popup-ui-headless.mjs`（新） | headless Chrome 加载真实 `dist/popup` + mock SW，点击 `#grant-input` / `#human-presence` 的最小 UI 验证 |
+| `package.json` | 新增 `test:popup-ui`（build + headless UI 测试） |
 | `docs/p3-user-entry-2026-10-29.md`（新） | 本文 |
 
 未修改（按边界要求）：`cdp.ts`、`screenshot-policy.ts`、`virtual-cursor.ts`、`mask.ts`、
@@ -224,6 +271,7 @@ npm run typecheck
 npm run build
 npm run test:core
 npm run test:trust-boundary
+npm run test:popup-ui        # build + headless Chrome + mock SW
 ```
 
 `npm run test:core` 原始输出（节选，2026-10-29 本 worktree）：
@@ -242,6 +290,7 @@ PASS input-ownership: single ownership state machine (source guards), no new own
 PASS input-ownership: user identity is a process-local marker; wire fields cannot forge it
 PASS input-ownership: source guards keep identity fail-closed (no field-based fallback)
 PASS input-ownership: popup entry builds fixed, internally marked commands (grant/presence/show)
+PASS input-ownership: popup grant TTL is 60s and status polling never renews it
 PASS input-ownership: popup source guards (no forgeable fields, fixed actions, popup-only sender)
 ...
 PASS input-ownership-api: kernel human_presence enters ASSIST through the internal bridge only
@@ -264,7 +313,35 @@ PASS trust-boundary: real host assigns `agent:<id>` server-side and strips every
 PASS trust-boundary: 外部客户端无法伪造 browserpilot-internal；grant_input/human_presence 全部被拒；用户入口仍可用
 ```
 
-未运行真实浏览器 E2E（按任务分工由 L 的 harness 完成）；本次没有启动任何 Chromium 进程。
+`npm run test:popup-ui` 原始输出（节选；headless Chrome + mock SW）：
+
+```
+popup-ui-headless raw: {
+  "checks": {
+    "options": true,
+    "autoSelected": true,
+    "valueSurvivedPoll": true,
+    "enabled": true,
+    "busySet": true,
+    "toastOk": true,
+    "toastCodeEmpty": true,
+    "toastAction": "grant_input",
+    "busyCleared": true,
+    "mode": "ASSIST（人类在场）",
+    "grant": "1 次，60s 后过期",
+    "grantMessage": {"msg":{"kind":"grant_input","spaceId":"space-test"}, ...},
+    "senderIsPopup": true,
+    "presenceOk": true,
+    "presenceSpace": "space-auto"
+  },
+  "pass": true
+}
+PASS popup-ui-headless: select.value + #grant-input sends the selected space, SW actions:1, UI signal stable
+PASS popup-ui-headless: change event + #human-presence follows the new selection
+```
+
+未运行真实 Browser CLI / 内核 E2E（按任务分工由 L 的 harness 完成）；headless UI 测试使用
+独立临时 `--user-data-dir`，不加载用户真实 profile、不显示窗口、不触碰注册表。
 
 ---
 
@@ -283,11 +360,13 @@ PASS trust-boundary: 外部客户端无法伪造 browserpilot-internal；grant_i
    space 很多时有少量开销；`input_status` 直接读状态、不 dispatch，避免每秒续期遮罩。
 5. **目标自动回退**：popup 独占一个只有扩展页面的 space 时，默认目标会回退到最近更新且
    含真实页面标签的 live space；多 space 自动化必须显式设置 `#space-select`，否则可能
-   选到非预期空间。
-6. **没有真实浏览器验证**：按钮 DOM/消息协议已按 L 的现有 popup 自动化方式设计，但点击
-   链路需要 L 在真实 harness 里确认（尤其是 popup 作为标签页打开时的 sender/target 解析）。
+   选到非预期空间。点击时始终以 `select.value` 为准，但 option 尚未加载时点击仍会得到
+   `SPACE_NOT_FOUND`（需先等 `option[value]` 出现）。
+6. **headless 测试使用 mock SW，不是真实 SW**：它验证 popup UI 接线（选择、点击、信号、
+   目标透传），真实 SW 的命令层语义由 `test:core` 覆盖；真实 Browser CLI 链路仍需 L 的
+   harness 复跑 A1/A2/A3。
 7. **grant TTL 固定为命令层默认 60s**：popup 不提供 TTL/次数输入，避免用户误放大授权；
-   若产品需要可配置，应在 UI 上显式限制上限。
+   若产品需要可配置，应在 UI 上显式限制上限。轮询只读，不会续期（单测用假时钟锁定）。
 8. **`human_presence` 使用 `immediate:true`**：显式点击不需要 500ms 去抖；内核事件桥仍
    走去抖路径。
 9. **内部身份在 `assertOwnership` 的放行面**：用户入口现在可以操作任意 space 的

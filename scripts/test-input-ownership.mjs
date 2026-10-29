@@ -712,7 +712,46 @@ export async function runInputOwnershipTests() {
     );
     console.log("PASS input-ownership: popup entry builds fixed, internally marked commands (grant/presence/show)");
 
-    // 12.3 源码守卫：popup 不读身份字段；SW 三个 case 都走构造器；外部通道无入口。
+    // 12.3 60s TTL：popup 不传 ttlMs → 命令层默认 60000；轮询/只读状态不得续期。
+    // 用假时钟把 60s 压缩到毫秒级，断言真实命令层（不是测试替身）的过期语义。
+    const realDateNow = Date.now;
+    let fakeNow = realDateNow();
+    Date.now = () => fakeNow;
+    try {
+      await setState(makeState({ "space-a": { assist: { since: fakeNow } } }));
+      const issuedAt = fakeNow;
+      const popupTtlGrant = await io.grantInputCommand(
+        io.buildPopupInputCommand("grant_input", { spaceId: "space-a", tabId: 11 }),
+      );
+      assert.equal(popupTtlGrant.grant.actions, 1);
+      assert.equal(popupTtlGrant.grant.expiresAt - issuedAt, 60_000,
+        "popup grant 的默认 TTL 必须是 60000ms");
+
+      // 模拟 popup 每秒轮询：input_status 只读，不得改变 expiresAt/剩余次数。
+      await io.inputStatusCommand(io.buildPopupStatusCommand({ spaceId: "space-a", tabId: 11 }));
+      fakeNow += 30_000;
+      const midpoint = await io.inputStatusCommand(io.buildPopupStatusCommand({ spaceId: "space-a", tabId: 11 }));
+      assert.equal(midpoint.grantActionsRemaining, 1, "30s 时 grant 仍应可用");
+      assert.equal(midpoint.assistExpiresAt, popupTtlGrant.grant.expiresAt,
+        "input_status 轮询不得刷新 grant 过期时间");
+      assert.equal((await readSpace()).assist.grant.expiresAt, popupTtlGrant.grant.expiresAt,
+        "状态存储里的 expiresAt 不得被轮询改写");
+
+      fakeNow += 30_001;
+      const expiredGrant = await expectCode(
+        io.guardInputCommand(cmd("click", { selector: "#x", cursor: false })),
+        "INPUT_ASSIST_REQUIRES_GRANT",
+        "popup grant 60s 后过期",
+      );
+      assert.equal(expiredGrant.detail.reason, "expired", "过期必须报 reason=expired");
+      assert.equal((await readSpace()).assist.grant, undefined, "过期 grant 必须被清空");
+      assert.equal((await readSpace()).assist.since > 0, true, "过期只清 grant，保留 ASSIST 租约");
+    } finally {
+      Date.now = realDateNow;
+    }
+    console.log("PASS input-ownership: popup grant TTL is 60s and status polling never renews it");
+
+    // 12.4 源码守卫：popup 不读身份字段；SW 三个 case 都走构造器；外部通道无入口。
     const popupTsSource = fs.readFileSync("src/popup/index.ts", "utf8");
     // 只检查可执行代码：注释里出现“_clientId”是在解释“不使用它”。
     const popupTsCode = popupTsSource
@@ -728,6 +767,25 @@ export async function runInputOwnershipTests() {
     for (const kind of ["grant_input", "human_presence", "ensure_visible"]) {
       assert.match(popupTsCode, new RegExp('kind: "' + kind + '"'), "popup 缺少动作 " + kind);
     }
+    // A1 回归守卫：点击时必须读取下拉框当前值，不能只用初始化时的 selectedSpaceId。
+    assert.match(popupTsCode, /function currentSpaceId\(\)[\s\S]*?select\.value/,
+      "popup 必须从 #space-select 读取当前值");
+    assert.match(popupTsCode, /function requireSpaceId\(\)[\s\S]*?currentSpaceId\(\)/,
+      "三个动作必须通过 currentSpaceId() 取目标");
+    assert.match(popupTsCode, /function updateActionButtons\(\)[\s\S]*?liveSpaceCount === 0/,
+      "按钮只能在完全没有 Task Space 时禁用（不能因瞬态 selectedSpaceId 置灰）");
+    assert.match(popupTsCode, /send<GrantResponse>\(\{ kind: "grant_input", spaceId \}\)/,
+      "grant 按钮必须发送当前 spaceId");
+    // 自动化等待信号：成功 toast 的 data-ok/data-code + 按钮 data-busy 生命周期。
+    assert.match(popupTsCode, /el\.dataset\.ok = "true"/);
+    assert.match(popupTsCode, /el\.dataset\.code = ""/);
+    assert.match(popupTsCode, /button\.dataset\.busy = "true"/);
+    assert.match(popupTsCode, /delete button\.dataset\.busy/);
+    // 轮询只刷新状态，绝不自动 grant / 续期。
+    assert.match(popupTsCode, /setInterval\(\(\) => void refresh\(\)/,
+      "1s 轮询只能调用 refresh（get_status）");
+    assert.doesNotMatch(popupTsCode, /setInterval\([^;]{0,160}grant_input/,
+      "轮询不得自动发送 grant_input");
     const popupHtml = fs.readFileSync("src/popup/index.html", "utf8");
     for (const id of [
       "space-select", "human-presence", "grant-input", "show-window", "input-refresh",

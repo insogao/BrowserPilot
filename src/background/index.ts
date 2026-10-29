@@ -277,15 +277,19 @@ async function buildPopupStatus(requestedSpaceId?: string): Promise<PopupStatus>
   const hostReady = isHostConnected() && typeof state.hostPort === "number" && Number.isFinite(state.hostPort);
   const connected = !!state.agentActive;
   const live = await listLiveSpaces();
-  const spaces: PopupSpaceOption[] = live.map((space) => ({
-    spaceId: space.spaceId,
-    name: space.name,
-    windowId: space.windowId,
-    tabId: space.tabId,
-    ownership: space.ownership,
-    mode: inputModeForSpace(space),
-    updatedAt: space.updatedAt,
-  }));
+  // 下拉框顺序必须稳定（按创建时间/spaceId），不能按 updatedAt：任何输入权操作都会
+  // 更新 updatedAt，导致 option 顺序抖动、select.value 被重建清空（A1 回归）。
+  const spaces: PopupSpaceOption[] = [...live]
+    .sort((a, b) => (a.createdAt ?? 0) - (b.createdAt ?? 0) || a.spaceId.localeCompare(b.spaceId))
+    .map((space) => ({
+      spaceId: space.spaceId,
+      name: space.name,
+      windowId: space.windowId,
+      tabId: space.tabId,
+      ownership: space.ownership,
+      mode: inputModeForSpace(space),
+      updatedAt: space.updatedAt,
+    }));
   const resolved = await resolvePopupTarget(requestedSpaceId, live);
   let input: PopupInputView | null = null;
   let inputError: PopupErrorInfo | undefined;

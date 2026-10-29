@@ -26,20 +26,95 @@ const OWNERSHIP_LABELS: Record<string, string> = {
 
 let selectedSpaceId: string | undefined;
 let spacesSignature = "";
+let liveSpaceCount = 0;
+let actionSeq = 0;
 
 function toast(msg: string): void {
   $("toast").textContent = msg;
 }
 
-/** 操作结果（带稳定错误码，供自动化断言）。 */
-function actionToast(text: string, options: { code?: string; ok?: boolean } = {}): void {
+/** 操作结果（带稳定错误码与完成信号，供自动化等待）。
+ *
+ *  成功：`#input-toast[data-ok="true"][data-code=""]`，`data-at` / `data-seq` 单调递增；
+ *  失败：`data-ok="false"`，`data-code` 为稳定错误码。 */
+function actionToast(
+  text: string,
+  options: { code?: string; ok?: boolean; action?: string } = {},
+): void {
   const el = $("input-toast");
   el.textContent = text;
   el.classList.toggle("error", options.ok === false);
   el.classList.toggle("ok", options.ok === true);
-  if (options.code) el.dataset.code = options.code;
-  else delete el.dataset.code;
-  el.dataset.ok = options.ok === false ? "0" : options.ok === true ? "1" : "";
+  if (options.ok === true) {
+    // 成功时保留空字符串属性：[data-code=""] 可被 CSS 选择器匹配。
+    el.dataset.code = "";
+    el.dataset.ok = "true";
+  } else if (options.ok === false) {
+    el.dataset.code = options.code ?? "INTERNAL_ERROR";
+    el.dataset.ok = "false";
+  } else {
+    delete el.dataset.code;
+    delete el.dataset.ok;
+  }
+  if (options.action) el.dataset.action = options.action;
+  else delete el.dataset.action;
+  actionSeq += 1;
+  el.dataset.seq = String(actionSeq);
+  el.dataset.at = String(Date.now());
+}
+
+/** 当前下拉框的值优先于内存状态：自动化可能只设置 select.value 而不派发 change。 */
+function currentSpaceId(): string | undefined {
+  const select = $("space-select") as HTMLSelectElement;
+  const value = typeof select.value === "string" ? select.value.trim() : "";
+  selectedSpaceId = value || undefined;
+  return selectedSpaceId;
+}
+
+function updateActionButtons(): void {
+  // 只有“完全没有 Task Space”时才禁用。存在 space 但下拉框尚未选择时保持可点：
+  // 点击会读取 select.value，并以 SPACE_NOT_FOUND 明确报错；不能因为 1s 轮询/初始化
+  // 的瞬态 selectedSpaceId 为空就把按钮置灰（自动化点击会静默失效，A1 回归）。
+  const disabled = liveSpaceCount === 0;
+  for (const id of ["human-presence", "grant-input", "show-window"]) {
+    const button = $(id) as HTMLButtonElement;
+    // 请求在途时保持禁用，避免轮询把按钮重新打开导致双击。
+    button.disabled = disabled || button.dataset.busy === "true";
+  }
+}
+
+function setBusy(buttonId: string, busy: boolean): void {
+  const button = $(buttonId) as HTMLButtonElement;
+  if (busy) {
+    button.dataset.busy = "true";
+    button.setAttribute("aria-busy", "true");
+    button.disabled = true;
+  } else {
+    delete button.dataset.busy;
+    button.removeAttribute("aria-busy");
+    updateActionButtons();
+  }
+}
+
+async function runAction(action: string, buttonId: string, task: () => Promise<void>): Promise<void> {
+  setBusy(buttonId, true);
+  try {
+    await task();
+  } catch (e) {
+    const info = errorInfo(e);
+    actionToast(info.code + ": " + info.message, { code: info.code, ok: false, action });
+  } finally {
+    setBusy(buttonId, false);
+  }
+}
+
+function applyMode(mode: PopupInputView["mode"]): void {
+  $("input-mode").textContent = MODE_LABELS[mode] ?? mode;
+}
+
+function applyGrant(actions: number, expiresAt: number): void {
+  const seconds = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+  $("input-grant").textContent = actions + " 次，" + seconds + "s 后过期";
 }
 
 function errorInfo(error: unknown): { code: string; message: string } {
@@ -81,12 +156,16 @@ async function send<T extends object = Record<string, unknown>>(msg: PopupReques
   return response as T;
 }
 
-/** 选择 space：显式选择优先；否则用 SW 解析出的活动目标；只有一个空间时自动选中。 */
+/** 选择 space：DOM 当前值 > 内存选择 > SW 解析出的活动目标 > 唯一空间。 */
 function renderSpaces(s: PopupStatus): void {
   const spaces: PopupSpaceOption[] = s.spaces ?? [];
   const ids = spaces.map((space) => space.spaceId);
+  liveSpaceCount = ids.length;
   const signature = ids.join("|");
   const select = $("space-select") as HTMLSelectElement;
+  // 重建 option 会清空 select.value；先记住自动化/用户设置的值，重建后若仍有效就恢复。
+  // （space 的 mode/名称变化或顺序变化都会触发重建，不能因此丢掉当前选择。）
+  const domBefore = typeof select.value === "string" ? select.value.trim() : "";
   if (signature !== spacesSignature) {
     spacesSignature = signature;
     select.textContent = "";
@@ -100,7 +179,11 @@ function renderSpaces(s: PopupStatus): void {
       option.textContent = (space.name || space.spaceId) + (space.mode ? " · " + space.mode : "");
       select.appendChild(option);
     }
+    if (domBefore && ids.includes(domBefore)) select.value = domBefore;
   }
+  // 以 DOM 的当前值为准：自动化/用户可能只设置 select.value 而没有派发 change。
+  const domValue = typeof select.value === "string" ? select.value.trim() : "";
+  if (domValue && ids.includes(domValue)) selectedSpaceId = domValue;
   if (selectedSpaceId && !ids.includes(selectedSpaceId)) selectedSpaceId = undefined;
   if (!selectedSpaceId) {
     const preferred = s.target?.spaceId;
@@ -108,10 +191,7 @@ function renderSpaces(s: PopupStatus): void {
     else if (ids.length === 1) selectedSpaceId = ids[0];
   }
   select.value = selectedSpaceId ?? "";
-  const disabled = !selectedSpaceId;
-  for (const id of ["human-presence", "grant-input", "show-window"]) {
-    ($(id) as HTMLButtonElement).disabled = disabled;
-  }
+  updateActionButtons();
 }
 
 function renderInput(s: PopupStatus): void {
@@ -155,25 +235,41 @@ function renderInput(s: PopupStatus): void {
   }
 }
 
+async function fetchStatus(kind: "get_status" | "input_status"): Promise<PopupStatus> {
+  const requested = currentSpaceId();
+  try {
+    return await send<PopupStatus>({ kind, spaceId: requested });
+  } catch (e) {
+    if (!requested) throw e;
+    const info = errorInfo(e);
+    if (info.code !== "SPACE_NOT_FOUND" && info.code !== "SPACE_INACTIVE") throw e;
+    // 选中的 space 已关闭：清空选择，回退到 SW 的活动目标（不自动创建窗口）。
+    selectedSpaceId = undefined;
+    ($("space-select") as HTMLSelectElement).value = "";
+    return send<PopupStatus>({ kind });
+  }
+}
+
 async function refresh(): Promise<void> {
-  const s = await send<PopupStatus>({ kind: "get_status", spaceId: selectedSpaceId });
+  const s = await fetchStatus("get_status");
   setStatus(s);
   renderSpaces(s);
   renderInput(s);
 }
 
 async function refreshInput(): Promise<void> {
-  const s = await send<PopupStatus>({ kind: "input_status", spaceId: selectedSpaceId });
+  const s = await fetchStatus("input_status");
   setStatus(s);
   renderSpaces(s);
   renderInput(s);
 }
 
 function requireSpaceId(): string {
-  if (!selectedSpaceId) {
+  const spaceId = currentSpaceId();
+  if (!spaceId) {
     throw Object.assign(new Error("先 open_space 或选择一个 Task Space"), { code: "SPACE_NOT_FOUND" });
   }
-  return selectedSpaceId;
+  return spaceId;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,68 +329,86 @@ interface ShowResponse {
   managedMode?: boolean;
 }
 
-$("human-presence").addEventListener("click", async () => {
-  try {
-    const spaceId = requireSpaceId();
-    const result = await send<PresenceResponse>({ kind: "human_presence", spaceId });
-    const text = result.mode === "human"
-      ? "当前 mode=human（用户已接管，未改 ownership）"
-      : result.mode === "assist"
-        ? "已进入 ASSIST：Agent 输入需要你点「允许一次输入」"
-        : "当前 mode=" + result.mode;
-    actionToast(text, { ok: true });
-    await refreshInput();
-  } catch (e) {
-    const info = errorInfo(e);
-    actionToast(info.code + ": " + info.message, { code: info.code, ok: false });
-  }
+$("human-presence").addEventListener("click", () => {
+  void runAction("human_presence", "human-presence", async () => {
+    try {
+      const spaceId = requireSpaceId();
+      const result = await send<PresenceResponse>({ kind: "human_presence", spaceId });
+      applyMode(result.mode);
+      const text = result.mode === "human"
+        ? "当前 mode=human（用户已接管，未改 ownership）"
+        : result.mode === "assist"
+          ? "已进入 ASSIST：Agent 输入需要你点「允许一次输入」"
+          : "当前 mode=" + result.mode;
+      actionToast(text, { ok: true, action: "human_presence" });
+      void refreshInput().catch(() => {});
+    } catch (e) {
+      const info = errorInfo(e);
+      actionToast(info.code + ": " + info.message, { code: info.code, ok: false, action: "human_presence" });
+    }
+  });
 });
 
-$("grant-input").addEventListener("click", async () => {
-  try {
-    const spaceId = requireSpaceId();
-    const result = await send<GrantResponse>({ kind: "grant_input", spaceId });
-    const seconds = Math.max(0, Math.ceil((result.grant.expiresAt - Date.now()) / 1000));
-    actionToast("已允许 " + result.grant.actions + " 次输入（" + seconds + "s 内有效）", { ok: true });
-    await refreshInput();
-  } catch (e) {
-    const info = errorInfo(e);
-    actionToast(info.code + ": " + info.message, { code: info.code, ok: false });
-  }
+$("grant-input").addEventListener("click", () => {
+  void runAction("grant_input", "grant-input", async () => {
+    try {
+      // 点击时读取下拉框当前值：自动化可能只设置 select.value 而不派发 change，
+      // 内存里的 selectedSpaceId 可能仍是初始化/自动选择的空间。
+      const spaceId = requireSpaceId();
+      const result = await send<GrantResponse>({ kind: "grant_input", spaceId });
+      applyMode(result.mode);
+      applyGrant(result.grant.actions, result.grant.expiresAt);
+      const seconds = Math.max(0, Math.ceil((result.grant.expiresAt - Date.now()) / 1000));
+      actionToast("已允许 " + result.grant.actions + " 次输入（" + seconds + "s 内有效）", {
+        ok: true,
+        action: "grant_input",
+      });
+      // 成功信号先落地，再异步刷新状态（不要 await，避免自动化等待轮询）。
+      void refreshInput().catch(() => {});
+    } catch (e) {
+      const info = errorInfo(e);
+      actionToast(info.code + ": " + info.message, { code: info.code, ok: false, action: "grant_input" });
+    }
+  });
 });
 
-$("show-window").addEventListener("click", async () => {
-  try {
-    const spaceId = requireSpaceId();
-    const result = await send<ShowResponse>({ kind: "ensure_visible", spaceId });
-    actionToast(
-      "已请求显示窗口（state=" + (result.state ?? "-") + "，focus=" + String(result.focused === true) + "）",
-      { ok: true },
-    );
-    await refreshInput();
-  } catch (e) {
-    const info = errorInfo(e);
-    actionToast(info.code + ": " + info.message, { code: info.code, ok: false });
-  }
+$("show-window").addEventListener("click", () => {
+  void runAction("ensure_visible", "show-window", async () => {
+    try {
+      const spaceId = requireSpaceId();
+      const result = await send<ShowResponse>({ kind: "ensure_visible", spaceId });
+      actionToast(
+        "已请求显示窗口（state=" + (result.state ?? "-") + "，focus=" + String(result.focused === true) + "）",
+        { ok: true, action: "ensure_visible" },
+      );
+      void refreshInput().catch(() => {});
+    } catch (e) {
+      const info = errorInfo(e);
+      actionToast(info.code + ": " + info.message, { code: info.code, ok: false, action: "ensure_visible" });
+    }
+  });
 });
 
-$("input-refresh").addEventListener("click", async () => {
-  try {
-    await refreshInput();
-    actionToast("输入权已刷新", { ok: true });
-  } catch (e) {
-    const info = errorInfo(e);
-    actionToast(info.code + ": " + info.message, { code: info.code, ok: false });
-  }
+$("input-refresh").addEventListener("click", () => {
+  void runAction("input_status", "input-refresh", async () => {
+    try {
+      await refreshInput();
+      actionToast("输入权已刷新", { ok: true, action: "input_status" });
+    } catch (e) {
+      const info = errorInfo(e);
+      actionToast(info.code + ": " + info.message, { code: info.code, ok: false, action: "input_status" });
+    }
+  });
 });
 
 ($("space-select") as HTMLSelectElement).addEventListener("change", () => {
   const value = ($("space-select") as HTMLSelectElement).value;
   selectedSpaceId = value || undefined;
-  actionToast("已选择 Task Space: " + (selectedSpaceId ?? "未选择"));
+  updateActionButtons();
+  actionToast("已选择 Task Space: " + (selectedSpaceId ?? "未选择"), { action: "select" });
   void refresh().catch((e) => {
     const info = errorInfo(e);
-    actionToast(info.code + ": " + info.message, { code: info.code, ok: false });
+    actionToast(info.code + ": " + info.message, { code: info.code, ok: false, action: "select" });
   });
 });
 
