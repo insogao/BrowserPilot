@@ -894,7 +894,7 @@ const CASES = [
       const tabs = await ctx.ai("main", "list_tabs", {});
       const status = await ctx.inputStatus("main");
       const shot = await ctx.ai("main", "screenshot", { format: "png", tabId: ctx.spaces.main.tabId });
-      check("F3 Feature on：非输入命令（list_tabs/input_status/screenshot）仍可用", tabs.ok === true && status.mode === "ai" && shot.ok === true && String(shot.data?.base64 || "").length > 1000, JSON.stringify({ tabsOk: tabs.ok, mode: status.mode, shotBytes: String(shot.data?.base64 || "").length }));
+      check("F3 Feature on：非输入命令（list_tabs/input_status/screenshot）仍可用", tabs.ok === true && status.mode === "ai" && shot.ok === true && String(shot.data?.base64 || "").length > 1000, JSON.stringify({ tabsOk: tabs.ok, mode: status.mode, shotOk: shot.ok, shotError: String(shot.error || "").slice(0, 300), shotBytes: String(shot.data?.base64 || "").length }));
       report.notes.push(
         "风险（Feature on + 无 K API）：扩展侧 mode=ai，但内核快照默认 ASSIST 且没有 grant，" +
           "产品输入面 100% fail-fast。说明内核 API（K）与扩展 setOwnership 推送必须同批上线，否则打开 Feature 即等于禁用 AI 输入。" +
@@ -1756,7 +1756,12 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
   };
   report.sessions.push(sessionReport);
 
-  const featureFlagArgs = feature === "on" ? ["--enable-features=" + FEATURE] : [];
+  // The production input-ownership API is only visible in managed mode; the
+  // feature-on sessions therefore run the same managed presentation switch as
+  // the real product instead of faking an unmanaged enhanced host.
+  const featureFlagArgs = feature === "on"
+    ? ["--enable-features=" + FEATURE, "--browser-cli-background-presentation"]
+    : [];
   const token = runToken + "-" + feature;
   const args = [
     "--remote-debugging-port=0",
@@ -1995,10 +2000,17 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     while (Date.now() < deadline) {
       const listing = await win32.call("listWindows", { pid });
       const windows = Array.isArray(listing.windows) ? listing.windows : listing.windows ? [listing.windows] : [];
-      const hit = windows.find((w) => String(w.title || "").includes(titleNeedle) && w.visible);
+      // Managed mode creates the window hidden (background presentation).
+      // The title/rect still exist, so select it here and let moveAndSettle
+      // show it with SWP_SHOWWINDOW | SWP_NOACTIVATE; a denied show is caught
+      // by the foreground/z-order assertions instead of being silently ignored.
+      const hit = windows.find((w) => String(w.title || "").includes(titleNeedle));
       if (hit) return hit;
       await sleep(250);
     }
+    const finalList = await win32.call("listWindows", { pid });
+    const finalWindows = Array.isArray(finalList.windows) ? finalList.windows : finalList.windows ? [finalList.windows] : [];
+    console.log("[window] no hit for " + titleNeedle + "; candidates=" + JSON.stringify(finalWindows.map((w) => ({ title: String(w.title || "").slice(0, 80), visible: w.visible, cls: w.className, rect: w.rect }))));
     return null;
   }
 
@@ -2038,6 +2050,17 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     if (!hit) throw new Error("list_tabs 未找到 " + name + " 的 fixture tab: " + JSON.stringify(listing));
     ctx.spaces[key].tabId = hit.tabId;
     ctx.spaces[key].windowId = hit.windowId;
+    // Managed mode creates the window in the background. For the real product
+    // path used by feature-on cases, explicitly restore it as USER_EXPLICIT so
+    // the Win32 occlusion/human-input checks can address a visible window.
+    if (args.includes("--browser-cli-background-presentation")) {
+      try {
+        await ctx.client.call("ensure_visible", { tabId: hit.tabId, focus: false });
+        await sleep(500);
+      } catch (error) {
+        console.log("[window] ensure_visible failed for " + name + ": " + (error?.message || error));
+      }
+    }
     // 等外观测 beacon 就绪（不依赖 js，HUMAN/Feature-on 也成立）。
     const deadline = Date.now() + 45000;
     let lastState = null;
@@ -2051,7 +2074,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     }
     if (!lastState) throw new Error("fixture beacon 未就绪: " + name);
     const win = await findWindowByToken(chrome.record.pid, "ia-" + token + "-" + name, 45000);
-    if (!win) throw new Error("找不到窗口 ia-" + token + "-" + name + " (last probe: " + JSON.stringify(last) + ")");
+    if (!win) throw new Error("找不到窗口 ia-" + token + "-" + name + " (last probe: " + JSON.stringify(lastState) + ")");
     const settled = await moveAndSettle(win32, win.hwnd, targetRectFor(Object.keys(ctx.spaces).length - 1));
     const widget = await findWidgetHwnd(settled.hwnd);
     ctx.windows[key] = { hwnd: settled.hwnd, widgetHwnd: widget?.hwnd || null, rect: settled.rect, widget };
