@@ -71,7 +71,8 @@ const KEEP_OPEN = argv.includes("--keep-open");
 const STAGE_ARG = (argv.find((a) => a.startsWith("--stage=")) || "").slice("--stage=".length).trim();
 const STAGES = new Set((STAGE_ARG || "all").split(",").map((s) => s.trim()).filter(Boolean));
 const FEATURE_ARG = (argv.find((a) => a.startsWith("--feature=")) || "").slice("--feature=".length).trim();
-const FEATURE_FILTER = new Set((FEATURE_ARG || "off,on").split(",").map((s) => s.trim()).filter(Boolean));
+const FEATURE_FILTER = new Set((FEATURE_ARG || "off,on,on-visible").split(",").map((s) => s.trim()).filter(Boolean));
+const SESSION_FEATURES = ["off", "on", "on-visible"];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nowIso = () => new Date().toISOString();
@@ -696,6 +697,68 @@ const CASES = [
       ctx.record("O4", { point, r, before, afterAi, afterHuman });
     },
   },
+  {
+    id: "O5",
+    title: "OOPIF（managed-visible）：人类子帧点击落地；ASSIST 下 AI 子帧点击被内核拒绝",
+    stage: "oopif",
+    feature: "on-visible",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const key = "o5";
+      const show = await ctx.openVisibleSpace(
+        key,
+        "o5",
+        "frame=" + encodeURIComponent(ctx.frameOrigin + "/frame.html"),
+      );
+      show.producerLog = await ctx.showProducerLog();
+      check("O5 产品 user-explicit-show 呈现 OOPIF 窗口（visible=true）", show.visible === true, JSON.stringify(show));
+      if (!show.visible) {
+        ctx.record("O5", { show });
+        ctx.markBlocked({
+          code: "managed-visible-show-failed",
+          deps: ["产品 --browser-cli-user-explicit-show 能呈现目标窗口"],
+          reason: "第二次 show 调用没有把目标窗口变成 visible=true；原始状态见 evidence。",
+        });
+        return;
+      }
+      if ((await ctx.inputStatus(key)).mode !== "ai") await ctx.claim(key);
+      await ctx.attachOn(key);
+      const assist = await ctx.bumpMode(key, "assist");
+      check("O5 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true, JSON.stringify(assist));
+
+      const before = await ctx.probe(key);
+      const point = ctx.pointInFrame(before);
+      const human = await ctx.humanClick(
+        key,
+        { x: point.x - 10, y: point.y - 10, w: 20, h: 20 },
+        { expect: (st) => st.childClicks > before.childClicks },
+      );
+      await sleep(350);
+      const afterHuman = await ctx.probe(key);
+      check(
+        "O5 人类点击命中子帧（childClicks +1，主帧不变）",
+        human.landed === true && afterHuman.childClicks === before.childClicks + 1 && afterHuman.clicks === before.clicks,
+        JSON.stringify({ before: before.childClicks, after: afterHuman.childClicks, human }),
+      );
+
+      const ai = await ctx.ai(key, "click", { x: point.x, y: point.y, cursor: false });
+      await sleep(350);
+      const afterAi = await ctx.probe(key);
+      check(
+        "O5 ASSIST 无 grant：AI 子帧点击被内核拒绝且 childClicks 不变",
+        ai.ok === false &&
+          /InputOwnership: debugger input rejected/i.test(String(ai.error)) &&
+          afterAi.childClicks === afterHuman.childClicks,
+        JSON.stringify({ ai, before: afterHuman.childClicks, after: afterAi.childClicks }),
+      );
+      ctx.record("O5", { show, assist, before, point, human, afterHuman, ai, afterAi });
+      await ctx.bumpMode(key, "ai").catch(() => undefined);
+    },
+  },
 
   // ------------------------------------------------------------ 多窗口
   {
@@ -785,6 +848,103 @@ const CASES = [
         check("M3 Feature on：两个窗口的人类点击都落地", false, JSON.stringify({ A: afterHumanA.clicks, B: afterHumanB.clicks, humanA, humanB }));
       }
       ctx.record("M3", { aiA, aiB, beforeA, afterA, beforeB, afterB, afterHumanA, afterHumanB });
+    },
+  },
+  {
+    id: "M4",
+    title: "多窗口（managed-visible）：可见 HUMAN 窗口 vs hidden AI 窗口；人类输入只落在可见窗口",
+    stage: "multi",
+    feature: "on-visible",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const keyA = "m4a";
+      const show = await ctx.openVisibleSpace(keyA, "m4a");
+      show.producerLog = await ctx.showProducerLog();
+      check("M4 产品 user-explicit-show 呈现窗口 A（visible=true）", show.visible === true, JSON.stringify(show));
+      if (!show.visible) {
+        ctx.record("M4", { show });
+        ctx.markBlocked({
+          code: "managed-visible-show-failed",
+          deps: ["产品 --browser-cli-user-explicit-show 能呈现目标窗口"],
+          reason: "第二次 show 调用没有把窗口 A 变成 visible=true；原始状态见 evidence。",
+        });
+        return;
+      }
+      const keyB = "m4b";
+      await ctx.openFresh(keyB); // 后创建的窗口保持 hidden（产品只呈现恰好一个窗口）
+      if ((await ctx.inputStatus(keyA)).mode !== "ai") await ctx.claim(keyA);
+
+      mustCheck("M4 extension handoff A（ownership=user）", await ctx.handoff(keyA));
+      const kernelA = await ctx.bumpMode(keyA, "human");
+      const kernelB = await ctx.bumpMode(keyB, "ai");
+      check(
+        "M4 内核模式 A=human / B=ai",
+        kernelA.bumped?.result?.accepted === true && kernelA.bumped.result.mode === "human" &&
+          kernelB.bumped?.result?.accepted === true && kernelB.bumped.result.mode === "ai",
+        JSON.stringify({ kernelA, kernelB }),
+      );
+
+      const beforeA = await ctx.probe(keyA);
+      const beforeB = await ctx.probe(keyB);
+      const winBefore = await win32.call("state", { hwnd: ctx.windows[keyA].hwnd });
+      const fgBefore = (await win32.call("foreground")).hwnd;
+
+      const aiA = await ctx.ai(keyA, "click", { selector: "#btn", cursor: false });
+      const aiB = await ctx.ai(keyB, "click", { selector: "#btn", cursor: false });
+      await sleep(350);
+      const afterA = await ctx.probe(keyA);
+      const afterB = await ctx.probe(keyB);
+      check(
+        "M4 HUMAN 窗口 A：AI click 被扩展拒绝（INPUT_HUMAN_OWNED）且 DOM 不变",
+        aiA.ok === false && aiA.errorCode === "INPUT_HUMAN_OWNED" && afterA.clicks === beforeA.clicks,
+        JSON.stringify({ aiA, before: beforeA.clicks, after: afterA.clicks }),
+      );
+      check(
+        "M4 hidden AI 窗口 B：AI click 落地",
+        aiB.ok === true && afterB.clicks === beforeB.clicks + 1,
+        JSON.stringify({ aiB, before: beforeB.clicks, after: afterB.clicks }),
+      );
+
+      const humanA = await ctx.humanClick(keyA, beforeA.rects.btn);
+      await sleep(250);
+      const afterHumanA = await ctx.probe(keyA);
+      check(
+        "M4 可见窗口 A：人类点击落地",
+        humanA.landed === true && afterHumanA.clicks === afterA.clicks + 1,
+        JSON.stringify({ before: afterA.clicks, after: afterHumanA.clicks, humanA }),
+      );
+      const humanB = await ctx.humanClick(keyB, beforeB.rects.btn); // hidden 窗口：预期不落地
+      const afterHumanB = await ctx.probe(keyB);
+
+      const winAfter = await win32.call("state", { hwnd: ctx.windows[keyA].hwnd });
+      const fgAfter = (await win32.call("foreground")).hwnd;
+      check(
+        "M4 show 之后输入操作期间前台/z-order 不变（show 本身的前台变化单独记录）",
+        fgBefore === fgAfter && winBefore.window.above === winAfter.window.above,
+        JSON.stringify({ fgBefore, fgAfter, aboveBefore: winBefore.window.above, aboveAfter: winAfter.window.above }),
+      );
+      ctx.record("M4", {
+        show,
+        kernelA,
+        kernelB,
+        beforeA,
+        afterA,
+        beforeB,
+        afterB,
+        aiA,
+        aiB,
+        humanA,
+        afterHumanA,
+        humanB,
+        afterHumanB,
+        foreground: { before: fgBefore, after: fgAfter, showForeground: [show.foregroundBefore, show.foregroundAfter] },
+        above: { before: winBefore.window.above, after: winAfter.window.above },
+      });
+      await ctx.bumpMode(keyA, "ai").catch(() => undefined);
     },
   },
 
@@ -1483,16 +1643,29 @@ const CASES = [
   },
   {
     id: "K4",
-    title: "内核 human_presence：事件桥 + 1s human pause（不改变 mode）",
+    title: "内核 human_presence：事件桥 + 1s human pause（managed-visible 窗口）",
     stage: "kernel",
-    feature: "on",
+    feature: "on-visible",
     async run(ctx) {
       const ready = await ctx.kernelApiReady();
       if (!ready.ok) {
         ctx.markBlocked(ready.blocked);
         return;
       }
-      const key = "main";
+      const key = "k4";
+      const show = await ctx.openVisibleSpace(key, "k4");
+      show.producerLog = await ctx.showProducerLog();
+      check("K4 产品 user-explicit-show 呈现窗口（visible=true）", show.visible === true, JSON.stringify(show));
+      if (!show.visible) {
+        ctx.record("K4", { show });
+        ctx.markBlocked({
+          code: "managed-visible-show-failed",
+          deps: ["产品 --browser-cli-user-explicit-show 能呈现目标窗口"],
+          reason: "第二次 show 调用没有把目标窗口变成 visible=true；原始状态见 evidence。",
+        });
+        return;
+      }
+      if ((await ctx.inputStatus(key)).mode !== "ai") await ctx.claim(key);
       const tabId = ctx.spaces[key].tabId;
       const popup = await ctx.ensurePopup();
       const cdp = await ctx.cdp();
@@ -1511,7 +1684,7 @@ const CASES = [
       await sleep(800);
       const presence = await cdp.evaluate(popup.sessionId, "(window.__bpPresence || []).slice(-8)");
       const winState = await win32.call("state", { hwnd: ctx.windows[key].hwnd });
-      ctx.record("K4", { listenerSetup, assist, before, human, presence, window: winState.window });
+      ctx.record("K4", { show, listenerSetup, assist, before, human, presence, window: winState.window });
       if (!human.landed || !Array.isArray(presence) || presence.length === 0) {
         ctx.markBlocked({
           code: "managed-human-input-unavailable",
@@ -2477,11 +2650,11 @@ async function main() {
   mustCheck("注册后 HKCU 指向本次 host manifest", afterRegisterValue === registration.manifestPath, JSON.stringify({ afterRegisterValue, manifestPath: registration.manifestPath }));
   mustCheck("注册的扩展 ID 与仓库 manifest.json 推导一致", registration.extensionId === report.env.extensionId, JSON.stringify({ registered: registration.extensionId, derived: report.env.extensionId }));
 
-  for (const feature of ["off", "on"]) {
+  for (const feature of SESSION_FEATURES) {
     if (!FEATURE_FILTER.has(feature)) continue;
     const casesToRun = selected.filter((c) => c.feature === feature);
     if (!casesToRun.length) continue;
-    if (feature === "on" && !featureAvailable()) {
+    if (feature !== "off" && !featureAvailable()) {
       for (const c of casesToRun) {
         report.cases.push({
           id: c.id,
@@ -2532,8 +2705,8 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
   // Feature on 同时打开 managed presentation：生产 API 的可用性要求
   // `--browser-cli-background-presentation`（availability 检查 + 受信扩展身份检查都要它）。
   // 该模式下扩展创建的窗口默认 hidden（不上桌面），inputOwnership API 才存在。
-  const featureFlagArgs =
-    feature === "on" ? ["--enable-features=" + FEATURE, "--browser-cli-background-presentation"] : [];
+  const managed = feature !== "off";
+  const featureFlagArgs = managed ? ["--enable-features=" + FEATURE, "--browser-cli-background-presentation"] : [];
   const token = runToken + "-" + feature;
   const args = [
     "--remote-debugging-port=0",
@@ -2555,9 +2728,12 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     "--enable-logging=stderr",
     "--v=0",
     ...featureFlagArgs,
+    // 启动 URL 让扩展 SW/ native host 起来（窗口在 managed 模式下 hidden）。
+    // 注意：show 的第二次调用不能带位置 URL（会被判为 kBlockedByLaunchArguments）。
     servers.mainOrigin + "/boot?token=" + token,
   ];
-  sessionReport.managed = feature === "on";
+  sessionReport.managed = managed;
+  sessionReport.explicitShow = feature === "on-visible";
   sessionReport.args = args;
   sessionReport.env = { LOCALAPPDATA: localAppData, BROWSERPILOT_HOST_BASE_PORT: String(48900 + Math.floor(Math.random() * 90)) };
 
@@ -2801,9 +2977,40 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       ctx.popup = info;
       return info;
     },
+    /**
+     * API 调用上下文：普通会话用 popup 页面（可见窗口，便于观察）；
+     * on-visible 会话用扩展 service worker（不额外创建窗口，避免干扰 show 的唯一候选）。
+     */
+    async ensureApiContext() {
+      if (ctx.apiContext) return ctx.apiContext;
+      if (feature !== "on-visible") {
+        const popup = await ctx.ensurePopup();
+        ctx.apiContext = { kind: "popup", ...popup };
+        return ctx.apiContext;
+      }
+      const cdp = await ctx.cdp();
+      const targets = await cdp.targets();
+      const sw = targets.find((t) => t.type === "service_worker" && String(t.url || "").includes(report.env.extensionId));
+      if (!sw) throw new Error("extension service worker target not found for on-visible session");
+      const sessionId = await cdp.attach(sw.targetId);
+      let probe = null;
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        probe = await cdp.evaluate(
+          sessionId,
+          "({api: !!(typeof chrome !== 'undefined' && chrome.browserCliInputOwnership), " +
+            "io: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : null, " +
+            "ns: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? 'browserCliInputOwnership' : null})",
+        ).catch((error) => ({ error: String(error) }));
+        if (probe && probe.api === true && Array.isArray(probe.io)) break;
+        await sleep(200);
+      }
+      ctx.apiContext = { kind: "service_worker", targetId: sw.targetId, sessionId, probe };
+      return ctx.apiContext;
+    },
     /** 调用 browserCli.inputOwnership.<method>(request, cb)；返回 {result,lastError} 或错误标记。 */
     async apiCall(method, request = {}) {
-      const popup = await ctx.ensurePopup();
+      const apiCtx = await ctx.ensureApiContext();
       const cdp = await ctx.cdp();
       const expr =
         "new Promise((resolve) => {" +
@@ -2820,7 +3027,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
         "  } catch (e) { resolve({__bpThrown: String((e && e.message) || e)}); }" +
         "})";
       try {
-        return await cdp.evaluate(popup.sessionId, expr);
+        return await cdp.evaluate(apiCtx.sessionId, expr);
       } catch (error) {
         return { __bpCdpError: String(error && error.message ? error.message : error) };
       }
@@ -2857,6 +3064,115 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       throw new Error("fresh tab beacon not ready: " + key);
     },
     /** 从受信扩展页面调用 chrome.debugger.getTargets()，证明扩展会话已 attach。 */
+    /**
+     * 用产品自己的 user-explicit show producer 呈现一个已存在的 hidden 窗口。
+     * 第二次 chrome 调用（相同 profile、无位置 URL）经 ProcessSingleton 转发，
+     * 运行中的实例选择“最近创建的 reusable 窗口”并 Show/Activate（授予 HUMAN）。
+     * 只允许恰好一个窗口被呈现；foreground 可能变化（用户显式动作），如实记录。
+     */
+    async showSpace(key) {
+      const win = ctx.windows[key];
+      if (!win?.hwnd) throw new Error("no window for " + key);
+      const before = await win32.call("state", { hwnd: win.hwnd });
+      const foregroundBefore = (await win32.call("foreground")).hwnd;
+      const startedAt = Date.now();
+      const result = spawnSync(
+        CHROME,
+        [
+          "--user-data-dir=" + profileDir,
+          "--browser-cli-background-presentation",
+          "--browser-cli-user-explicit-show",
+          "--no-startup-window",
+        ],
+        { encoding: "utf8", windowsHide: true, timeout: 20000 },
+      );
+      let state = before;
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        state = await win32.call("state", { hwnd: win.hwnd });
+        if (state.window.visible === true) break;
+        await sleep(250);
+      }
+      const foregroundAfter = (await win32.call("foreground")).hwnd;
+      const show = {
+        invoked: true,
+        elapsedMs: Date.now() - startedAt,
+        exit: {
+          status: result.status,
+          error: result.error ? String(result.error.message || result.error) : null,
+          stdoutTail: String(result.stdout || "").slice(-400),
+          stderrTail: String(result.stderr || "").slice(-400),
+        },
+        before: before.window,
+        after: state.window,
+        visible: state.window.visible === true,
+        foregroundBefore,
+        foregroundAfter,
+        foregroundChanged: foregroundBefore !== foregroundAfter,
+      };
+      ctx.lastShow = show;
+      return show;
+    },
+    /** 用扩展 API 移除启动时的 /boot 窗口（只关 tab 会留下一个空窗口干扰 show 选择）。 */
+    async closeStartupWindow() {
+      const apiCtx = await ctx.ensureApiContext();
+      const cdp = await ctx.cdp();
+      const expr =
+        "new Promise((resolve) => { chrome.windows.getAll({populate: true}, (wins) => {" +
+        "  const hit = (wins || []).find((w) => (w.tabs || []).some((t) => String(t.url || '').includes('/boot?token=')));" +
+        "  if (!hit) { resolve({closed: false, reason: 'not-found', windows: (wins || []).map((w) => ({id: w.id, tabs: (w.tabs || []).map((t) => String(t.url || '').slice(0, 80))}))}); return; }" +
+        "  chrome.windows.remove(hit.id, () => resolve({closed: true, windowId: hit.id, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null}));" +
+        "}); })";
+      return await cdp.evaluate(apiCtx.sessionId, expr);
+    },
+    /**
+     * managed-visible 用例的窗口准备：先 open_space（hidden），再关闭启动窗口和之前用例的窗口，
+     * 让产品 show 的候选只剩目标窗口（FindReusableWindow 按激活顺序取第一个），最后调用 show。
+     */
+    async openVisibleSpace(key, name, extraQuery = "") {
+      const url = servers.mainOrigin + "/" + name + "?token=" + token + "-" + name + (extraQuery ? "&" + extraQuery : "");
+      await openSpace(key, name, url);
+      const closedPrevious = [];
+      const startup = await ctx.closeStartupWindow().catch((error) => ({ closed: false, error: String(error?.message || error) }));
+      closedPrevious.push({ key: "startup", ...startup });
+      for (const prev of [...(ctx.visibleKeys || [])]) {
+        if (prev === key) continue;
+        const r = await ctx.client.request("close_space", {}, { space: ctx.spaces[prev].spaceId });
+        closedPrevious.push({ key: prev, closed: r.ok, error: r.error });
+        delete ctx.spaces[prev];
+        delete ctx.windows[prev];
+      }
+      ctx.visibleKeys = (ctx.visibleKeys || []).filter((k) => k !== key);
+      ctx.visibleKeys.push(key);
+      // 等启动/旧窗口从窗口列表里消失，只留目标窗口，show 的候选才唯一。
+      const targetHwnd = ctx.windows[key].hwnd;
+      let remaining = [];
+      for (let i = 0; i < 30; i++) {
+        const listing = await win32.call("listWindows", { pid: chrome.record.pid });
+        const list = Array.isArray(listing.windows) ? listing.windows : listing.windows ? [listing.windows] : [];
+        remaining = list.filter((w) => w.className === "Chrome_WidgetWin_1" && String(w.title || "").trim() && w.hwnd !== targetHwnd);
+        if (remaining.length === 0) break;
+        await sleep(250);
+      }
+      const show = await ctx.showSpace(key);
+      show.closedPrevious = closedPrevious;
+      const allWindows = await win32.call("listWindows", { pid: chrome.record.pid });
+      show.windowsAllAfter = Array.isArray(allWindows.windows) ? allWindows.windows : allWindows.windows ? [allWindows.windows] : [];
+      show.windowsVisibleAfter = show.windowsAllAfter.filter((w) => w.visible === true);
+      show.remainingOtherWindows = remaining;
+      delete show.windowsAfter;
+      return show;
+    },
+    /** 读取本次会话的浏览器日志里 show producer / presentation policy 的关键行。 */
+    async showProducerLog() {
+      const file = path.join(artifactsDir, label + "-chrome.log");
+      try {
+        const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter((l) => /BROWSER_CLI_USER_EXPLICIT_SHOW|human-ownership-granted|user-explicit|presentation-denied/.test(l));
+        return lines.slice(-20);
+      } catch (error) {
+        return ["<log unreadable: " + String(error) + ">"];
+      }
+    },
     async extensionDebuggerTargets() {
       const popup = await ctx.ensurePopup();
       const cdp = await ctx.cdp();
@@ -2884,21 +3200,22 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     },
     /** 内核 API 是否真的能从扩展 JS 调用（binding 是否被安装）。 */
     async kernelApiReady() {
-      let popup;
+      let apiCtx;
       try {
-        popup = await ctx.ensurePopup();
+        apiCtx = await ctx.ensureApiContext();
       } catch (error) {
         return {
           ok: false,
           blocked: {
             code: "extension-page-unreachable",
-            deps: ["受信扩展页面（chrome-extension://<id>/popup/index.html）可打开"],
-            reason: "无法打开/附加受信扩展页面：" + String(error?.message || error),
+            deps: ["受信扩展上下文（popup 页面或 service worker）可附加"],
+            reason: "无法附加受信扩展上下文：" + String(error?.message || error),
           },
         };
       }
-      if (popup.probe?.api === true && Array.isArray(popup.probe?.io) && popup.probe.io.includes("setOwnership") && popup.probe.io.includes("grantInput")) {
-        return { ok: true, popup };
+      const io = apiCtx.probe?.io;
+      if (apiCtx.probe?.api === true && Array.isArray(io) && io.includes("setOwnership") && io.includes("grantInput")) {
+        return { ok: true, popup: apiCtx, apiContext: apiCtx };
       }
       return {
         ok: false,
@@ -2907,7 +3224,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
           deps: ["patch 029 修订：让 chrome.browserCli.inputOwnership 成为可安装的顶层 namespace（避免与父 feature browserCli 的层级冲突，或调整 feature_cache 的父子判定）"],
           reason:
             "chrome.browserCli 存在，但 chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不存在" +
-            "（popup 页面 keys=" + JSON.stringify(popup.probe?.io) + "，service worker 同样缺失）。" +
+            "（上下文=" + String(apiCtx?.kind) + "，keys=" + JSON.stringify(io) + "）。" +
             "根因（旧命名空间 browserCli.inputOwnership）：feature 名有同名前缀的父 feature \"browserCli\"；" +
             "extensions/renderer/feature_cache.cc 跳过所有“父 feature 存在”的条目，因此该 namespace 从未被安装为 " +
             "BindingAccessor。已排除 switch 未转发/feature 未启用（renderer 命令行两者都在）。content 单测不覆盖 renderer 侧暴露。",
@@ -3032,9 +3349,11 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     mustCheck("[" + label + "] host ping=pong", ping?.pong === true, JSON.stringify(ping));
 
     sessionReport.boot = { args };
-    await openSpace("main", "main", servers.mainOrigin + "/main?token=" + token + "-main");
-    await openSpace("oopif", "oopif", servers.mainOrigin + "/oopif?token=" + token + "-oopif&frame=" + encodeURIComponent(servers.frameOrigin + "/frame.html"));
-    await openSpace("multi", "multi", servers.mainOrigin + "/multi?token=" + token + "-multi");
+    if (feature !== "on-visible") {
+      await openSpace("main", "main", servers.mainOrigin + "/main?token=" + token + "-main");
+      await openSpace("oopif", "oopif", servers.mainOrigin + "/oopif?token=" + token + "-oopif&frame=" + encodeURIComponent(servers.frameOrigin + "/frame.html"));
+      await openSpace("multi", "multi", servers.mainOrigin + "/multi?token=" + token + "-multi");
+    }
     sessionReport.spaceSummary = Object.fromEntries(
       Object.entries(ctx.spaces).map(([k, v]) => [k, { spaceId: v.spaceId, tabId: v.tabId, windowId: v.windowId, url: v.url }]),
     );
