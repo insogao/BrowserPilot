@@ -422,7 +422,13 @@ async function main() {
     for (const line of report) console.log("  " + line);
     console.log("PASS input-ownership-browser: HUMAN/ASSIST/AI 全链路在真实 headless 浏览器上成立（点击计数/DOM 变化/错误码/审计）");
   } finally {
-    try { if (chrome) await chrome.kill(); } catch { /* ignore */ }
+    try {
+      if (chrome) await chrome.kill();
+    } catch (error) {
+      // 身份核验不通过时拒绝清理（不会回退到全局 kill），失败必须可见。
+      console.error("FAIL input-ownership-browser cleanup:", error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
     await new Promise((resolve) => server.close(resolve));
     for (let i = 0; i < 3; i++) {
       try { fs.rmSync(tmpRoot, { recursive: true, force: true }); break; } catch { await sleep(300); }

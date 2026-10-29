@@ -2,7 +2,7 @@
 // 不引入 puppeteer/ws 依赖，避免给仓库增加运行时体积。
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import { launchTestProcess, stopTestProcess, waitForExit } from "./test-process.mjs";
 
 export class CdpError extends Error {}
 
@@ -137,7 +137,14 @@ export async function launchHeadlessChrome({ chromeExe, userDataDir, extraArgs =
     ...extraArgs,
     "about:blank",
   ];
-  const child = spawn(chromeExe, args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+  const record = launchTestProcess({
+    exe: chromeExe,
+    args,
+    marker: userDataDir,
+    label: "headless-chrome",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const child = record.child;
   let stderr = "";
   child.stderr?.on("data", (d) => { stderr += String(d); });
   const activePortFile = path.join(userDataDir, "DevToolsActivePort");
@@ -145,7 +152,12 @@ export async function launchHeadlessChrome({ chromeExe, userDataDir, extraArgs =
   try {
     text = await waitForFile(activePortFile);
   } catch (e) {
-    try { child.kill(); } catch { /* ignore */ }
+    try {
+      const stopped = stopTestProcess(record, { reason: "cdp-client.startup-failure" });
+      if (!stopped.stopped) child.kill(); // 句柄级兜底：只作用于本进程 spawn 的直接子进程
+    } catch {
+      try { child.kill(); } catch { /* ignore */ }
+    }
     throw new Error((e instanceof Error ? e.message : String(e)) + "\nchrome stderr:\n" + stderr.slice(-4000));
   }
   const [port, wsPath] = text.split(/\r?\n/);
@@ -153,17 +165,22 @@ export async function launchHeadlessChrome({ chromeExe, userDataDir, extraArgs =
   const ws = await connectWebSocket(wsUrl);
   return {
     child,
+    record,
     wsUrl,
     port: Number(port),
     connection: new CdpConnection(ws),
     stderr: () => stderr,
     async kill() {
       try { ws.close(); } catch { /* ignore */ }
-      try { child.kill(); } catch { /* ignore */ }
-      await new Promise((resolve) => {
-        const t = setTimeout(resolve, 5000);
-        child.once("exit", () => { clearTimeout(t); resolve(); });
-      });
+      // 核验 PID + 创建时间 + marker + 可执行路径后才清理；拒绝时抛错，不静默。
+      const result = stopTestProcess(record, { reason: "cdp-client.kill" });
+      if (result.refused) {
+        throw new Error("拒绝清理 Chromium: " + result.reason + " " + JSON.stringify(result.detail));
+      }
+      if (!result.stopped && result.reason !== "already-exited") {
+        throw new Error("清理 Chromium 失败: " + result.reason + " " + (result.error ?? ""));
+      }
+      waitForExit(record, 15000);
     },
   };
 }

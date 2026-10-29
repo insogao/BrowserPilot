@@ -22,9 +22,10 @@ import fs from "node:fs";
 import http from "node:http";
 import net from "node:net";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { findNewestHostExe } from "./lib/host-manifest.mjs";
+import { launchTestProcess, stopTestProcess, stopVerifiedPid } from "./lib/test-process.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = path.join(root, "dist");
@@ -100,15 +101,11 @@ function saveArtifact(name, data) {
 }
 
 // ---------------------------------------------------------------- process helpers
-const chromeProcesses = new Set();
-function killTree(pid) {
-  if (!pid) return;
-  try {
-    spawnSync("taskkill", ["/PID", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-  } catch {
-    // best effort
-  }
-}
+// 清理只走两条路：
+//   1) launchTestProcess 的 record（核验 PID + 创建时间 + marker + exe 路径后按 PID 清理）；
+//   2) stopVerifiedPid（对 native host 这类非本进程 spawn 的目标，核验 exe 路径后按 PID 清理）。
+// 严禁按镜像名清理，也没有“查不到就全局杀”的回退。
+const chromeRecords = new Set();
 function pidAlive(pid) {
   try {
     process.kill(pid, 0);
@@ -219,8 +216,16 @@ async function launchChrome({ exe, profileDir, localAppData, label, noSandbox = 
     LOCALAPPDATA: localAppData,
     BROWSERPILOT_HOST_BASE_PORT: String(48600 + Math.floor(Math.random() * 120)),
   };
-  const child = spawn(exe, args, { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-  chromeProcesses.add(child);
+  const record = launchTestProcess({
+    exe,
+    args,
+    env,
+    marker: profileDir,
+    label: label + "-chrome",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  chromeRecords.add(record);
+  const child = record.child;
   let stdout = "";
   let stderr = "";
   const log = fs.createWriteStream(logFile, { flags: "a" });
@@ -233,18 +238,19 @@ async function launchChrome({ exe, profileDir, localAppData, label, noSandbox = 
     log.write(d);
   });
   child.on("exit", (code) => {
-    chromeProcesses.delete(child);
+    chromeRecords.delete(record);
     log.write("\n[exit] code=" + code + "\n");
     log.end();
   });
   const port = await waitForDevToolsPort(profileDir, child, logFile);
   return {
     child,
+    record,
     port,
     logFile,
     stderrTail: () => stderr.split(/\r?\n/).slice(-12).join("\n"),
     stdoutTail: () => stdout.split(/\r?\n/).slice(-8).join("\n"),
-    stop: () => killTree(child.pid),
+    stop: () => stopTestProcess(record, { reason: "test-native-e2e.stop" }),
   };
 }
 
@@ -877,13 +883,31 @@ try {
   console.error("FAIL | unexpected exception :: " + (error instanceof Error ? error.stack : String(error)));
 } finally {
   try {
-    if (baseline) baseline.stop();
-  } catch {}
+    if (baseline) {
+      const stopped = baseline.stop();
+      if (stopped && stopped.refused) {
+        console.error("[e2e] baseline cleanup refused: " + JSON.stringify(stopped.detail));
+      }
+    }
+  } catch (error) {
+    console.error("[e2e] baseline cleanup error: " + (error instanceof Error ? error.message : String(error)));
+  }
   await sleep(800);
-  // 确保测试 host 进程已随 Chrome 退出；只杀本次 session 记录的 pid（绝不杀用户 Chrome）。
-  const ownSessions = readSessions(baselineLocalAppData);
-  for (const session of ownSessions) {
-    if (pidAlive(session.pid)) killTree(session.pid);
+  // 确保测试 host 进程已随 Chrome 退出。只清理 exe 路径等于本次构建产物的 PID；
+  // 路径不匹配就拒绝，绝不按镜像名或裸 PID 清理。
+  if (hostExe) {
+    const ownSessions = readSessions(baselineLocalAppData);
+    for (const session of ownSessions) {
+      if (!pidAlive(session.pid)) continue;
+      const stopped = stopVerifiedPid({
+        pid: session.pid,
+        expectedExePath: hostExe,
+        reason: "test-native-e2e.host-session",
+      });
+      if (!stopped.stopped && stopped.reason !== "already-exited") {
+        console.error("[e2e] host session cleanup not stopped: " + JSON.stringify(stopped));
+      }
+    }
   }
   try {
     if (registration) {
@@ -904,7 +928,12 @@ try {
   try {
     fixture.server.close();
   } catch {}
-  for (const child of chromeProcesses) killTree(child.pid);
+  for (const record of chromeRecords) {
+    const stopped = stopTestProcess(record, { reason: "test-native-e2e.finally" });
+    if (!stopped.stopped && stopped.reason !== "already-exited") {
+      console.error("[e2e] chrome cleanup not stopped: " + JSON.stringify(stopped));
+    }
+  }
   report.checks = { passed, failed, skipped, failures: [...failures] };
   saveArtifact("report.json", report);
   console.log("\nartifacts -> " + artifactsDir);

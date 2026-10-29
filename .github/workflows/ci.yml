@@ -16,6 +16,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run registry:check
+      - run: npm run check:process-cleanup
       - run: npm run typecheck
       - run: npm run build
       - run: npm run test:core

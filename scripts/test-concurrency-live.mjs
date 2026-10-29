@@ -13,15 +13,18 @@
 //   D. 8 窗口压力：8 个 space 并发执行完整流程，断言全部成功、无死锁、无崩溃，
 //      且 wall time 明显小于串行和。
 //
-// 安全边界：只使用独立临时 --user-data-dir；只结束自己启动的 chrome 进程树与
-// 自己的 native host pid；不使用 --no-sandbox；不碰用户真实 Chrome/profile。
+// 安全边界：只使用独立临时 --user-data-dir；chrome 与本仓库 host 的清理都必须先
+// 核验 PID 身份（创建时间 / 命令行 marker / 可执行路径），核验失败即拒绝，
+// 绝不按镜像名清理；不使用 --no-sandbox；不碰用户真实 Chrome/profile。
 //
 // 用法：node scripts/test-concurrency-live.mjs [--windows=8] [--port=48900] [--no-build] [--keep]
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { findNewestHostExe } from "./lib/host-manifest.mjs";
+import { launchTestProcess, stopTestProcess, stopVerifiedPid } from "./lib/test-process.mjs";
 
 const root = process.cwd();
 const args = process.argv.slice(2);
@@ -195,22 +198,35 @@ const startedAtWall = Date.now();
 const runT0 = now();
 let profileDir;
 let chrome;
+let chromeRecord;
 let chromeStderr = "";
 let hostSession;
 
 function stopChromeTree() {
-  if (!chrome || chrome.exitCode !== null) return;
-  if (process.platform === "win32") {
-    spawnSync("taskkill", ["/PID", String(chrome.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-  } else {
-    try { chrome.kill("SIGTERM"); } catch { /* ignore */ }
+  if (!chromeRecord) return;
+  if (chromeRecord.child?.exitCode !== null) return;
+  const stopped = stopTestProcess(chromeRecord, { reason: "test-concurrency-live.stopChromeTree" });
+  if (!stopped.stopped && stopped.reason !== "already-exited") {
+    console.error("[live] chrome cleanup not stopped: " + JSON.stringify(stopped));
   }
 }
 
 async function cleanup() {
   try {
     if (hostSession && pidAlive(hostSession.pid)) {
-      try { process.kill(Number(hostSession.pid)); } catch { /* ignore */ }
+      const hostExe = findNewestHostExe(root);
+      if (hostExe) {
+        const stopped = stopVerifiedPid({
+          pid: hostSession.pid,
+          expectedExePath: hostExe,
+          reason: "test-concurrency-live.host-session",
+        });
+        if (!stopped.stopped && stopped.reason !== "already-exited") {
+          console.error("[live] host session cleanup not stopped: " + JSON.stringify(stopped));
+        }
+      } else {
+        console.error("[live] host exe not found; refusing to stop pid " + hostSession.pid + " (no identity to verify)");
+      }
       await sleep(300);
     }
     if (hostSession?.file) {
@@ -232,25 +248,29 @@ async function cleanup() {
 
 function launchBrowser() {
   profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "bp-concurrency-"));
-  chrome = spawn(CHROME, [
-    "--headless=new",
-    "--disable-gpu",
-    "--in-process-gpu",
-    "--no-first-run",
-    "--no-default-browser-check",
-    "--disable-background-networking",
-    "--disable-component-update",
-    "--disable-sync",
-    "--disable-extensions-update-check",
-    "--user-data-dir=" + profileDir,
-    "--disable-extensions-except=" + DIST,
-    "--load-extension=" + DIST,
-    "about:blank",
-  ], {
-    stdio: ["ignore", "ignore", "pipe"],
-    windowsHide: true,
+  chromeRecord = launchTestProcess({
+    exe: CHROME,
+    args: [
+      "--headless=new",
+      "--disable-gpu",
+      "--in-process-gpu",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-sync",
+      "--disable-extensions-update-check",
+      "--user-data-dir=" + profileDir,
+      "--disable-extensions-except=" + DIST,
+      "--load-extension=" + DIST,
+      "about:blank",
+    ],
     env: { ...process.env, BROWSERPILOT_HOST_BASE_PORT: String(BASE_PORT) },
+    marker: profileDir,
+    label: "concurrency-live-chrome",
+    stdio: ["ignore", "ignore", "pipe"],
   });
+  chrome = chromeRecord.child;
   chrome.stderr.on("data", (chunk) => {
     chromeStderr += chunk.toString("utf8");
     if (chromeStderr.length > 20_000) chromeStderr = chromeStderr.slice(-20_000);

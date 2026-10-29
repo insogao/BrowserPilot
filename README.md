@@ -150,6 +150,32 @@ npm run test:host:exe      # 打包后 exe：同上
 npm run test:e2e:native    # 真实链路 E2E：基线 Chrome + 真实 host + 六操作 + SW 重启 + generic
 ```
 
+### 测试进程清理安全（强制）
+
+测试启动的 Chrome / native host 只能按**可证明归属**的方式清理。禁止按镜像名或进程名匹配
+（包括 `taskkill /IM`、`Stop-Process -Name`、`pkill -f <browser>`、`killall <browser>`、
+`wmic process ... delete`）：用户 Chrome 正在运行时，这类写法会误杀用户进程。
+
+- `scripts/lib/test-process.mjs`：启动时记录 PID、创建时间、可执行路径、完整命令行与唯一
+  marker；清理前重新查询并核验 **PID + 创建时间 + 命令行含 marker + 可执行路径**，全部匹配才
+  按 PID 清理，任一不匹配即拒绝并记录（没有全局 kill 回退）。
+- 所有会启动 Chrome 的测试脚本都走这个库：`scripts/lib/cdp-client.mjs`（
+  `test-input-ownership-browser.mjs`、`test-virtual-cursor-browser.mjs` 共用）、
+  `scripts/test-native-e2e.mjs`、`scripts/test-concurrency-live.mjs`。
+- native host 等非本进程 spawn 的目标使用 `stopVerifiedPid()`，至少核验可执行路径。
+- 测试进程必须有唯一 marker：优先使用独立的临时 `--user-data-dir`
+  （`fs.mkdtempSync`），这也是命令行核验的依据。
+
+```bash
+npm run check:process-cleanup   # 静态门禁：扫描禁止的全局清理写法（CI 已接入）
+npm run test:process-safety     # 真实进程验证：只杀目标、控制存活、伪造 record 被拒
+npm run test:safety             # 上面两项依次执行
+```
+
+`test:process-safety` 使用基线 Chrome 启动两个 headless 实例（独立临时 profile、不使用
+`--no-sandbox`、不弹窗口），需要 `BROWSERPILOT_BASELINE_CHROME`（默认
+`D:\work\wt\browser-cli-baseline\chrome.exe`）。
+
 ---
 
 ## 外部 AI / CLI 对接

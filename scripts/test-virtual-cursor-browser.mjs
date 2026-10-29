@@ -451,7 +451,13 @@ async function main() {
     for (const line of report) console.log("  " + line);
     console.log("PASS cursor: 真实 headless 浏览器上的虚拟光标（坐标/pointer-events/截图/系统鼠标/导航清理）");
   } finally {
-    try { if (chrome) await chrome.kill(); } catch { /* ignore */ }
+    try {
+      if (chrome) await chrome.kill();
+    } catch (error) {
+      // 身份核验不通过时拒绝清理（不会回退到全局 kill），失败必须可见。
+      console.error("FAIL cursor-browser cleanup:", error instanceof Error ? error.message : String(error));
+      process.exitCode = 1;
+    }
     await new Promise((resolve) => server.close(resolve));
     // Windows 上 Chromium 退出后文件句柄可能延迟释放：失败可接受（临时目录）。
     for (let i = 0; i < 3; i++) {
