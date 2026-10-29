@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>input-arbitration frame</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #fffdf2; color: #111;
+    font: 13px/1.3 system-ui, "Segoe UI", sans-serif; }
+  #fbtn { position: absolute; left: 40px; top: 30px; width: 200px; height: 80px;
+    background: #d81b60; color: #fff; border: 0; border-radius: 8px; font-size: 16px; }
+  #fcount { position: absolute; left: 260px; top: 40px; font: 20px monospace; }
+</style>
+</head>
+<body>
+<button id="fbtn" type="button">Frame Target</button>
+<div id="fcount">0</div>
+<script>
+(() => {
+  window.__clicks = 0;
+  const btn = document.getElementById("fbtn");
+  btn.addEventListener("click", (e) => {
+    window.__clicks += 1;
+    document.getElementById("fcount").textContent = String(window.__clicks);
+    try {
+      parent.postMessage({ bp: "frame-click", n: window.__clicks, trusted: e.isTrusted }, "*");
+    } catch (err) {
+      // parent may already be gone; the local counter is still authoritative
+    }
+  });
+})();
+</script>
+</body>
+</html>
