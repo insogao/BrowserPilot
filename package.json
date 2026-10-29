@@ -35,6 +35,8 @@
     "test:input-ownership": "node scripts/test-input-ownership.mjs",
     "test:input-ownership-api": "node scripts/test-input-ownership-api.mjs",
     "test:input-ownership:browser": "node scripts/test-input-ownership-browser.mjs",
+    "test:input-arbitration": "node scripts/test-input-arbitration-e2e.mjs",
+    "test:input-arbitration:matrix": "node scripts/test-input-arbitration-e2e.mjs --matrix",
     "test:trust-boundary": "node scripts/test-trust-boundary.mjs",
     "test:live": "node native-host/test-live.mjs",
     "smoke:template": "node scripts/smoke-template.mjs",
