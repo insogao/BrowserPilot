@@ -1,4 +1,5 @@
-// P3 生产 API 客户端（扩展侧）：`chrome.browserCli.inputOwnership`。
+// P3 生产 API 客户端（扩展侧）：`chrome.browserCliInputOwnership`（兼容旧
+// `chrome.browserCli.inputOwnership` 嵌套名）。
 //
 // 分工（设计文档：docs/input-ownership-api-2026-10-29.md）：
 //   1. 所有权唯一真源仍是 `state.ts` 的 `SpaceState.ownership` + `assist`；
@@ -155,6 +156,11 @@ export interface InputOwnershipKernelApi {
 function getInputOwnershipNamespace(): unknown {
   // 必须走 globalThis：MV3 SW 里扩展 API 挂在 globalThis 上（与 capabilities.ts 一致）。
   const g = globalThis as unknown as { chrome?: Record<string, unknown> };
+  // Chromium renderer feature cache 会跳过“父 feature 存在”的子命名空间
+  // （browserCli.inputOwnership 与 browserCli 同前缀），所以生产命名空间是
+  // 顶层 browserCliInputOwnership；保留旧嵌套名的回退，便于平滑升级。
+  const direct = g.chrome?.["browserCliInputOwnership"];
+  if (direct && typeof direct === "object") return direct;
   const browserCli = g.chrome?.["browserCli"];
   if (!browserCli || typeof browserCli !== "object") return undefined;
   return (browserCli as Record<string, unknown>)["inputOwnership"];

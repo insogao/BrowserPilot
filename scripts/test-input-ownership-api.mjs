@@ -1,4 +1,4 @@
-// 离线单测：P3 生产 API 客户端（chrome.browserCli.inputOwnership，扩展侧）。
+// 离线单测：P3 生产 API 客户端（chrome.browserCliInputOwnership，扩展侧）。
 //
 // 覆盖：API 缺失/generic no-op / enhanced 同步 / 单调 version / 版本乱序重试 /
 //       10s 心跳 / 30s 失联 degraded（AI 输入 fail closed）/ SW 重启恢复 /
@@ -214,8 +214,9 @@ export async function runInputOwnershipApiTests() {
     apiBundle = options.api === null ? null : (options.api ?? makeApi().api);
     calls = options.calls ?? (options.api && options.api.__calls) ?? (apiBundle ? { set: [], heartbeat: [], get: [], grant: [], begin: [], end: [], attach: [] } : null);
     if (apiBundle) {
-      globalThis.chrome.browserCli = { inputOwnership: apiBundle };
+      globalThis.chrome.browserCliInputOwnership = apiBundle;
     } else {
+      delete globalThis.chrome.browserCliInputOwnership;
       delete globalThis.chrome.browserCli;
     }
     const spaces = options.spaces ?? { "space-a": space("space-a") };
@@ -237,11 +238,14 @@ export async function runInputOwnershipApiTests() {
     {
       await reset({ api: null });
       assert.equal(io.getInputOwnershipApi(), undefined, "普通 Chrome 上 API 必须不存在");
-      globalThis.chrome.browserCli = { inputOwnership: { setOwnership: async () => ({}) } };
+      globalThis.chrome.browserCliInputOwnership = { setOwnership: async () => ({}) };
       assert.equal(io.getInputOwnershipApi(), undefined, "缺少 heartbeat/getOwnership 的半实现不得被视为支持");
       const { api } = makeApi();
-      globalThis.chrome.browserCli = { inputOwnership: api };
+      globalThis.chrome.browserCliInputOwnership = api;
       assert.equal(io.getInputOwnershipApi(), api, "完整 API 必须被探测到");
+      delete globalThis.chrome.browserCliInputOwnership;
+      globalThis.chrome.browserCli = { inputOwnership: api };
+      assert.equal(io.getInputOwnershipApi(), api, "旧嵌套命名空间必须继续兼容");
       console.log("PASS input-ownership-api: API presence is the only signal (partial APIs are unsupported)");
     }
 
@@ -644,6 +648,7 @@ export async function runInputOwnershipApiTests() {
     io.__setKernelInputOwnershipClockForTests(undefined);
     io.__resetKernelInputOwnershipForTests();
     delete globalThis.chrome.browserCli;
+    delete globalThis.chrome.browserCliInputOwnership;
   }
 }
 

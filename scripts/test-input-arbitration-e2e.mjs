@@ -21,7 +21,7 @@
 //                   AI/人类输入在主帧与子帧的计数分离、Feature on 时子帧同样被仲裁
 //   multi           两个窗口，一个 HUMAN 一个 AI，互不干扰；前台/z-order 不变
 //   assist          ASSIST 无 grant / grant 一次性消费 / 过期 / 用尽 / 取消 / session detach /
-//                   跨会话注入 —— 依赖 Agent K 的产品 API（chrome.browserCli.inputOwnership），
+//                   跨会话注入 —— 依赖 Agent K 的产品 API（chrome.browserCliInputOwnership），
 //                   当前构建只有 getCapabilities，因此 blocked
 //   kernel          HUMAN 模式、内核 grant 表、跨 CDP session 隔离 —— blocked（同上 + J 的 patch 028 修订）
 //
@@ -187,10 +187,10 @@ function probeBinaries() {
   report.env.chromeDll = fs.existsSync(chromeDll) ? chromeDll : null;
   // K 的产品 API：只有在受信扩展 API 被编译进去时才会出现这个函数名。
   // 生产 API（patch 029）按 namespace 全名注册 ExtensionFunction：
-  // "browserCli.inputOwnership.setOwnership" / ".grantInput" / ...，因此二进制里能
-  // 直接匹配到 "browserCli.inputOwnership"。"browserCli.setInputOwnership" 是早期
+  // "browserCliInputOwnership.setOwnership" / ".grantInput" / ...，因此二进制里能
+  // 直接匹配到 "browserCliInputOwnership"。"browserCli.setInputOwnership" 是早期
   // 设计的扁平命名，仅作为兼容回退保留。
-  const hasNamespace = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCli.inputOwnership") : null;
+  const hasNamespace = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCliInputOwnership") : null;
   const hasFlatName = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCli.setInputOwnership") : null;
   report.env.chromeDllApi = fs.existsSync(chromeDll) ? (hasNamespace === true || hasFlatName === true) : null;
   report.env.chromeDllApiDetail = fs.existsSync(chromeDll)
@@ -944,7 +944,7 @@ const CASES = [
       }
       report.notes.push(
         "风险（Feature on + kernel API 未由扩展推送）：扩展侧 mode=ai，但内核快照默认 ASSIST 且没有 grant，" +
-          "产品输入面 100% fail-fast。patch 029 已提供 production API，但本构建里 chrome.browserCli.inputOwnership " +
+          "产品输入面 100% fail-fast。patch 029 已提供 production API，但本构建里 chrome.browserCliInputOwnership " +
           "在扩展 JS 中不可见（见 K0 / P0），因此没有调用方能推送 mode；打开 Feature 仍然等于禁用 AI 输入。" +
           "所有 Input.* 的拒绝是可诊断的 ServerError（-32000），不是静默成功。",
       );
@@ -969,7 +969,7 @@ const CASES = [
           "own: (typeof chrome !== 'undefined' && chrome.browserCli) ? Object.getOwnPropertyNames(chrome.browserCli) : null, " +
           "caps: (typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.getCapabilities) ? 'fn' : 'missing', " +
           "chromeKeys: Object.keys(chrome).filter((k) => /browser|input|owner/i.test(k)), " +
-          "nested: (typeof chrome !== 'undefined' && chrome.browserCli) ? typeof chrome.browserCli.inputOwnership : 'no-browserCli', " +
+          "nested: (typeof chrome !== 'undefined') ? (chrome.browserCliInputOwnership ? 'top-level' : (chrome.browserCli && chrome.browserCli.inputOwnership ? 'legacy-nested' : 'missing')) : 'no-chrome', " +
           "flat: (typeof chrome !== 'undefined') ? Object.keys(chrome).filter((k) => /inputOwnership/i.test(k)) : null})",
       ).catch((error) => ({ error: String(error) }));
       let swProbe = null;
@@ -980,7 +980,7 @@ const CASES = [
           const swSession = await cdp0.attach(swTarget.targetId);
           swProbe = await cdp0.evaluate(
             swSession,
-            "({keys: chrome.browserCli ? Object.keys(chrome.browserCli) : null, io: !!(chrome.browserCli && chrome.browserCli.inputOwnership)})",
+            "({keys: chrome.browserCli ? Object.keys(chrome.browserCli) : null, io: !!(chrome.browserCliInputOwnership)})",
           );
         } else {
           swProbe = { missing: true, types: targets0.map((t) => t.type + ":" + String(t.url).slice(0, 60)) };
@@ -1026,25 +1026,25 @@ const CASES = [
           at: nowIso(),
           detail,
           note:
-            "patch 029 的 chrome.browserCli.inputOwnership 已编译进 chrome.dll（schema/feature/函数注册都在），" +
+            "patch 029 的 chrome.browserCliInputOwnership 已编译进 chrome.dll（schema/feature/函数注册都在），" +
             "但扩展 JS（popup 页面与 service worker）只能看到 getCapabilities，chrome 上也没有其它 inputOwnership 路径。" +
             "根因（源码级）：extensions/renderer/feature_cache.cc 在枚举 namespace 时跳过所有“父 feature 存在”的条目" +
             "（api_feature_provider->GetParent(*feature) != nullptr），而 _api_features.json 里同时存在父 feature " +
-            "\"browserCli\"（getCapabilities）与子命名空间 feature \"browserCli.inputOwnership\"；后者因此不会被当成" +
+            "\"browserCli\"（getCapabilities）与子命名空间 feature \"browserCliInputOwnership\"；后者因此不会被当成" +
             "顶层 namespace 安装 BindingAccessor（对比 enterprise.platformKeys 这类能工作的点号 namespace：它们没有同名的父 feature）。" +
             "已排除的两个假设：renderer 确实收到了 --browser-cli-background-presentation 与 --enable-features。K1-K4 因此无法通过生产 API 执行。",
         });
         ctx.markBlocked({
           code: "api-not-exposed-to-extension-js",
           deps: [
-            "patch 029 修订：让 chrome.browserCli.inputOwnership 作为可安装的 namespace 暴露给扩展 JS",
+            "patch 029 修订：让 chrome.browserCliInputOwnership 作为可安装的 namespace 暴露给扩展 JS",
             "（方案：把命名空间改成无父 feature 的名字，如 browserCliInputOwnership/inputOwnership；或把函数并入 browserCli namespace；",
             "或在 extensions/renderer/feature_cache.cc 里把点号 namespace 与其父 feature 区分开）",
           ],
           reason:
-            "chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不可见（popup keys=" +
+            "chrome.browserCliInputOwnership 在任何扩展 JS 上下文里都不可见（popup keys=" +
             JSON.stringify(popup.probe?.io) + "，service worker io=" + String(swProbe?.io) +
-            "）。根因：命名空间 feature \"browserCli.inputOwnership\" 与父 feature \"browserCli\" 同名前缀，" +
+            "）。根因：命名空间 feature \"browserCliInputOwnership\" 与父 feature \"browserCli\" 同名前缀，" +
             "extensions/renderer/feature_cache.cc 把有父 feature 的条目当作子 feature 跳过，namespace 的 BindingAccessor 从未安装。" +
             "（已排除 switch 未转发与 feature 未启用的假设。）",
         });
@@ -1401,7 +1401,7 @@ const CASES = [
       const cdp = await ctx.cdp();
       const listenerSetup = await cdp.evaluate(
         popup.sessionId,
-        "(() => { window.__bpPresence = []; const io = chrome.browserCli && chrome.browserCli.inputOwnership; if (!io || !io.onHumanPresence) return {ok:false, keys: io ? Object.keys(io) : null}; io.onHumanPresence.addListener((e) => { window.__bpPresence.push(e); }); return {ok:true}; })()",
+        "(() => { window.__bpPresence = []; const io = chrome.browserCliInputOwnership; if (!io || !io.onHumanPresence) return {ok:false, keys: io ? Object.keys(io) : null}; io.onHumanPresence.addListener((e) => { window.__bpPresence.push(e); }); return {ok:true}; })()",
       );
       check("K4 受信扩展页面可注册 onHumanPresence", listenerSetup?.ok === true, JSON.stringify(listenerSetup));
 
@@ -1493,7 +1493,7 @@ function printMatrix() {
   console.log("  platform win32                    = " + (process.platform === "win32"));
   console.log("  patched chrome.exe                = " + fs.existsSync(CHROME) + " (" + CHROME + ")");
   console.log("  content.dll 含 " + FEATURE + " = " + report.env.contentDllFeature + " (" + (report.env.contentDll || "n/a") + ")");
-  console.log("  chrome.dll 含 browserCli.inputOwnership = " + report.env.chromeDllApi);
+  console.log("  chrome.dll 含 browserCliInputOwnership = " + report.env.chromeDllApi);
   console.log("  extension dist/manifest.json      = " + fs.existsSync(path.join(DIST, "manifest.json")));
   const hostExe = findNewestHostExe(root);
   console.log("  native host exe                   = " + (hostExe || "missing (run npm run build:host)"));
@@ -2013,7 +2013,7 @@ async function browserTargets(profileDir) {
  * 浏览器级 DevTools 客户端（只在测试侧使用）：
  *  - 观察 OOPIF target（Target.getTargets）；
  *  - 以受信扩展页面（chrome-extension://<id>/popup/index.html）为上下文执行
- *    chrome.browserCli.inputOwnership.*（生产 API 的真实调用方）；
+ *    chrome.browserCliInputOwnership.*（生产 API 的真实调用方）；
  *  - 建立**第二个** CDP session 用于跨会话注入测试（K3）。
  * 它不替代产品链路：AI 输入仍然只走 host → chrome.debugger。
  */
@@ -2666,7 +2666,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       return ctx._browserCdp;
     },
     /**
-     * 受信扩展页面（popup/index.html）作为 chrome.browserCli.inputOwnership 的真实调用方。
+     * 受信扩展页面（popup/index.html）作为 chrome.browserCliInputOwnership 的真实调用方。
      * 通过浏览器级 CDP 在该页面主世界执行调用：不经过 chrome.debugger（extension:// 页面
      * 不在 host_permissions 覆盖范围内），也不改变页面的扩展上下文。
      */
@@ -2689,7 +2689,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
             info.sessionId,
             "({href: location.href, " +
               "api: (typeof chrome !== 'undefined' && chrome.browserCli) ? true : false, " +
-              "io: (typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.inputOwnership) ? Object.keys(chrome.browserCli.inputOwnership) : null, " +
+              "io: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : null, " +
               "runtimeError: (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.lastError) ? chrome.runtime.lastError.message : null})",
           )
           .catch((error) => ({ error: String(error) }));
@@ -2700,13 +2700,13 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       ctx.popup = info;
       return info;
     },
-    /** 调用 browserCli.inputOwnership.<method>(request, cb)；返回 {result,lastError} 或错误标记。 */
+    /** 调用 browserCliInputOwnership.<method>(request, cb)；返回 {result,lastError} 或错误标记。 */
     async apiCall(method, request = {}) {
       const popup = await ctx.ensurePopup();
       const cdp = await ctx.cdp();
       const expr =
         "new Promise((resolve) => {" +
-        "  const io = (typeof chrome !== 'undefined' && chrome.browserCli) ? chrome.browserCli.inputOwnership : null;" +
+        "  const io = (typeof chrome !== 'undefined') ? (chrome.browserCliInputOwnership || (chrome.browserCli && chrome.browserCli.inputOwnership)) : null;" +
         "  if (!io || typeof io[" + JSON.stringify(method) + "] !== 'function') {" +
         "    resolve({__bpMissing: true, method: " + JSON.stringify(method) + ", keys: io ? Object.keys(io) : null});" +
         "    return;" +
@@ -2789,11 +2789,11 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
         ok: false,
         blocked: {
           code: "api-not-exposed-to-extension-js",
-          deps: ["patch 029 修订：让 chrome.browserCli.inputOwnership 成为可安装的顶层 namespace（避免与父 feature browserCli 的层级冲突，或调整 feature_cache 的父子判定）"],
+          deps: ["patch 029 修订：让 chrome.browserCliInputOwnership 成为可安装的顶层 namespace（避免与父 feature browserCli 的层级冲突，或调整 feature_cache 的父子判定）"],
           reason:
-            "chrome.browserCli 存在，但 chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不存在" +
+            "chrome.browserCli 存在，但 chrome.browserCliInputOwnership 在任何扩展 JS 上下文里都不存在" +
             "（popup 页面 keys=" + JSON.stringify(popup.probe?.io) + "，service worker 同样缺失）。" +
-            "根因：feature 名 \"browserCli.inputOwnership\" 有同名前缀的父 feature \"browserCli\"；" +
+            "根因：feature 名 \"browserCliInputOwnership\" 有同名前缀的父 feature \"browserCli\"；" +
             "extensions/renderer/feature_cache.cc 跳过所有“父 feature 存在”的条目，因此该 namespace 从未被安装为 " +
             "BindingAccessor。已排除 switch 未转发/feature 未启用（renderer 命令行两者都在）。content 单测不覆盖 renderer 侧暴露。",
         },

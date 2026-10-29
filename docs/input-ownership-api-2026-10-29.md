@@ -4,12 +4,12 @@ status: production-api-design + extension-side-implemented
 generated: { by: agent-k, at: 2026-10-29T12:00:00+08:00 }
 stale_after: 2027-04-29
 scope: |
-  P3 输入权生产 API：chrome.browserCli.inputOwnership 的 schema、信任边界、版本/心跳、
+  P3 输入权生产 API：chrome.browserCliInputOwnership 的 schema、信任边界、版本/心跳、
   session 绑定、命令↔手势语义、失败模式与回滚。扩展侧客户端已实现并通过离线单测；
   内核侧（patch 028 修订 + chrome 扩展 API 层）由 Agent J / 主代理后续实现。
 ---
 
-# 输入权生产 API（`chrome.browserCli.inputOwnership`）
+# 输入权生产 API（`chrome.browserCliInputOwnership`）
 
 > 设计依据：`docs/input-ownership-design-2026-10-28.md` §11（主代理决定）、§12（扩展侧已落地）、
 > §13（内核方案与信任模型）；内核现状：`chromium/patches/028-input-ownership-arbitration.patch`
@@ -26,7 +26,7 @@ scope: |
 
 | # | 决定 | 状态 |
 |---|---|---|
-| 1 | 命名空间：`chrome.browserCli.inputOwnership`，6 个方法 + 1 个事件 | 本文设计 |
+| 1 | 命名空间：`chrome.browserCliInputOwnership`，6 个方法 + 1 个事件 | 本文设计 |
 | 2 | `setOwnership` / `heartbeat` / `getOwnership` 是核心；`grantInput` + `beginInputCommand` / `endInputCommand` 是 ASSIST 命令 scope 三件套 | 设计 |
 | 3 | **采用** `beginInputCommand` / `endInputCommand`：一条扩展命令 = 一次内核 grant；解决 `dblclick`（2 次 press/release）、`type`（N 次 insertText）、`wheel`（多 tick）与内核手势计数不一致 | 设计 + 客户端已实现 |
 | 4 | 每目标单调 `version`；同 version 同 mode 幂等并刷新 `last_update`；低 version 拒绝；同 version 不同 mode 冲突拒绝 | 设计；需 J 补 `last_update`/`stale` |
@@ -245,7 +245,7 @@ getOwnership(request: {
 ### 1.8 `onHumanPresence` 事件
 
 ```ts
-chrome.browserCli.inputOwnership.onHumanPresence.addListener((event: {
+chrome.browserCliInputOwnership.onHumanPresence.addListener((event: {
   tabId: number;
   windowId?: number;
   kind: "mouse" | "wheel" | "key" | "text" | "touch" | string;
@@ -290,7 +290,7 @@ chrome.browserCli.inputOwnership.onHumanPresence.addListener((event: {
 
 | 条件 | 结果 |
 |---|---|
-| 构建定义了 Browser CLI 产品宏，且 `features::kInputOwnershipEnforcement` 启用 | `chrome.browserCli.inputOwnership` 注册 |
+| 构建定义了 Browser CLI 产品宏，且 `features::kInputOwnershipEnforcement` 启用 | `chrome.browserCliInputOwnership` 注册 |
 | 普通 Chrome / Chromium | 命名空间不存在 → 扩展 `host_capabilities.mode === "generic"`，客户端零调用 |
 | Browser CLI 但 feature 关闭（默认） | **不注册**该命名空间（比“注册后返回 FEATURE_DISABLED”更安全：调用方无法探测/误用） |
 | Browser CLI 但 managed mode 关闭 | 不注册（与 Phase 7 `getCapabilities().managedMode` 一致） |
@@ -298,7 +298,7 @@ chrome.browserCli.inputOwnership.onHumanPresence.addListener((event: {
 `_api_features.json`：
 
 ```jsonc
-"browserCli.inputOwnership": {
+"browserCliInputOwnership": {
   "channel": "stable",
   "extension_types": ["extension"],
   "contexts": ["blessed_extension"],          // 明确排除 content_script / web_page
@@ -376,7 +376,7 @@ bool IsTrustedBrowserCliExtension(ExtensionFunction* function) {
 人类点击（popup/遮罩）
   → SW 进程内 markInternalCommand()（不可由消息字段伪造）
   → grant_input / input_status / human_presence
-  →（只有 grant/scope 同步才调用）chrome.browserCli.inputOwnership
+  →（只有 grant/scope 同步才调用）chrome.browserCliInputOwnership
   → IsTrustedBrowserCliExtension()（ID 哈希 + context + location + managed）
   → content::SetInputOwnership / GrantDebuggerInput
   → RenderWidgetHostImpl 仲裁
@@ -634,7 +634,7 @@ scope 关闭/到期后回到手势计数。这样：
 
 三层证据（与 J 的 §5 对应）：
 
-1. **API 层**：feature 关闭时 `browserCli.inputOwnership` 不注册；扩展探测为 unsupported，
+1. **API 层**：feature 关闭时 `browserCliInputOwnership` 不注册；扩展探测为 unsupported，
    全程零调用。
 2. **内核层**：`kInputOwnershipEnforcement` 关闭时 `ShouldDropAutomationInput()` 第一行返回
    false；不查 delegate/controller；`GetInputOwnershipController()` 返回 nullptr（不创建
