@@ -12,12 +12,13 @@ scope: P3 输入权（Input Ownership）真实 Browser/OOPIF E2E：用例矩阵�
 > + `tests/fixtures/input-arbitration-frame.html`。
 > 设计依据：`docs/input-ownership-design-2026-10-28.md` §11（审核决定）、§12（扩展侧）、§13（内核侧）。
 >
-> **结论（patch 029 后）**：可跑的 20 个用例全部实跑通过（79/79 checks，0 failed）；
-> **9 个用例 blocked**：K0–K4（生产 API 已编译进 `chrome.dll`，但本构建里
-> `chrome.browserCli.inputOwnership` 在任何扩展 JS 上下文里都不可见 —— 见 §6.8，已单列为 P0）、
-> A1–A3（扩展命令层用户入口缺失）、S5（真实 IME）。另有两个 **P0 回归单独记录**：
-> 扩展 JS 看不到 inputOwnership、managed hidden 窗口产品截图失败。因此 verdict 是
-> **PARTIAL**，不是 PASS；blocked/P0 项没有用任何方式伪造通过。
+> **结论（patch 029 最终构建）**：可跑的 **24 个用例全部实跑通过（118/118 checks，0 failed）**；
+> **K0–K3 全部 PASS**（顶层 `chrome.browserCliInputOwnership` 可用；HUMAN 模式、版本语义、
+> Runtime.evaluate 边界、grant 生命周期、跨 CDP session 隔离全部实测）；
+> **K4 blocked**：managed hidden 窗口无法注入人类输入，presence/pause 无法验证（§6.10）；
+> A1–A3（扩展命令层用户入口）与 S5（真实 IME）仍按原依赖 blocked。
+> 另有 1 个 **P0 单独记录**：managed hidden 产品截图失败（§6.9，与输入仲裁无关）。
+> verdict 是 **PARTIAL**，不是 PASS；blocked/P0 项没有用任何方式伪造通过。
 
 ---
 
@@ -39,11 +40,13 @@ scope: P3 输入权（Input Ownership）真实 Browser/OOPIF E2E：用例矩阵�
    完全不变。
 5. Feature off（不传 `--enable-features`）时完整输入序列（click/hover/wheel/key/insertText/js）
    与基线一致，全部落地。
-6. **patch 029 的生产 API 在本构建不可达**：`chrome.dll` 已含
-   `browserCli.inputOwnership.setOwnership/grantInput/beginInputCommand/heartbeat`，
-   `gen/.../api_features.cc`/`generated_schemas.cc` 也已包含该命名空间，但扩展 JS
-   （popup 页面与 service worker）只能看到 `getCapabilities`。因此 K1–K4 的完整实现已就位，
-   但**没有真实调用方**，保持 blocked（根因与修复建议见 §6.8）。
+6. **patch 029 最终构建的生产 API 完全可用**：顶层 `chrome.browserCliInputOwnership`
+   （setOwnership/grantInput/beginInputCommand/endInputCommand/heartbeat/getOwnership/
+   onHumanPresence）在受信扩展页面里可调用；**K0–K3 全部 PASS**。
+7. `grantInput` 的 session 绑定按扩展自己的 debugger 会话生效：未 attach 返回
+   `NO_DEBUGGER_SESSION`；attach 后 grant 可用；第二个 CDP 会话无法复用（K2/K3）。
+   早期构建曾因 `GetForTab` 与 `chrome.debugger.attach` 使用不同 agent host 而一直
+   `NO_DEBUGGER_SESSION`，该问题已在最终构建修复（见 §6.8 的排查记录）。
 
 ---
 
@@ -148,27 +151,26 @@ server。HUMAN 模式下扩展会拒绝 `js`/`tab_cdp_call`，因此 HUMAN/Featu
 | F1 | baseline | off | **PASS** | Feature off：完整 AI 输入序列全部落地 | click/hover/wheel/key/insertText/js 全成功；clicks+1、wheel 事件+1、jsRuns+1 |
 | F2 | baseline | on | **PASS** | Feature on：所有 CDP `Input.*` 被显式拒绝；`Runtime.evaluate` 仍可改 DOM | 7/7 `-32000`；DOM 不变；`#count=js-touched` |
 | F3 | baseline | on | **PASS** | Feature on：11 个输入命令 fail-fast；非输入命令可用；截图 P0 单列 | 11/11 失败且错误可识别；`list_tabs`/`input_status` 可用；产品截图失败→P0 |
-| K0 | kernel | on | **BLOCKED** | 生产 API 可用性 + managed 窗口检查 | popup/SW 都只有 `getCapabilities`；renderer 收到 feature 与 managed switch；→ API 未安装（§6.8） |
-| K1 | kernel | on | **BLOCKED** | 内核 HUMAN：setOwnership(human)、版本语义、Runtime.evaluate 边界 | 实现就绪；依赖 API 暴露修复 |
-| K2 | kernel | on | **BLOCKED** | 内核 ASSIST：无 grant、一次性消费、TTL、用尽、scope/取消、session detach | 实现就绪；依赖 API 暴露修复 |
-| K3 | kernel | on | **BLOCKED** | 跨 CDP session 不得复用 grant | 实现就绪；依赖 API 暴露修复 |
-| K4 | kernel | on | **BLOCKED** | human_presence 事件桥 + 1s human pause | 实现就绪；依赖 API 暴露修复 + managed 窗口人类输入 |
+| K0 | kernel | on | **PASS** | 生产 API 可用性 + managed 窗口检查 | `chrome.browserCliInputOwnership` 存在（setOwnership/grantInput/...）；快照可读、version+1 推进被接受；managed 窗口 hidden 但 mode=ai 时 AI click 真实落地 |
+| K1 | kernel | on | **PASS** | 内核 HUMAN：setOwnership(human)、版本语义、Runtime.evaluate 边界 | human 接受；VERSION_CONFLICT/STALE_VERSION/version=0 拒绝；11 个输入命令 `-32000` 且 DOM 不变；`js` 可改 DOM；恢复 ai 后 click 落地 |
+| K2 | kernel | on | **PASS** | 内核 ASSIST：无 grant、一次性消费、TTL、用尽、scope/取消、session detach | 17/17 checks：未 attach→`NO_DEBUGGER_SESSION`（预期）；attach 后 grant granted；click#1 成功、#2 拒绝；TTL 拒绝；scope 内成功、结束后拒绝；cancel 退款；detach 后拒绝；重新 grant 成功 |
+| K3 | kernel | on | **PASS** | 跨 CDP session 不得复用 grant | 7/7 checks：第二个并发 CDP 会话注入被 `-32000` 拒绝且 DOM 不变；扩展会话重新 grant 后可输入；mode/version 不变 |
+| K4 | kernel | on | **BLOCKED** | human_presence 事件桥 + 1s human pause | listener 注册 + setOwnership(assist) PASS；managed hidden 下人类输入无法注入 → 事件/pause 未验证（§6.10） |
 
-**最终汇总**：执行 20（PASS 20 / FAIL 0），blocked 9（A1–A3、S5、K0–K4），checks 79/79，
-`verdict=PARTIAL`。本轮报告：
+**最终汇总**：执行 24（PASS 24 / FAIL 0），blocked 5（A1–A3、S5、K4），checks 118/118，
+`verdict=PARTIAL`（仅因 blocked + screenshot P0）。本轮报告：
 
-- 全量：`D:\c\logs\input-arbitration-e2e-2026-10-29T09-32-43-483Z.json`（79/79，PARTIAL）
-- `--stage=kernel --feature=on`：`D:\c\logs\input-arbitration-e2e-2026-10-29T09-33-48-609Z.json`
-  （19/19 checks 全 PASS，K0–K4 全 BLOCKED，verdict=BLOCKED）
-- `--stage=assist --feature=off`：`D:\c\logs\input-arbitration-e2e-2026-10-29T09-34-08-053Z.json`
-  （17/17，A4 PASS、A1–A3 BLOCKED，PARTIAL）
+- 全量：`D:\c\logs\input-arbitration-e2e-2026-10-29T10-05-10-036Z.json`（118/118，PARTIAL）
+- `--stage=kernel --feature=on`：`D:\c\logs\input-arbitration-e2e-2026-10-29T10-03-31-201Z.json`
+  （58/58 checks；K0–K3 PASS，K4 BLOCKED）
+- `--stage=assist --feature=off`：A4 PASS、A1–A3 BLOCKED
 
 ## 5. Blocked 用例的依赖与解锁条件
 
 | code | 用例 | 依赖 | 解锁后需要补的断言 |
 | --- | --- | --- | --- |
 | `assist-internal-entry-missing` | A1–A3 | 产品级「用户入口」：popup 操作或内核 `onHumanPresence` 事件桥，能在 SW 内用 `markInternalCommand()` 发 `grant_input` / `human_presence` | ASSIST 无 grant 拒绝、grant 一次成功二次拒绝、过期/用尽/取消后拒绝 |
-| `api-not-exposed-to-extension-js` | K0–K4 | patch 029 修订：让 `chrome.browserCli.inputOwnership` 真正安装进扩展 JS bindings（见 §6.8） | K0 环境检查转 PASS；K1 HUMAN/版本语义、K2 grant 生命周期、K3 跨会话、K4 presence/pause |
+| `managed-human-input-unavailable` | K4 | 真实 OS 输入或可显示的 managed 窗口 | onHumanPresence 事件、1s human pause、pause 不消耗 grant |
 | `real-ime-not-automatable` | S5 | 真实 TSF/搜狗 + 系统输入法状态 | 真实组合输入（候选窗、上屏）路径下 AI 输入仍被仲裁 |
 
 K1–K4 的代码已经写好并在 `kernelApiReady()` 通过后会完整执行；当前 `kernelApiReady()` 在
@@ -217,51 +219,23 @@ HUMAN 时 `js` / `tab_cdp_call` 都被拒绝，状态读取必须走 fixture HTT
 `chromeDllApi=true`（`chromeDllApiDetail.namespace=true, setOwnership=true, grantInput=true,
 beginInputCommand=true, heartbeat=true`）。
 
-### 6.8 P0：`chrome.browserCli.inputOwnership` 没有暴露给扩展 JS（阻塞 K0–K4）
+### 6.8 已修复：`grantInput` 的 DevTools session 映射（K2/K3 曾因 `NO_DEBUGGER_SESSION` 阻塞）
 
-**现象（可复现）**：
+**最终状态**：K2（17/17）与 K3（7/7）在最终构建全部 PASS；`grantInput` 正常返回
+`granted:true` / `actions` / `expiresAt`，session detach 与第二 CDP 会话都按预期拒绝。
+本节保留早期构建的排查记录，供后续回归定位。
 
-- `chrome-extension://<id>/popup/index.html`（浏览器级 CDP `Runtime.evaluate`）：
-  `chrome.browserCli` 存在（`getCapabilities` 可调用），`Object.keys(chrome.browserCli) ===
-  ["getCapabilities"]`，`chrome.browserCli.inputOwnership === undefined`；
-  `Object.keys(chrome).filter(/browser|input|owner/i)` 只有 `["browserCli"]`，没有扁平别名。
-- 扩展 **service worker**（`Target.getTargets` → `service_worker` target，attach 后求值）：
-  同样只有 `getCapabilities`，`io=false`。
-- 已排除的假设：
-  - `--enable-features=InputOwnershipEnforcement` 确实到达 renderer（WMI 读子进程命令行：`feature=true`）；
-  - `--browser-cli-background-presentation` 也到达 renderer（`managedSwitch=true`）；
-  - `gen/chrome/common/extensions/api/api_features.cc` 含 `browserCli.inputOwnership` 条目；
-  - `gen/chrome/common/extensions/api/generated_schemas.cc` 含该 namespace；
-  - `chrome.dll` 含 `browserCli.inputOwnership.{setOwnership,grantInput,beginInputCommand,
-    endInputCommand,heartbeat,getOwnership,onHumanPresence}` 全部函数名；
-  - 同 allowlist/context 的 `browserCli.getCapabilities` 在同一个页面可用。
+**当时现象**：扩展已 attach（`chrome.debugger.getTargets` 显示目标 tab
+`attached:true, type:"page"`；浏览器级 `Target.getTargets` 没有 `type:"tab"` 的 target），
+`grantInput` 仍返回 `{"granted":false,"reason":"NO_DEBUGGER_SESSION"}`。
 
-**根因（源码级）**：`extensions/renderer/feature_cache.cc` 在枚举可安装的顶层 namespace 时跳过
-所有「父 feature 存在」的条目：
-
-```cpp
-if (api_feature_provider->GetParent(*feature) != nullptr)
-  continue;
-```
-
-`_api_features.json` 同时定义了父 feature `"browserCli"`（getCapabilities）与子命名空间
-feature `"browserCli.inputOwnership"`。`FeatureProvider::GetParent()` 按 `.` 切分并查找前缀，
-`"browserCli"` 命中 → `browserCli.inputOwnership` 被当成「子 feature（函数/事件）」跳过，
-namespace 的 `BindingAccessor` 从未安装，因此扩展 JS 里没有这个命名空间（函数调用层
-browser-side 的 trust/availability 检查根本没有机会执行）。
-对比：`enterprise.platformKeys` 这类能工作的点号 namespace 没有同名的父 feature。
-
-**建议修复（供 patch 029 owner 选择）**：
-
-1. 把命名空间改成没有父 feature 的名字（例如 `browserCliInputOwnership` 或
-   `inputOwnership`），或把 `inputOwnership` 的函数并入 `browserCli` 单一 namespace；
-2. 或在 `feature_cache.cc` 里把「点号 namespace」与「父 feature 的子项」区分开（例如父 feature
-   自身也是 namespace 时仍允许子 namespace 安装）；
-3. 增加 chrome 层集成测试：在受信扩展页面里断言
-   `chrome.browserCli.inputOwnership.setOwnership` 是函数（现有 51 个 content 单测不覆盖
-   renderer 侧 bindings 暴露）。
-
-证据记录在报告 `p0Regressions[0]`（`P0-input-ownership-api-not-exposed-to-extension-js`）。
+**当时的精确失败点**：`browser_cli_input_ownership_api.cc::ResolveDebuggerSession()` 用
+`content::DevToolsAgentHost::GetForTab(web_contents)`（`WebContentsDevToolsAgentHost`，仅当存在
+tab 级 host 时非空），而扩展 `chrome.debugger.attach({tabId})` 走
+`DevToolsAgentHost::GetOrCreateFor(web_contents)`（`RenderFrameDevToolsAgentHost`，
+`debugger_api.cc:967`）。两者不是同一个 host，`SessionByClient(client)` 找不到 session。
+修复方向即：使用 client 自己的 `agent_host()`（或 `GetOrCreateFor(web_contents)`）取 token。
+当前构建已按此修复（K2/K3 实测通过）。
 
 ### 6.9 P0：managed hidden 窗口的产品截图失败（与输入仲裁无关）
 
@@ -277,6 +251,14 @@ Feature on + managed 模式下窗口以 hidden 创建：
 `p0Regressions` 单列为 `P0-managed-hidden-product-screenshot`；**不作为输入仲裁用例的失败**，
 也没有伪造截图 PASS。存在 P0 时 verdict 最多为 PARTIAL。
 
+### 6.10 K4：managed hidden 窗口无法注入人类输入（事件桥/pause 未验证）
+
+`onHumanPresence` listener 注册与 `setOwnership(assist)` 均 PASS；但 managed 模式下窗口
+`visible=false`，`PostMessage` 注入的鼠标事件无法命中页面（`human.landed=false`），因此
+K4 的“人类输入 → presence 事件 → 1s pause”链路在本环境无法验证，按
+`managed-human-input-unavailable` blocked。feature-off 的 H2/H4/O3/M1 已用同一条 PostMessage
+通道证明人类输入不被锁；这里不伪造。
+
 ## 7. 未覆盖 / 明确排除
 
 1. **触摸/手势**：patch 028/029 未把 `Input.dispatchTouchEvent` 等接到仲裁点。
@@ -284,7 +266,7 @@ Feature on + managed 模式下窗口以 hidden 创建：
 3. **浏览器 UI 快捷键**（Ctrl+L/T/W/F5）：按设计决定 6 不纳入页面输入权；本 harness 不触发。
 4. **managed hidden 窗口的人类输入注入**：PostMessage 无法命中；feature-off 用例已用真实链路
    证明人类输入不被锁，feature-on 的 O4/M3/K1 显式记录 unverified。
-5. **内核 HUMAN/ASSIST/grant/presence**：K0–K4 已实现但被 §6.8 阻塞。
+5. **内核 presence/pause**：K4 被 §6.10 的 managed hidden 人类输入限制阻塞（K0–K3 已 PASS）。
 
 ## 8. 复现清单
 
@@ -314,4 +296,4 @@ node scripts/test-input-arbitration-e2e.mjs --stage=assist --feature=off --no-bu
 | OOPIF 不绕过 | O1–O4 |
 | Feature 关闭行为不变 | F1、全部 off 用例 |
 | 多窗口/前台隔离 | M1–M3 |
-| 生产 API（patch 029） | K0（可用性 P0）；K1–K4 实现就绪、blocked |
+| 生产 API（patch 029） | K0–K3 PASS（HUMAN/版本/grant 生命周期/跨会话）；K4 被 managed hidden 人类输入阻塞（§6.10） |
