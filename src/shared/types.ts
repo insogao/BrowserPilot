@@ -152,10 +152,64 @@ export interface PopupRequest {
     | "get_guide" // 返回使用文档 markdown（popup 负责写剪贴板）
   | "get_skill" // 返回轻量技能引导（GitHub SKILL.md 地址 + 实时连接信息）
     | "template_command" // options 模板看板调用受限模板管理命令
-    | "stop";
+    | "stop"
+    // 输入权用户入口（P3）：SW 在进程内构造 Command + markInternalCommand()，
+    // 消息里的字段只用于选择目标 space，不构成身份（见 popup-entry.ts）。
+    | "input_status" // 只读：当前 space 的输入权视图 + 可选 space 列表
+    | "grant_input" // 允许一次输入：ASSIST 下发放 1 次 grant（TTL 默认 60s）
+    | "human_presence" // 我在操作：进入 ASSIST（不改 ownership）
+    | "ensure_visible"; // 显示窗口：ensure_visible { focus:false }
+  /** 目标 Task Space（用户在下拉框选择；缺省按活动 tab/窗口解析）。 */
+  spaceId?: string;
   name?: CommandName;
   args?: Record<string, unknown>;
 }
+
+/** popup 展示用的输入权视图（派生自 input_status 命令，不落第二份状态）。 */
+export interface PopupInputView {
+  spaceId: string;
+  tabId?: number;
+  windowId?: number;
+  mode: "human" | "assist" | "ai";
+  ownership: "agent" | "user" | "inactive" | "unknown";
+  ownerClientId?: string;
+  assistSince?: number;
+  assistReason?: string;
+  assistExpiresAt: number | null;
+  grantActionsRemaining: number | null;
+  kernel?: {
+    state: string;
+    supported: boolean;
+    degraded: boolean;
+    reason?: string;
+    effectiveMode?: "human" | "assist" | "ai";
+    version?: number;
+    kernelVersion?: number;
+    kernelMode?: "human" | "assist" | "ai";
+    stale?: boolean;
+    lastAckAt?: number;
+    lastError?: string;
+  };
+}
+
+/** popup 下拉框中的一个 Task Space 选项。 */
+export interface PopupSpaceOption {
+  spaceId: string;
+  name?: string;
+  windowId?: number;
+  tabId?: number;
+  ownership?: "agent" | "user" | "inactive";
+  mode?: "human" | "assist" | "ai";
+  updatedAt?: number;
+}
+
+/** SW → popup 的稳定错误形状（错误码来自 InputOwnershipError / TaskSpaceError / 本模块）。 */
+export interface PopupErrorInfo {
+  code: string;
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
 export interface PopupStatus {
   attached: boolean;
   hostReady?: boolean;
@@ -166,6 +220,14 @@ export interface PopupStatus {
   layer?: string;
   profile?: ProfileInfo;
   hostPort?: number;
+  /** 当前/选中的 Task Space 输入权视图；没有活动 Task Space 时为 null。 */
+  input?: PopupInputView | null;
+  /** 可选择的 Task Space（只含窗口仍存在的非 inactive 空间）。 */
+  spaces?: PopupSpaceOption[];
+  /** popup 解析出的目标（供自动化断言）。 */
+  target?: { spaceId?: string; tabId?: number; windowId?: number };
+  /** 读取 input_status 失败时的稳定错误（例如 SPACE_INACTIVE）。 */
+  inputError?: PopupErrorInfo;
 }
 export interface PopupGuide {
   guide: string;
