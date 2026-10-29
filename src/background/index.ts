@@ -9,6 +9,7 @@ import { isAttached } from "./debugger-bridge";
 import type { PopupGuide, PopupRequest, PopupStatus } from "../shared/types";
 import { claimSpaceForTab, markInternalCommand, registerSpaceLifecycleHandlers } from "./spaces";
 import { detectHostCapabilities } from "./capabilities";
+import { heartbeatKernelInputOwnership, initKernelInputOwnership } from "./input-ownership-api";
 
 const HEARTBEAT = "browserpilot.heartbeat";
 
@@ -30,6 +31,9 @@ function ensureCapabilitiesProbed(): Promise<void> {
 async function init(): Promise<void> {
   await chrome.alarms.create(HEARTBEAT, { periodInMinutes: 0.5 }); // ~30s
   await ensureCapabilitiesProbed();
+  // 内核输入权（P3）：只有 enhanced host 才探测/同步；generic 下是零行为变化的 no-op。
+  // 必须在 capability 探测之后调用：探测结果决定是否允许调用 chrome.browserCli。
+  await initKernelInputOwnership();
   await connectHost();
 }
 
@@ -48,6 +52,8 @@ chrome.runtime.onStartup.addListener(() => {
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === HEARTBEAT) {
     await connectHost();
+    // 30s alarm 是 10s 心跳定时器被 SW 回收后的兜底：重新确认内核快照并降级失联目标。
+    await heartbeatKernelInputOwnership("alarm");
     const s = await loadState();
     await patchState({ startTime: s.startTime }); // 触碰存储以保持活跃
   }
