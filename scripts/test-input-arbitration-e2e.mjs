@@ -21,7 +21,7 @@
 //                   AI/人类输入在主帧与子帧的计数分离、Feature on 时子帧同样被仲裁
 //   multi           两个窗口，一个 HUMAN 一个 AI，互不干扰；前台/z-order 不变
 //   assist          ASSIST 无 grant / grant 一次性消费 / 过期 / 用尽 / 取消 / session detach /
-//                   跨会话注入 —— 依赖 Agent K 的产品 API（chrome.browserCliInputOwnership），
+//                   跨会话注入 —— 依赖 Agent K 的产品 API（chrome.browserCli.inputOwnership），
 //                   当前构建只有 getCapabilities，因此 blocked
 //   kernel          HUMAN 模式、内核 grant 表、跨 CDP session 隔离 —— blocked（同上 + J 的 patch 028 修订）
 //
@@ -187,15 +187,18 @@ function probeBinaries() {
   report.env.chromeDll = fs.existsSync(chromeDll) ? chromeDll : null;
   // K 的产品 API：只有在受信扩展 API 被编译进去时才会出现这个函数名。
   // 生产 API（patch 029）按 namespace 全名注册 ExtensionFunction：
-  // "browserCliInputOwnership.setOwnership" / ".grantInput" / ...，因此二进制里能
-  // 直接匹配到 "browserCliInputOwnership"。"browserCli.setInputOwnership" 是早期
+  // "browserCli.inputOwnership.setOwnership" / ".grantInput" / ...，因此二进制里能
+  // 直接匹配到 "browserCli.inputOwnership"。"browserCli.setInputOwnership" 是早期
   // 设计的扁平命名，仅作为兼容回退保留。
+  // patch 029 修订把命名空间改成顶层 browserCliInputOwnership（避开父 feature browserCli 的层级冲突）。
   const hasNamespace = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCliInputOwnership") : null;
+  const hasLegacyNested = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCli.inputOwnership") : null;
   const hasFlatName = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCli.setInputOwnership") : null;
   report.env.chromeDllApi = fs.existsSync(chromeDll) ? (hasNamespace === true || hasFlatName === true) : null;
   report.env.chromeDllApiDetail = fs.existsSync(chromeDll)
     ? {
         namespace: hasNamespace,
+        legacyNested: hasLegacyNested,
         flatName: hasFlatName,
         setOwnership: binaryHas(chromeDll, "setOwnership"),
         grantInput: binaryHas(chromeDll, "grantInput"),
@@ -435,13 +438,12 @@ const CASES = [
       if ((await ctx.inputStatus("main")).mode !== "ai") await ctx.claim("main");
       await ctx.focusInput("main");
       const typeResult = await ctx.ai("main", "type", { text: "hello world", typingDelayMs: 10, cursor: false });
-      await sleep(200);
-      const afterType = await ctx.probe("main");
+      // beacon 200ms 周期：等状态真正反映输入结果，避免读到动作之前的快照（不是放宽断言）。
+      const afterType = await ctx.waitState("main", (st) => st.inputValue === "hello world", 3000);
       check("S1 type 逐字输入落地", typeResult.ok === true && afterType.inputValue === "hello world", JSON.stringify({ typeResult, value: afterType.inputValue }));
 
       const fillResult = await ctx.ai("main", "fill", { selector: "#input", value: "中文填充-输入仲裁" });
-      await sleep(200);
-      const afterFill = await ctx.probe("main");
+      const afterFill = await ctx.waitState("main", (st) => st.inputValue === "中文填充-输入仲裁", 3000);
       check("S1 fill 整体替换（中文）落地", fillResult.ok === true && afterFill.inputValue === "中文填充-输入仲裁", JSON.stringify({ fillResult, value: afterFill.inputValue }));
       check("S1 页面收到真实 input 事件", afterFill.inputEvents > afterType.inputEvents, JSON.stringify({ before: afterType.inputEvents, after: afterFill.inputEvents }));
       ctx.record("S1", { typeResult, afterType, fillResult, afterFill });
@@ -944,7 +946,7 @@ const CASES = [
       }
       report.notes.push(
         "风险（Feature on + kernel API 未由扩展推送）：扩展侧 mode=ai，但内核快照默认 ASSIST 且没有 grant，" +
-          "产品输入面 100% fail-fast。patch 029 已提供 production API，但本构建里 chrome.browserCliInputOwnership " +
+          "产品输入面 100% fail-fast。patch 029 已提供 production API，但本构建里 chrome.browserCli.inputOwnership " +
           "在扩展 JS 中不可见（见 K0 / P0），因此没有调用方能推送 mode；打开 Feature 仍然等于禁用 AI 输入。" +
           "所有 Input.* 的拒绝是可诊断的 ServerError（-32000），不是静默成功。",
       );
@@ -965,12 +967,11 @@ const CASES = [
       const cdp0 = await ctx.cdp();
       const nsKeys = await cdp0.evaluate(
         popup.sessionId,
-        "({keys: (typeof chrome !== 'undefined' && chrome.browserCli) ? Object.keys(chrome.browserCli) : null, " +
-          "own: (typeof chrome !== 'undefined' && chrome.browserCli) ? Object.getOwnPropertyNames(chrome.browserCli) : null, " +
+        "({top: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : null, " +
+          "capsKeys: (typeof chrome !== 'undefined' && chrome.browserCli) ? Object.keys(chrome.browserCli) : null, " +
           "caps: (typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.getCapabilities) ? 'fn' : 'missing', " +
           "chromeKeys: Object.keys(chrome).filter((k) => /browser|input|owner/i.test(k)), " +
-          "nested: (typeof chrome !== 'undefined') ? (chrome.browserCliInputOwnership ? 'top-level' : (chrome.browserCli && chrome.browserCli.inputOwnership ? 'legacy-nested' : 'missing')) : 'no-chrome', " +
-          "flat: (typeof chrome !== 'undefined') ? Object.keys(chrome).filter((k) => /inputOwnership/i.test(k)) : null})",
+          "nested: (typeof chrome !== 'undefined' && chrome.browserCli) ? typeof chrome.browserCli.inputOwnership : 'no-browserCli'})",
       ).catch((error) => ({ error: String(error) }));
       let swProbe = null;
       try {
@@ -980,7 +981,7 @@ const CASES = [
           const swSession = await cdp0.attach(swTarget.targetId);
           swProbe = await cdp0.evaluate(
             swSession,
-            "({keys: chrome.browserCli ? Object.keys(chrome.browserCli) : null, io: !!(chrome.browserCliInputOwnership)})",
+            "({keys: chrome.browserCli ? Object.keys(chrome.browserCli) : null, io: !!(chrome.browserCli && chrome.browserCli.inputOwnership)})",
           );
         } else {
           swProbe = { missing: true, types: targets0.map((t) => t.type + ":" + String(t.url).slice(0, 60)) };
@@ -993,8 +994,8 @@ const CASES = [
       ctx.record("K0", { popup: popup.probe, nsKeys, swProbe, renderer, window: winState0.window });
 
       check(
-        "K0 受信扩展页面里 chrome.browserCli 命名空间存在",
-        popup.probe?.api === true && nsKeys?.caps === "fn",
+        "K0 受信扩展页面里 chrome.browserCliInputOwnership 命名空间存在（getCapabilities 也在）",
+        popup.probe?.api === true && nsKeys?.caps === "fn" && Array.isArray(nsKeys?.top) && nsKeys.top.length > 0,
         JSON.stringify({ probe: popup.probe, nsKeys }),
       );
       check(
@@ -1018,7 +1019,11 @@ const CASES = [
         JSON.stringify({ anyRendererHasFeature: renderer.anyRendererHasFeature }),
       );
 
-      const apiExposed = popup.probe?.api === true && Array.isArray(popup.probe?.io) && popup.probe.io.includes("setOwnership");
+      const apiExposed =
+        popup.probe?.api === true &&
+        Array.isArray(popup.probe?.io) &&
+        popup.probe.io.includes("setOwnership") &&
+        popup.probe.io.includes("grantInput");
       if (!apiExposed) {
         const detail = { popup: popup.probe, nsKeys, swProbe, renderer, window: winState0.window };
         report.p0Regressions.push({
@@ -1026,25 +1031,25 @@ const CASES = [
           at: nowIso(),
           detail,
           note:
-            "patch 029 的 chrome.browserCliInputOwnership 已编译进 chrome.dll（schema/feature/函数注册都在），" +
+            "patch 029 的 chrome.browserCli.inputOwnership 已编译进 chrome.dll（schema/feature/函数注册都在），" +
             "但扩展 JS（popup 页面与 service worker）只能看到 getCapabilities，chrome 上也没有其它 inputOwnership 路径。" +
             "根因（源码级）：extensions/renderer/feature_cache.cc 在枚举 namespace 时跳过所有“父 feature 存在”的条目" +
             "（api_feature_provider->GetParent(*feature) != nullptr），而 _api_features.json 里同时存在父 feature " +
-            "\"browserCli\"（getCapabilities）与子命名空间 feature \"browserCliInputOwnership\"；后者因此不会被当成" +
+            "\"browserCli\"（getCapabilities）与子命名空间 feature \"browserCli.inputOwnership\"；后者因此不会被当成" +
             "顶层 namespace 安装 BindingAccessor（对比 enterprise.platformKeys 这类能工作的点号 namespace：它们没有同名的父 feature）。" +
             "已排除的两个假设：renderer 确实收到了 --browser-cli-background-presentation 与 --enable-features。K1-K4 因此无法通过生产 API 执行。",
         });
         ctx.markBlocked({
           code: "api-not-exposed-to-extension-js",
           deps: [
-            "patch 029 修订：让 chrome.browserCliInputOwnership 作为可安装的 namespace 暴露给扩展 JS",
+            "patch 029 修订：让 chrome.browserCli.inputOwnership 作为可安装的 namespace 暴露给扩展 JS",
             "（方案：把命名空间改成无父 feature 的名字，如 browserCliInputOwnership/inputOwnership；或把函数并入 browserCli namespace；",
             "或在 extensions/renderer/feature_cache.cc 里把点号 namespace 与其父 feature 区分开）",
           ],
           reason:
-            "chrome.browserCliInputOwnership 在任何扩展 JS 上下文里都不可见（popup keys=" +
+            "chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不可见（popup keys=" +
             JSON.stringify(popup.probe?.io) + "，service worker io=" + String(swProbe?.io) +
-            "）。根因：命名空间 feature \"browserCliInputOwnership\" 与父 feature \"browserCli\" 同名前缀，" +
+            "）。根因：命名空间 feature \"browserCli.inputOwnership\" 与父 feature \"browserCli\" 同名前缀，" +
             "extensions/renderer/feature_cache.cc 把有父 feature 的条目当作子 feature 跳过，namespace 的 BindingAccessor 从未安装。" +
             "（已排除 switch 未转发与 feature 未启用的假设。）",
         });
@@ -1060,14 +1065,26 @@ const CASES = [
 
       await ctx.attachOn("main");
       const snapBefore = await ctx.kernelSnapshot("main");
+      // 扩展客户端可能已经自动同步过 setOwnership(ai)，初始态不保证 assist/0；
+      // 只要求快照可读、mode 合法，然后用 version+1 推进来验证版本语义。
       check(
-        "K0 初始内核快照 mode=assist / version=0 / stale=false",
-        snapBefore.snapshot && snapBefore.snapshot.mode === "assist" && snapBefore.snapshot.version === 0 && snapBefore.snapshot.stale === false,
+        "K0 内核快照可读且 mode 合法（不硬断言 assist/0）",
+        snapBefore.snapshot &&
+          ["ai", "assist", "human"].includes(snapBefore.snapshot.mode) &&
+          Number.isInteger(snapBefore.snapshot.version) &&
+          snapBefore.snapshot.version >= 0 &&
+          typeof snapBefore.snapshot.stale === "boolean",
         JSON.stringify(snapBefore),
       );
 
       const setAi = await ctx.bumpMode("main", "ai");
-      check("K0 setOwnership(ai) 被接受", setAi.bumped?.result?.accepted === true && setAi.bumped.result.mode === "ai", JSON.stringify(setAi));
+      check(
+        "K0 setOwnership(ai, version+1) 被接受且 version 递增",
+        setAi.bumped?.result?.accepted === true &&
+          setAi.bumped.result.mode === "ai" &&
+          setAi.bumped.result.version === snapBefore.snapshot.version + 1,
+        JSON.stringify({ snapBefore, setAi }),
+      );
 
       await ctx.resetMain();
       const before = await ctx.probe("main");
@@ -1117,7 +1134,14 @@ const CASES = [
       const staleVersion = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: human.version - 1 });
       check("K1 旧版本 → STALE_VERSION（版本单调）", staleVersion?.result?.accepted === false && staleVersion.result.reason === "STALE_VERSION", JSON.stringify(staleVersion));
       const badVersion = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: 0 });
-      check("K1 version=0 → 绑定层拒绝 INVALID_ARGUMENT", /INVALID_ARGUMENT/.test(String(badVersion?.lastError)), JSON.stringify(badVersion));
+      // version 的 schema minimum=1，绑定层会直接抛 TypeError（根本到不了内核）；
+      // 两种拒绝都算正确：绑定层 TypeError 或内核 INVALID_ARGUMENT。
+      check(
+        "K1 version=0 → 绑定层/内核拒绝（TypeError at least 1 或 INVALID_ARGUMENT）",
+        /INVALID_ARGUMENT/.test(String(badVersion?.lastError)) ||
+          /at least 1|must be greater than or equal/i.test(String(badVersion?.__bpThrown)),
+        JSON.stringify(badVersion),
+      );
 
       await ctx.resetMain(); // Runtime.evaluate 不属于输入事件，HUMAN 下仍可用
       const before = await ctx.probe(key);
@@ -1201,6 +1225,20 @@ const CASES = [
       check("K2 未 attach 的 tab → grantInput NO_DEBUGGER_SESSION", noSession?.result?.granted === false && noSession.result.reason === "NO_DEBUGGER_SESSION", JSON.stringify(noSession));
 
       await ctx.attachOn(key);
+      const attachedTargets = await ctx.extensionDebuggerTargets();
+      const attachedEntry = (attachedTargets?.targets || []).find((t) => Number(t.tabId) === Number(tabId));
+      check(
+        "K2 attach 证据：chrome.debugger.getTargets 中该 tab attached=true",
+        attachedTargets?.ok === true && attachedEntry?.attached === true,
+        JSON.stringify({ tabId, attachedTargets }),
+      );
+      const browserTargetsForTab = await (await ctx.cdp()).targets().catch((error) => ({ error: String(error) }));
+      const tabLevelTargets = Array.isArray(browserTargetsForTab)
+        ? browserTargetsForTab.filter((t) => t.type === "tab" && String(t.url || "").includes("token="))
+        : [];
+      const pageTargetForTab = Array.isArray(browserTargetsForTab)
+        ? browserTargetsForTab.filter((t) => t.type === "page" && String(t.url || "").includes(ctx.spaces[key].token))
+        : [];
       const assist = await ctx.bumpMode(key, "assist");
       check("K2 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true && assist.bumped.result.mode === "assist", JSON.stringify(assist));
 
@@ -1216,7 +1254,37 @@ const CASES = [
       );
 
       const grant1 = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
-      check("K2 grantInput(actions:1) granted", grant1?.result?.granted === true && grant1.result.actions === 1 && typeof grant1.result.expiresAt === "number", JSON.stringify(grant1));
+      if (grant1?.result?.granted !== true) {
+        const reason = grant1?.result?.reason || grant1?.lastError || "unknown";
+        const detail = { tabId, attachedEntry, attachedTargets, tabLevelTargets, pageTargetForTab, grant1, noSession, assist };
+        if (reason === "NO_DEBUGGER_SESSION") {
+          report.p0Regressions.push({
+            id: "P0-input-ownership-session-mapping",
+            at: nowIso(),
+            detail,
+            note:
+              "扩展已 attach（chrome.debugger.getTargets 显示该 tab attached=true，且 tab_cdp_call 成功），" +
+              "但 grantInput 返回 NO_DEBUGGER_SESSION。精确失败点：browser_cli_input_ownership_api.cc::ResolveDebuggerSession " +
+              "用 content::DevToolsAgentHost::GetForTab(web_contents)（WebContentsDevToolsAgentHost / \"tab\" target）；" +
+              "chrome.debugger.attach({tabId}) 走的是 DevToolsAgentHost::GetOrCreateFor(web_contents)（RenderFrameDevToolsAgentHost，" +
+              "debugger_api.cc:967）。两者不是同一个 host，随后 agent_host->GetInputOwnershipSessionForClient(client) 在错误的 " +
+              "host 上做 SessionByClient(client) → nullptr → NO_DEBUGGER_SESSION。修复：用 client 自己的 host" +
+              "（ExtensionDevToolsClientHost::agent_host()）或 GetOrCreateFor(web_contents)，再取 session token。",
+          });
+          ctx.record("K2", detail);
+          ctx.markBlocked({
+            code: "product-session-mapping-bug",
+            deps: ["M: 修正 ResolveDebuggerSession 的 DevToolsAgentHost 选择（GetForTab → client 的 host / GetOrCreateFor）"],
+            reason:
+              "扩展 chrome.debugger 会话已 attach（getTargets attached=true），grantInput 仍返回 NO_DEBUGGER_SESSION；" +
+              "GetForTab 返回 WebContentsDevToolsAgentHost（通常为 nullptr），与 attach 使用的 RenderFrameDevToolsAgentHost 不一致。",
+          });
+          return;
+        }
+        check("K2 grantInput(actions:1) granted", false, JSON.stringify(detail));
+        return;
+      }
+      check("K2 grantInput(actions:1) granted", grant1.result.actions === 1 && typeof grant1.result.expiresAt === "number", JSON.stringify(grant1));
       const click1 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
       await sleep(400);
       const state1 = await ctx.probe(key);
@@ -1297,7 +1365,7 @@ const CASES = [
 
       const finalSnap = await ctx.kernelSnapshot(key);
       check("K2 结束时内核配置仍为 assist（grant 不改变 mode）", finalSnap.snapshot?.mode === "assist", JSON.stringify(finalSnap));
-      ctx.record("K2", { noSession, assist, before, afterNoGrant, grant1, state1, click2, state2, grantTtl, clickTtl, grantScope, begin, clickScope, end, clickAfterScope, grantCancel, beginCancel, endCancel, clickRefund, stateRefund, grantDetach, detach, clickDetached, grantRegrant, clickRegrant, finalSnap });
+      ctx.record("K2", { noSession, attachedTargets, attachedEntry, assist, before, afterNoGrant, grant1, state1, click2, state2, grantTtl, clickTtl, grantScope, begin, clickScope, end, clickAfterScope, grantCancel, beginCancel, endCancel, clickRefund, stateRefund, grantDetach, detach, clickDetached, grantRegrant, clickRegrant, finalSnap });
       await ctx.bumpMode(key, "ai").catch(() => undefined);
     },
   },
@@ -1316,9 +1384,38 @@ const CASES = [
       await ctx.openFresh(key);
       const tabId = ctx.spaces[key].tabId;
       await ctx.attachOn(key);
+      const attachedTargets = await ctx.extensionDebuggerTargets();
+      const attachedEntry = (attachedTargets?.targets || []).find((t) => Number(t.tabId) === Number(tabId));
+      check(
+        "K3 attach 证据：chrome.debugger.getTargets 中该 tab attached=true",
+        attachedTargets?.ok === true && attachedEntry?.attached === true,
+        JSON.stringify({ tabId, attachedTargets }),
+      );
+      const browserTargetsForTab = await (await ctx.cdp()).targets().catch((error) => ({ error: String(error) }));
+      const tabLevelTargets = Array.isArray(browserTargetsForTab)
+        ? browserTargetsForTab.filter((t) => t.type === "tab" && String(t.url || "").includes(ctx.spaces[key].token))
+        : [];
       const assist = await ctx.bumpMode(key, "assist");
       check("K3 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true, JSON.stringify(assist));
       const grant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 10000 });
+      if (grant?.result?.granted !== true && (grant?.result?.reason === "NO_DEBUGGER_SESSION")) {
+        const detail = { tabId, attachedEntry, attachedTargets, tabLevelTargets, grant, assist };
+        report.p0Regressions.push({
+          id: "P0-input-ownership-session-mapping",
+          at: nowIso(),
+          detail,
+          note: "同 K2：扩展 debugger 已 attach（getTargets attached=true），grantInput 仍 NO_DEBUGGER_SESSION；" +
+            "ResolveDebuggerSession 的 GetForTab(WebContentsDevToolsAgentHost) 与 chrome.debugger.attach 的 " +
+            "GetOrCreateFor(RenderFrameDevToolsAgentHost) 不是同一个 host。",
+        });
+        ctx.record("K3", detail);
+        ctx.markBlocked({
+          code: "product-session-mapping-bug",
+          deps: ["M: 修正 ResolveDebuggerSession 的 DevToolsAgentHost 选择（GetForTab → client 的 host / GetOrCreateFor）"],
+          reason: "扩展 chrome.debugger 会话已 attach（getTargets attached=true），grantInput 仍返回 NO_DEBUGGER_SESSION。",
+        });
+        return;
+      }
       check("K3 扩展会话 grant granted（2 单位）", grant?.result?.granted === true && grant.result.actions === 2, JSON.stringify(grant));
       const kernelMsg = /InputOwnership: debugger input rejected/i;
 
@@ -1380,7 +1477,7 @@ const CASES = [
 
       const snap = await ctx.kernelSnapshot(key);
       check("K3 第二个会话不得改变 mode/version", snap.snapshot?.mode === "assist" && snap.snapshot?.version === assist.version, JSON.stringify(snap));
-      ctx.record("K3", { assist, grant, before, attachError, mode, secondResult, afterSecond, regrant, extClick, afterExt, snap });
+      ctx.record("K3", { attachedTargets, attachedEntry, assist, grant, before, attachError, mode, secondResult, afterSecond, regrant, extClick, afterExt, snap });
       await ctx.bumpMode(key, "ai").catch(() => undefined);
     },
   },
@@ -1401,7 +1498,7 @@ const CASES = [
       const cdp = await ctx.cdp();
       const listenerSetup = await cdp.evaluate(
         popup.sessionId,
-        "(() => { window.__bpPresence = []; const io = chrome.browserCliInputOwnership; if (!io || !io.onHumanPresence) return {ok:false, keys: io ? Object.keys(io) : null}; io.onHumanPresence.addListener((e) => { window.__bpPresence.push(e); }); return {ok:true}; })()",
+        "(() => { window.__bpPresence = []; const io = (typeof chrome !== 'undefined') ? (chrome.browserCliInputOwnership || (chrome.browserCli && chrome.browserCli.inputOwnership) || null) : null; if (!io || !io.onHumanPresence) return {ok:false, keys: io ? Object.keys(io) : null}; io.onHumanPresence.addListener((e) => { window.__bpPresence.push(e); }); return {ok:true}; })()",
       );
       check("K4 受信扩展页面可注册 onHumanPresence", listenerSetup?.ok === true, JSON.stringify(listenerSetup));
 
@@ -2013,7 +2110,7 @@ async function browserTargets(profileDir) {
  * 浏览器级 DevTools 客户端（只在测试侧使用）：
  *  - 观察 OOPIF target（Target.getTargets）；
  *  - 以受信扩展页面（chrome-extension://<id>/popup/index.html）为上下文执行
- *    chrome.browserCliInputOwnership.*（生产 API 的真实调用方）；
+ *    chrome.browserCli.inputOwnership.*（生产 API 的真实调用方）；
  *  - 建立**第二个** CDP session 用于跨会话注入测试（K3）。
  * 它不替代产品链路：AI 输入仍然只走 host → chrome.debugger。
  */
@@ -2666,7 +2763,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       return ctx._browserCdp;
     },
     /**
-     * 受信扩展页面（popup/index.html）作为 chrome.browserCliInputOwnership 的真实调用方。
+     * 受信扩展页面（popup/index.html）作为 chrome.browserCli.inputOwnership 的真实调用方。
      * 通过浏览器级 CDP 在该页面主世界执行调用：不经过 chrome.debugger（extension:// 页面
      * 不在 host_permissions 覆盖范围内），也不改变页面的扩展上下文。
      */
@@ -2688,8 +2785,12 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
           .evaluate(
             info.sessionId,
             "({href: location.href, " +
-              "api: (typeof chrome !== 'undefined' && chrome.browserCli) ? true : false, " +
-              "io: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : null, " +
+              "api: (typeof chrome !== 'undefined' && (chrome.browserCli || chrome.browserCliInputOwnership)) ? true : false, " +
+              "ns: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? 'browserCliInputOwnership' : " +
+              "((typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.inputOwnership) ? 'browserCli.inputOwnership' : null), " +
+              "io: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : " +
+              "((typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.inputOwnership) ? Object.keys(chrome.browserCli.inputOwnership) : null), " +
+              "caps: (typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.getCapabilities) ? 'fn' : 'missing', " +
               "runtimeError: (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.lastError) ? chrome.runtime.lastError.message : null})",
           )
           .catch((error) => ({ error: String(error) }));
@@ -2700,13 +2801,13 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       ctx.popup = info;
       return info;
     },
-    /** 调用 browserCliInputOwnership.<method>(request, cb)；返回 {result,lastError} 或错误标记。 */
+    /** 调用 browserCli.inputOwnership.<method>(request, cb)；返回 {result,lastError} 或错误标记。 */
     async apiCall(method, request = {}) {
       const popup = await ctx.ensurePopup();
       const cdp = await ctx.cdp();
       const expr =
         "new Promise((resolve) => {" +
-        "  const io = (typeof chrome !== 'undefined') ? (chrome.browserCliInputOwnership || (chrome.browserCli && chrome.browserCli.inputOwnership)) : null;" +
+        "  const io = (typeof chrome !== 'undefined') ? (chrome.browserCliInputOwnership || (chrome.browserCli && chrome.browserCli.inputOwnership) || null) : null;" +
         "  if (!io || typeof io[" + JSON.stringify(method) + "] !== 'function') {" +
         "    resolve({__bpMissing: true, method: " + JSON.stringify(method) + ", keys: io ? Object.keys(io) : null});" +
         "    return;" +
@@ -2755,6 +2856,20 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       }
       throw new Error("fresh tab beacon not ready: " + key);
     },
+    /** 从受信扩展页面调用 chrome.debugger.getTargets()，证明扩展会话已 attach。 */
+    async extensionDebuggerTargets() {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const expr =
+        "new Promise((resolve) => { try {" +
+        "  chrome.debugger.getTargets((targets) => resolve({ok: true, targets: (targets || []).map((t) => ({id: t.id, tabId: t.tabId, attached: t.attached, type: t.type, url: String(t.url || '').slice(0, 100)}))}));" +
+        "} catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
+      try {
+        return await cdp.evaluate(popup.sessionId, expr);
+      } catch (error) {
+        return { ok: false, error: String(error?.message || error) };
+      }
+    },
     /** 读当前版本并 setOwnership(mode, version+1)。 */
     async bumpMode(spaceKey, mode) {
       const tabId = ctx.spaces[spaceKey].tabId;
@@ -2782,18 +2897,18 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
           },
         };
       }
-      if (popup.probe?.api === true && Array.isArray(popup.probe?.io) && popup.probe.io.length > 0) {
+      if (popup.probe?.api === true && Array.isArray(popup.probe?.io) && popup.probe.io.includes("setOwnership") && popup.probe.io.includes("grantInput")) {
         return { ok: true, popup };
       }
       return {
         ok: false,
         blocked: {
           code: "api-not-exposed-to-extension-js",
-          deps: ["patch 029 修订：让 chrome.browserCliInputOwnership 成为可安装的顶层 namespace（避免与父 feature browserCli 的层级冲突，或调整 feature_cache 的父子判定）"],
+          deps: ["patch 029 修订：让 chrome.browserCli.inputOwnership 成为可安装的顶层 namespace（避免与父 feature browserCli 的层级冲突，或调整 feature_cache 的父子判定）"],
           reason:
-            "chrome.browserCli 存在，但 chrome.browserCliInputOwnership 在任何扩展 JS 上下文里都不存在" +
+            "chrome.browserCli 存在，但 chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不存在" +
             "（popup 页面 keys=" + JSON.stringify(popup.probe?.io) + "，service worker 同样缺失）。" +
-            "根因：feature 名 \"browserCliInputOwnership\" 有同名前缀的父 feature \"browserCli\"；" +
+            "根因（旧命名空间 browserCli.inputOwnership）：feature 名有同名前缀的父 feature \"browserCli\"；" +
             "extensions/renderer/feature_cache.cc 跳过所有“父 feature 存在”的条目，因此该 namespace 从未被安装为 " +
             "BindingAccessor。已排除 switch 未转发/feature 未启用（renderer 命令行两者都在）。content 单测不覆盖 renderer 侧暴露。",
         },
