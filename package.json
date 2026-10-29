@@ -26,6 +26,7 @@
     "test:e2e:native:sw": "node scripts/test-native-e2e.mjs --stage=sw",
     "test:e2e:native:generic": "node scripts/test-native-e2e.mjs --stage=generic",
     "test:core": "node scripts/test-core.mjs",
+    "test:popup-ui": "node scripts/build.js && node scripts/test-popup-ui-headless.mjs",
     "test:process-safety": "node scripts/test-process-safety.mjs",
     "check:process-cleanup": "node scripts/check-process-cleanup.mjs",
     "test:safety": "node scripts/check-process-cleanup.mjs && node scripts/test-process-safety.mjs",
