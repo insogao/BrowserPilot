@@ -42,6 +42,14 @@ scope: |
 
 ### 1.1 命名空间
 
+> **实现修订（2026-10-29，内核 patch 029）**：真实 E2E 发现 Chromium 的
+> `extensions/renderer/feature_cache.cc` 会跳过所有“父 feature 存在”的 API namespace，
+> 因此 `browserCli.inputOwnership`（父 feature `browserCli`）永远不会安装到扩展绑定。
+> 内核实际命名空间改为 **`chrome.browserCliInputOwnership`**（顶层，无父 feature）；
+> 方法名、参数、返回、错误码与本设计的 `inputOwnership.*` 完全一致。扩展客户端
+> `src/background/input-ownership-api.ts` 优先探测顶层名，并保留旧嵌套名回退。
+> 其余章节中出现的 `chrome.browserCli.inputOwnership` 均按此映射理解。
+
 ```jsonc
 // chrome/common/extensions/api/browser_cli.json（在现有 getCapabilities 之后追加）
 {
