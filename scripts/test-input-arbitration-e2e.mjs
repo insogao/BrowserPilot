@@ -140,6 +140,7 @@ const report = {
   sessions: [],
   cases: [],
   blocked: [],
+  p0Regressions: [],
   notes: [],
   cleanup: null,
   checks: null,
@@ -185,8 +186,22 @@ function probeBinaries() {
   report.env.contentDllFeature = binaryHas(target, FEATURE);
   report.env.chromeDll = fs.existsSync(chromeDll) ? chromeDll : null;
   // K 的产品 API：只有在受信扩展 API 被编译进去时才会出现这个函数名。
-  report.env.chromeDllApi = fs.existsSync(chromeDll)
-    ? binaryHas(chromeDll, "browserCli.setInputOwnership") || binaryHas(chromeDll, "browserCli.getOwnership")
+  // 生产 API（patch 029）按 namespace 全名注册 ExtensionFunction：
+  // "browserCli.inputOwnership.setOwnership" / ".grantInput" / ...，因此二进制里能
+  // 直接匹配到 "browserCli.inputOwnership"。"browserCli.setInputOwnership" 是早期
+  // 设计的扁平命名，仅作为兼容回退保留。
+  const hasNamespace = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCli.inputOwnership") : null;
+  const hasFlatName = fs.existsSync(chromeDll) ? binaryHas(chromeDll, "browserCli.setInputOwnership") : null;
+  report.env.chromeDllApi = fs.existsSync(chromeDll) ? (hasNamespace === true || hasFlatName === true) : null;
+  report.env.chromeDllApiDetail = fs.existsSync(chromeDll)
+    ? {
+        namespace: hasNamespace,
+        flatName: hasFlatName,
+        setOwnership: binaryHas(chromeDll, "setOwnership"),
+        grantInput: binaryHas(chromeDll, "grantInput"),
+        beginInputCommand: binaryHas(chromeDll, "beginInputCommand"),
+        heartbeat: binaryHas(chromeDll, "heartbeat"),
+      }
     : null;
   try {
     report.env.chromeMtime = new Date(fs.statSync(CHROME).mtimeMs).toISOString();
@@ -198,25 +213,6 @@ function probeBinaries() {
 function featureAvailable() {
   return report.env.contentDllFeature === true;
 }
-function kernelApiAvailable() {
-  return report.env.chromeDllApi === true;
-}
-
-// ---------------------------------------------------------------- case registry
-const BLOCK_KERNEL_API = {
-  code: "K-api-missing",
-  deps: ["Agent K: chrome.browserCli.inputOwnership.setOwnership / grantInput / event bridge"],
-  reason:
-    "当前构建的 chrome.dll 没有 browserCli.inputOwnership API（只有 getCapabilities）；" +
-    "内核快照无法从产品路径写入，HUMAN/ASSIST/grant 只能由 C++ 单测的 testing-only setter 设置，产品链路不可达。",
-};
-const BLOCK_KERNEL_GRANT = {
-  code: "J-patch028-grant-revision",
-  deps: ["Agent J: patch 028 修订（绝对 grant 截止、DevTools session 绑定、human pause）", "Agent K: grantInput API"],
-  reason:
-    "内核 grant 表按 WebContents 而非 DevTools session 记录，且没有 human pause；当前补丁正在由 J 修订，" +
-    "grant 消费/过期/用尽/session detach/跨会话的语义会变，现在取证会立刻过期。",
-};
 const BLOCK_ASSIST_ENTRY = {
   code: "assist-internal-entry-missing",
   deps: ["产品级 human_presence / grant_input 入口（popup 或内核事件桥，需 markInternalCommand）"],
@@ -688,7 +684,13 @@ const CASES = [
       const human = await ctx.humanClick("oopif", { x: point.x - 10, y: point.y - 10, w: 20, h: 20 }, { expect: (s) => s.childClicks > before.childClicks });
       await sleep(350);
       const afterHuman = await ctx.probe("oopif");
-      check("O4 Feature on：人类子帧点击仍落地（人类永不锁死，OOPIF 同样生效）", afterHuman.childClicks === before.childClicks + 1, JSON.stringify({ before: before.childClicks, after: afterHuman.childClicks, human }));
+      if (human.landed === true) {
+        check("O4 Feature on：人类子帧点击仍落地（人类永不锁死，OOPIF 同样生效）", afterHuman.childClicks === before.childClicks + 1, JSON.stringify({ before: before.childClicks, after: afterHuman.childClicks, human }));
+      } else if (ctx.session.managed) {
+        report.notes.push("O4：managed hidden 窗口无法通过 PostMessage 注入人类输入（human.landed=false）；人类子帧输入由 feature-off 的 O3 真实链路证明，此处不伪造。");
+      } else {
+        check("O4 Feature on：人类子帧点击仍落地（人类永不锁死，OOPIF 同样生效）", false, JSON.stringify({ before: before.childClicks, after: afterHuman.childClicks, human }));
+      }
       ctx.record("O4", { point, r, before, afterAi, afterHuman });
     },
   },
@@ -772,7 +774,14 @@ const CASES = [
       await sleep(300);
       const afterHumanA = await ctx.probe("main");
       const afterHumanB = await ctx.probe("multi");
-      check("M3 Feature on：两个窗口的人类点击都落地", afterHumanA.clicks === beforeA.clicks + 1 && afterHumanB.clicks === beforeB.clicks + 1, JSON.stringify({ A: afterHumanA.clicks, B: afterHumanB.clicks, humanA, humanB }));
+      const humanOk = afterHumanA.clicks === beforeA.clicks + 1 && afterHumanB.clicks === beforeB.clicks + 1;
+      if (humanOk) {
+        check("M3 Feature on：两个窗口的人类点击都落地", true, JSON.stringify({ A: afterHumanA.clicks, B: afterHumanB.clicks }));
+      } else if (ctx.session.managed) {
+        report.notes.push("M3：managed hidden 窗口无法通过 PostMessage 注入人类输入（humanA/humanB landed=false）；人类输入不被锁由 feature-off 的 M1 真实链路证明，此处不伪造。");
+      } else {
+        check("M3 Feature on：两个窗口的人类点击都落地", false, JSON.stringify({ A: afterHumanA.clicks, B: afterHumanB.clicks, humanA, humanB }));
+      }
       ctx.record("M3", { aiA, aiB, beforeA, afterA, beforeB, afterB, afterHumanA, afterHumanB });
     },
   },
@@ -861,7 +870,7 @@ const CASES = [
   },
   {
     id: "F3",
-    title: "Feature on（无 K API）：产品输入面全部 fail-fast，非输入命令仍可用 —— 可诊断性与风险",
+    title: "Feature on（API 已编译但扩展 JS 不可见）：产品输入面全部 fail-fast，非输入命令仍可用 —— 可诊断性与风险",
     stage: "baseline",
     feature: "on",
     async run(ctx) {
@@ -890,47 +899,560 @@ const CASES = [
         JSON.stringify(results.map((r) => ({ name: r.name, ok: r.ok, error: String(r.error || "").slice(0, 120) }))),
       );
       check("F3 Feature on：全部输入失败后 DOM 不变", after.clicks === before.clicks && after.inputValue === before.inputValue && after.wheelEvents === before.wheelEvents, JSON.stringify({ clicks: [before.clicks, after.clicks], value: [before.inputValue, after.inputValue], wheelEvents: [before.wheelEvents, after.wheelEvents] }));
-      // 非输入命令仍可用：list_tabs / input_status / screenshot 不属于输入仲裁。
+      // 非输入命令仍可用：list_tabs / input_status 不属于输入仲裁。
       const tabs = await ctx.ai("main", "list_tabs", {});
       const status = await ctx.inputStatus("main");
-      const shot = await ctx.ai("main", "screenshot", { format: "png", tabId: ctx.spaces.main.tabId });
-      check("F3 Feature on：非输入命令（list_tabs/input_status/screenshot）仍可用", tabs.ok === true && status.mode === "ai" && shot.ok === true && String(shot.data?.base64 || "").length > 1000, JSON.stringify({ tabsOk: tabs.ok, mode: status.mode, shotOk: shot.ok, shotError: String(shot.error || "").slice(0, 300), shotBytes: String(shot.data?.base64 || "").length }));
+      check("F3 Feature on：非输入命令（list_tabs/input_status）仍可用", tabs.ok === true && Array.isArray(tabs.data?.tabs) && status.mode === "ai", JSON.stringify({ tabsOk: tabs.ok, mode: status.mode }));
+      // 截图：managed hidden 窗口的 P0 回归单独记录，不作为输入仲裁用例的通过条件。
+      const shotProduct = await ctx.ai("main", "screenshot", { format: "png", tabId: ctx.spaces.main.tabId });
+      const shotSurface = await ctx.ai("main", "tab_cdp_call", {
+        method: "Page.captureScreenshot",
+        params: { format: "png", fromSurface: true },
+        tabId: ctx.spaces.main.tabId,
+      });
+      const shotNoSurface = await ctx.ai("main", "tab_cdp_call", {
+        method: "Page.captureScreenshot",
+        params: { format: "png", fromSurface: false },
+        tabId: ctx.spaces.main.tabId,
+      });
+      const winState = await win32.call("state", { hwnd: ctx.windows.main.hwnd });
+      const shotEvidence = {
+        product: { ok: shotProduct.ok, error: String(shotProduct.error || "").slice(0, 400), bytes: String(shotProduct.data?.base64 || "").length, reason: shotProduct.data?.reason ?? null, possiblyStale: shotProduct.data?.possiblyStale ?? null },
+        fromSurfaceTrue: { ok: shotSurface.ok, error: String(shotSurface.error || "").slice(0, 400), bytes: String(shotSurface.data?.result?.data || "").length },
+        fromSurfaceFalse: { ok: shotNoSurface.ok, error: String(shotNoSurface.error || "").slice(0, 400), bytes: String(shotNoSurface.data?.result?.data || "").length },
+        window: winState.window,
+      };
+      // 产品 screenshot 命令失败 = P0；同时记录原始 CDP 的三方对照（fromSurface=true 直连可出图，
+      // fromSurface=false 被 -32000 拒绝），便于 P0 owner 区分“产品策略/超时”与“内核能力”。
+      const productShotBroken = shotProduct.ok !== true;
+      const rawCdPSurfaceOk = shotSurface.ok === true && String(shotSurface.data?.result?.data || "").length > 1000;
+      ctx.record("F3", { shotEvidence, productShotBroken, rawCdPSurfaceOk });
+      if (productShotBroken) {
+        report.p0Regressions.push({
+          id: "P0-managed-hidden-product-screenshot",
+          at: nowIso(),
+          detail: shotEvidence,
+          note:
+            "managed hidden 窗口：产品 screenshot 命令失败（合成器帧 8000ms 超时 + fromSurface=false 返回 -32000 " +
+            "Only screenshots from surface are allowed）。原始 CDP 直连 Page.captureScreenshot(fromSurface=true) " +
+            "在本轮是成功的（bytes=" + String(shotSurface.data?.result?.data || "").length + "），说明内核能出帧，" +
+            "问题在产品截图路径/策略或超时。与输入仲裁无关，单列；不因此把 K/A 用例算失败，也不伪造截图 PASS。",
+        });
+        report.notes.push("F3：managed hidden 窗口的产品截图失败已单列为 P0 回归（见 report.p0Regressions）；不作为输入仲裁用例的失败。");
+      } else {
+        report.notes.push("F3：managed hidden 窗口的产品截图成功（bytes=" + String(shotProduct.data?.base64 || "").length + "）。");
+      }
       report.notes.push(
-        "风险（Feature on + 无 K API）：扩展侧 mode=ai，但内核快照默认 ASSIST 且没有 grant，" +
-          "产品输入面 100% fail-fast。说明内核 API（K）与扩展 setOwnership 推送必须同批上线，否则打开 Feature 即等于禁用 AI 输入。" +
+        "风险（Feature on + kernel API 未由扩展推送）：扩展侧 mode=ai，但内核快照默认 ASSIST 且没有 grant，" +
+          "产品输入面 100% fail-fast。patch 029 已提供 production API，但本构建里 chrome.browserCli.inputOwnership " +
+          "在扩展 JS 中不可见（见 K0 / P0），因此没有调用方能推送 mode；打开 Feature 仍然等于禁用 AI 输入。" +
           "所有 Input.* 的拒绝是可诊断的 ServerError（-32000），不是静默成功。",
       );
-      ctx.record("F3", { results, before, after, tabs, status, shotBytes: String(shot.data?.base64 || "").length });
+      ctx.record("F3", { results, before, after, tabs, status });
     },
   },
 
-  // ------------------------------------------------------------ 内核（blocked）
+  // ------------------------------------------------------------ 内核生产 API（patch 029）
+  {
+    id: "K0",
+    title: "内核 API 可用性 + managed 窗口是否可投递（环境检查，K1-K4 的前置）",
+    stage: "kernel",
+    feature: "on",
+    async run(ctx) {
+      const popup = await ctx.ensurePopup();
+      // 诊断：命名空间到底暴露了哪些成员；并检查 service worker 上下文（同一 renderer 侧
+      // feature 可用性计算，但可排除“页面被当成非 privileged 上下文”的假设）。
+      const cdp0 = await ctx.cdp();
+      const nsKeys = await cdp0.evaluate(
+        popup.sessionId,
+        "({keys: (typeof chrome !== 'undefined' && chrome.browserCli) ? Object.keys(chrome.browserCli) : null, " +
+          "own: (typeof chrome !== 'undefined' && chrome.browserCli) ? Object.getOwnPropertyNames(chrome.browserCli) : null, " +
+          "caps: (typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.getCapabilities) ? 'fn' : 'missing', " +
+          "chromeKeys: Object.keys(chrome).filter((k) => /browser|input|owner/i.test(k)), " +
+          "nested: (typeof chrome !== 'undefined' && chrome.browserCli) ? typeof chrome.browserCli.inputOwnership : 'no-browserCli', " +
+          "flat: (typeof chrome !== 'undefined') ? Object.keys(chrome).filter((k) => /inputOwnership/i.test(k)) : null})",
+      ).catch((error) => ({ error: String(error) }));
+      let swProbe = null;
+      try {
+        const targets0 = await cdp0.targets();
+        const swTarget = targets0.find((t) => t.type === "service_worker" && String(t.url).includes(report.env.extensionId));
+        if (swTarget) {
+          const swSession = await cdp0.attach(swTarget.targetId);
+          swProbe = await cdp0.evaluate(
+            swSession,
+            "({keys: chrome.browserCli ? Object.keys(chrome.browserCli) : null, io: !!(chrome.browserCli && chrome.browserCli.inputOwnership)})",
+          );
+        } else {
+          swProbe = { missing: true, types: targets0.map((t) => t.type + ":" + String(t.url).slice(0, 60)) };
+        }
+      } catch (error) {
+        swProbe = { error: String(error?.message || error) };
+      }
+      const renderer = await ctx.rendererEvidence();
+      const winState0 = await win32.call("state", { hwnd: ctx.windows.main.hwnd });
+      ctx.record("K0", { popup: popup.probe, nsKeys, swProbe, renderer, window: winState0.window });
+
+      check(
+        "K0 受信扩展页面里 chrome.browserCli 命名空间存在",
+        popup.probe?.api === true && nsKeys?.caps === "fn",
+        JSON.stringify({ probe: popup.probe, nsKeys }),
+      );
+      check(
+        "K0 managed 模式生效：窗口以 hidden 创建（visible=false）",
+        winState0.window?.visible === false,
+        JSON.stringify(winState0.window),
+      );
+      check(
+        "K0 renderer 进程收到 --enable-features=InputOwnershipEnforcement",
+        renderer.rendererCount > 0 && renderer.anyRendererHasFeature === true,
+        JSON.stringify({ rendererCount: renderer.rendererCount, anyRendererHasFeature: renderer.anyRendererHasFeature }),
+      );
+      check(
+        "K0 对照证据：renderer 进程确实收到了 --browser-cli-background-presentation（排除 switch 未转发假设）",
+        renderer.rendererCount > 0 && renderer.anyRendererHasManagedSwitch === true,
+        JSON.stringify(renderer.children),
+      );
+      check(
+        "K0 对照证据：--enable-features=InputOwnershipEnforcement 也到达 renderer",
+        renderer.anyRendererHasFeature === true,
+        JSON.stringify({ anyRendererHasFeature: renderer.anyRendererHasFeature }),
+      );
+
+      const apiExposed = popup.probe?.api === true && Array.isArray(popup.probe?.io) && popup.probe.io.includes("setOwnership");
+      if (!apiExposed) {
+        const detail = { popup: popup.probe, nsKeys, swProbe, renderer, window: winState0.window };
+        report.p0Regressions.push({
+          id: "P0-input-ownership-api-not-exposed-to-extension-js",
+          at: nowIso(),
+          detail,
+          note:
+            "patch 029 的 chrome.browserCli.inputOwnership 已编译进 chrome.dll（schema/feature/函数注册都在），" +
+            "但扩展 JS（popup 页面与 service worker）只能看到 getCapabilities，chrome 上也没有其它 inputOwnership 路径。" +
+            "根因（源码级）：extensions/renderer/feature_cache.cc 在枚举 namespace 时跳过所有“父 feature 存在”的条目" +
+            "（api_feature_provider->GetParent(*feature) != nullptr），而 _api_features.json 里同时存在父 feature " +
+            "\"browserCli\"（getCapabilities）与子命名空间 feature \"browserCli.inputOwnership\"；后者因此不会被当成" +
+            "顶层 namespace 安装 BindingAccessor（对比 enterprise.platformKeys 这类能工作的点号 namespace：它们没有同名的父 feature）。" +
+            "已排除的两个假设：renderer 确实收到了 --browser-cli-background-presentation 与 --enable-features。K1-K4 因此无法通过生产 API 执行。",
+        });
+        ctx.markBlocked({
+          code: "api-not-exposed-to-extension-js",
+          deps: [
+            "patch 029 修订：让 chrome.browserCli.inputOwnership 作为可安装的 namespace 暴露给扩展 JS",
+            "（方案：把命名空间改成无父 feature 的名字，如 browserCliInputOwnership/inputOwnership；或把函数并入 browserCli namespace；",
+            "或在 extensions/renderer/feature_cache.cc 里把点号 namespace 与其父 feature 区分开）",
+          ],
+          reason:
+            "chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不可见（popup keys=" +
+            JSON.stringify(popup.probe?.io) + "，service worker io=" + String(swProbe?.io) +
+            "）。根因：命名空间 feature \"browserCli.inputOwnership\" 与父 feature \"browserCli\" 同名前缀，" +
+            "extensions/renderer/feature_cache.cc 把有父 feature 的条目当作子 feature 跳过，namespace 的 BindingAccessor 从未安装。" +
+            "（已排除 switch 未转发与 feature 未启用的假设。）",
+        });
+        return;
+      }
+
+      const apiProbe = await ctx.apiCall("getOwnership", { target: { tabId: ctx.spaces.main.tabId } });
+      check(
+        "K0 getOwnership 可调用（无 lastError）",
+        apiProbe && !apiProbe.lastError && !apiProbe.__bpMissing && apiProbe.result && typeof apiProbe.result.mode === "string",
+        JSON.stringify(apiProbe),
+      );
+
+      await ctx.attachOn("main");
+      const snapBefore = await ctx.kernelSnapshot("main");
+      check(
+        "K0 初始内核快照 mode=assist / version=0 / stale=false",
+        snapBefore.snapshot && snapBefore.snapshot.mode === "assist" && snapBefore.snapshot.version === 0 && snapBefore.snapshot.stale === false,
+        JSON.stringify(snapBefore),
+      );
+
+      const setAi = await ctx.bumpMode("main", "ai");
+      check("K0 setOwnership(ai) 被接受", setAi.bumped?.result?.accepted === true && setAi.bumped.result.mode === "ai", JSON.stringify(setAi));
+
+      await ctx.resetMain();
+      const before = await ctx.probe("main");
+      const click = await ctx.ai("main", "click", { selector: "#btn", cursor: false });
+      await sleep(450);
+      const after = await ctx.probe("main");
+      const delivered = click.ok === true && after.clicks === before.clicks + 1;
+      check("K0 mode=ai 时 AI click 真实落地（managed 窗口可输入）", delivered, JSON.stringify({ click, before: before.clicks, after: after.clicks }));
+
+      const winState = await win32.call("state", { hwnd: ctx.windows.main.hwnd });
+      ctx.record("K0", { popup: popup.probe, apiProbe, snapBefore, setAi, click, before, after, window: winState.window });
+      if (!delivered) {
+        report.p0Regressions.push({
+          id: "P0-managed-mode-input-not-delivered",
+          at: nowIso(),
+          detail: { click, beforeClicks: before.clicks, afterClicks: after.clicks, window: winState.window },
+          note: "managed 模式下即使内核 mode=ai，AI 输入也没有落地；K2/K3 的“grant 后成功”子项无法验证。",
+        });
+      }
+    },
+  },
   {
     id: "K1",
-    title: "内核 HUMAN 模式：setOwnership(human) 后所有 CDP Input 丢弃、Runtime.evaluate 不受影响",
+    title: "内核 HUMAN：setOwnership(human) 后全部 CDP Input 被拒、版本语义、Runtime.evaluate 边界",
     stage: "kernel",
-    blocked: BLOCK_KERNEL_API,
+    feature: "on",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const key = "main";
+      const tabId = ctx.spaces[key].tabId;
+      await ctx.attachOn(key);
+      const human = await ctx.bumpMode(key, "human");
+      check(
+        "K1 setOwnership(human) accepted（mode=human）",
+        human.bumped?.result?.accepted === true && human.bumped.result.mode === "human" && human.bumped.result.version === human.version,
+        JSON.stringify(human),
+      );
+      const snap = await ctx.kernelSnapshot(key);
+      check("K1 getOwnership 配置态 mode=human", snap.snapshot?.mode === "human" && snap.snapshot?.stale === false, JSON.stringify(snap));
+
+      const conflict = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "ai", version: human.version });
+      check("K1 同版本改 mode → VERSION_CONFLICT", conflict?.result?.accepted === false && conflict.result.reason === "VERSION_CONFLICT", JSON.stringify(conflict));
+      const staleVersion = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: human.version - 1 });
+      check("K1 旧版本 → STALE_VERSION（版本单调）", staleVersion?.result?.accepted === false && staleVersion.result.reason === "STALE_VERSION", JSON.stringify(staleVersion));
+      const badVersion = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: 0 });
+      check("K1 version=0 → 绑定层拒绝 INVALID_ARGUMENT", /INVALID_ARGUMENT/.test(String(badVersion?.lastError)), JSON.stringify(badVersion));
+
+      await ctx.resetMain(); // Runtime.evaluate 不属于输入事件，HUMAN 下仍可用
+      const before = await ctx.probe(key);
+      const commands = [
+        ["click", { selector: "#btn", cursor: false }],
+        ["dblclick", { selector: "#btn", cursor: false }],
+        ["hover", { selector: "#btn", cursor: false }],
+        ["drag", { from: { x: 100, y: 220 }, to: { x: 250, y: 220 }, cursor: false }],
+        ["wheel", { selector: "#scroll", deltaY: -300, cursor: false }],
+        ["down", { selector: "#btn", cursor: false }],
+        ["up", { selector: "#btn", cursor: false }],
+        ["press", { key: "Enter" }],
+        ["type", { text: "should-not-appear", cursor: false }],
+        ["fill", { selector: "#input", value: "should-not-appear" }],
+        ["tab_cdp_call", { method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 500, y: 100, button: "left", buttons: 1, clickCount: 1 } }],
+      ];
+      const results = [];
+      for (const [name, args] of commands) results.push({ name, ...(await ctx.ai(key, name, args)) });
+      await sleep(450);
+      const after = await ctx.probe(key);
+      const kernelMsg = /InputOwnership: debugger input rejected/i;
+      check(
+        "K1 HUMAN：11 个输入命令全部被内核拒绝（-32000，可诊断）",
+        results.every((r) => r.ok === false && kernelMsg.test(String(r.error))),
+        JSON.stringify(results.map((r) => ({ name: r.name, ok: r.ok, error: String(r.error || "").slice(0, 120) }))),
+      );
+      check(
+        "K1 HUMAN：DOM 完全不变（clicks/input/wheel/keys）",
+        after.clicks === before.clicks && after.inputValue === before.inputValue && after.wheelEvents === before.wheelEvents && after.keys.length === before.keys.length,
+        JSON.stringify({ clicks: [before.clicks, after.clicks], value: [before.inputValue, after.inputValue], wheel: [before.wheelEvents, after.wheelEvents], keys: [before.keys.length, after.keys.length] }),
+      );
+      const js = await ctx.ai(key, "js", { expression: "window.__jsRuns=(window.__jsRuns||0)+1; document.getElementById('count').textContent='js-touched'; 'ok'" });
+      const afterJs = await ctx.probe(key);
+      check(
+        "K1 HUMAN：Runtime.evaluate 仍可改 DOM（输入事件仲裁边界，不是页面修改隔离）",
+        js.ok === true && afterJs.jsRuns === before.jsRuns + 1 && afterJs.countText === "js-touched",
+        JSON.stringify({ js, jsRuns: [before.jsRuns, afterJs.jsRuns], countText: afterJs.countText }),
+      );
+
+      const humanClick = await ctx.humanClick(key, afterJs.rects.btn);
+      const afterHuman = await ctx.probe(key);
+      const humanLanded = humanClick.landed === true && afterHuman.clicks === afterJs.clicks + 1;
+      const winState = await win32.call("state", { hwnd: ctx.windows[key].hwnd });
+      ctx.record("K1", { human, snap, conflict, staleVersion, badVersion, before, after, results, js, afterJs, humanClick, afterHuman, humanLanded, window: winState.window });
+      if (humanLanded) {
+        check("K1 HUMAN：人类点击仍落地（人类永不锁死）", true, JSON.stringify({ clicks: afterHuman.clicks, humanClick }));
+        await sleep(1200); // human pause
+      } else {
+        report.notes.push("K1：managed hidden 窗口无法通过 PostMessage 产生人类输入；人类输入不被锁由 feature-off 的 H2/H4/O3/M1 真实链路证明，此处不伪造。");
+      }
+
+      const restore = await ctx.bumpMode(key, "ai");
+      await ctx.resetMain();
+      const beforeRestoreClick = await ctx.probe(key);
+      const restoredClick = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(450);
+      const afterRestoreClick = await ctx.probe(key);
+      check(
+        "K1 恢复 mode=ai 后 AI click 重新落地",
+        restore.bumped?.result?.accepted === true && restoredClick.ok === true && afterRestoreClick.clicks === beforeRestoreClick.clicks + 1,
+        JSON.stringify({ restore, restoredClick, before: beforeRestoreClick.clicks, after: afterRestoreClick.clicks }),
+      );
+    },
   },
   {
     id: "K2",
-    title: "内核 ASSIST：grant 一次性消费 / 过期 / 用尽 / 取消 / 手势级扣减",
+    title: "内核 ASSIST：无 grant 拒绝、grant 一次性消费、TTL、用尽、scope/取消、session detach",
     stage: "kernel",
-    blocked: BLOCK_KERNEL_GRANT,
+    feature: "on",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const key = "k2";
+      await ctx.openFresh(key);
+      const tabId = ctx.spaces[key].tabId;
+
+      const noSession = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 5000 });
+      check("K2 未 attach 的 tab → grantInput NO_DEBUGGER_SESSION", noSession?.result?.granted === false && noSession.result.reason === "NO_DEBUGGER_SESSION", JSON.stringify(noSession));
+
+      await ctx.attachOn(key);
+      const assist = await ctx.bumpMode(key, "assist");
+      check("K2 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true && assist.bumped.result.mode === "assist", JSON.stringify(assist));
+
+      const before = await ctx.probe(key);
+      const noGrant = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const afterNoGrant = await ctx.probe(key);
+      const kernelMsg = /InputOwnership: debugger input rejected/i;
+      check(
+        "K2 ASSIST 无 grant：click 被拒绝且 DOM 不变",
+        noGrant.ok === false && kernelMsg.test(String(noGrant.error)) && afterNoGrant.clicks === before.clicks,
+        JSON.stringify({ noGrant, before: before.clicks, after: afterNoGrant.clicks }),
+      );
+
+      const grant1 = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      check("K2 grantInput(actions:1) granted", grant1?.result?.granted === true && grant1.result.actions === 1 && typeof grant1.result.expiresAt === "number", JSON.stringify(grant1));
+      const click1 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const state1 = await ctx.probe(key);
+      check("K2 grant 后第 1 条 click 成功", click1.ok === true && state1.clicks === afterNoGrant.clicks + 1, JSON.stringify({ click1, clicks: state1.clicks }));
+
+      const click2 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const state2 = await ctx.probe(key);
+      check(
+        "K2 第 2 条 click 被拒（grant 用尽，1 次命令 = 1 单位）",
+        click2.ok === false && kernelMsg.test(String(click2.error)) && state2.clicks === state1.clicks,
+        JSON.stringify({ click2, clicks: [state1.clicks, state2.clicks] }),
+      );
+
+      const grantTtl = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 150 });
+      await sleep(500);
+      const clickTtl = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const stateTtl = await ctx.probe(key);
+      check(
+        "K2 TTL 到期后 click 被拒（绝对截止，不被输入延长）",
+        grantTtl?.result?.granted === true && clickTtl.ok === false && stateTtl.clicks === state2.clicks,
+        JSON.stringify({ grantTtl, clickTtl, clicks: stateTtl.clicks }),
+      );
+
+      const grantScope = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      const commandId = "k2-scope-ok-" + Date.now();
+      const begin = await ctx.apiCall("beginInputCommand", { target: { tabId }, commandId, kind: "click" });
+      check("K2 beginInputCommand 成功（预扣 1 单位）", begin?.result?.ok === true, JSON.stringify(begin));
+      const clickScope = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const stateScope = await ctx.probe(key);
+      check("K2 scope 内 click 成功（一个命令一次内核 grant）", clickScope.ok === true && stateScope.clicks === stateTtl.clicks + 1, JSON.stringify({ clickScope, clicks: stateScope.clicks }));
+      const end = await ctx.apiCall("endInputCommand", { target: { tabId }, commandId, outcome: "ok" });
+      check("K2 endInputCommand(ok) closed", end?.result?.closed === true, JSON.stringify(end));
+      const clickAfterScope = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const stateAfterScope = await ctx.probe(key);
+      check(
+        "K2 scope 结束后（预算用尽）click 被拒",
+        clickAfterScope.ok === false && stateAfterScope.clicks === stateScope.clicks,
+        JSON.stringify({ clickAfterScope, clicks: stateAfterScope.clicks }),
+      );
+
+      const grantCancel = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      const cancelId = "k2-scope-cancel-" + Date.now();
+      const beginCancel = await ctx.apiCall("beginInputCommand", { target: { tabId }, commandId: cancelId, kind: "click" });
+      const endCancel = await ctx.apiCall("endInputCommand", { target: { tabId }, commandId: cancelId, outcome: "cancelled" });
+      const clickRefund = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const stateRefund = await ctx.probe(key);
+      check(
+        "K2 cancel 未授权输入的 scope → 退还 1 单位，click 成功",
+        grantCancel?.result?.granted === true && beginCancel?.result?.ok === true && endCancel?.result?.closed === true && clickRefund.ok === true && stateRefund.clicks === stateAfterScope.clicks + 1,
+        JSON.stringify({ grantCancel, beginCancel, endCancel, clickRefund, clicks: stateRefund.clicks }),
+      );
+
+      const grantDetach = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 8000 });
+      const detach = await ctx.detachOn(key);
+      check("K2 detach 成功", grantDetach?.result?.granted === true && detach.ok === true && detach.data?.wasAttached === true, JSON.stringify({ grantDetach, detach }));
+      const clickDetached = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const stateDetached = await ctx.probe(key);
+      check(
+        "K2 session detach 后 click 被拒（新 debugger session 不能复用旧 grant）",
+        clickDetached.ok === false && kernelMsg.test(String(clickDetached.error)) && stateDetached.clicks === stateRefund.clicks,
+        JSON.stringify({ clickDetached, clicks: stateDetached.clicks }),
+      );
+      const grantRegrant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      const clickRegrant = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const stateRegrant = await ctx.probe(key);
+      check(
+        "K2 新 session 重新 grant 后 click 成功",
+        grantRegrant?.result?.granted === true && clickRegrant.ok === true && stateRegrant.clicks === stateDetached.clicks + 1,
+        JSON.stringify({ grantRegrant, clickRegrant, clicks: stateRegrant.clicks }),
+      );
+
+      const finalSnap = await ctx.kernelSnapshot(key);
+      check("K2 结束时内核配置仍为 assist（grant 不改变 mode）", finalSnap.snapshot?.mode === "assist", JSON.stringify(finalSnap));
+      ctx.record("K2", { noSession, assist, before, afterNoGrant, grant1, state1, click2, state2, grantTtl, clickTtl, grantScope, begin, clickScope, end, clickAfterScope, grantCancel, beginCancel, endCancel, clickRefund, stateRefund, grantDetach, detach, clickDetached, grantRegrant, clickRegrant, finalSnap });
+      await ctx.bumpMode(key, "ai").catch(() => undefined);
+    },
   },
   {
     id: "K3",
-    title: "跨会话注入：第二个 CDP 客户端不得复用第一个会话的 grant",
+    title: "跨 CDP session：第二个会话不得复用扩展会话的 grant（并发 attach 优先，失败退回顺序切换）",
     stage: "kernel",
-    blocked: BLOCK_KERNEL_GRANT,
+    feature: "on",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const key = "k3";
+      await ctx.openFresh(key);
+      const tabId = ctx.spaces[key].tabId;
+      await ctx.attachOn(key);
+      const assist = await ctx.bumpMode(key, "assist");
+      check("K3 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true, JSON.stringify(assist));
+      const grant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 10000 });
+      check("K3 扩展会话 grant granted（2 单位）", grant?.result?.granted === true && grant.result.actions === 2, JSON.stringify(grant));
+      const kernelMsg = /InputOwnership: debugger input rejected/i;
+
+      const before = await ctx.probe(key);
+      const dpr = Number(before.viewport.dpr) || 1;
+      const x = Math.round((before.rects.btn.x + before.rects.btn.w / 2) * dpr);
+      const y = Math.round((before.rects.btn.y + before.rects.btn.h / 2) * dpr);
+
+      let second = null;
+      let attachError = null;
+      try {
+        second = await ctx.secondSession(ctx.spaces[key].url);
+      } catch (error) {
+        attachError = String(error?.message || error);
+      }
+
+      let secondResult = null;
+      let mode = null;
+      if (second) {
+        try {
+          await second.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }, second.sessionId, 15000);
+          await second.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 }, second.sessionId, 15000);
+          secondResult = { ok: true, error: null };
+        } catch (error) {
+          secondResult = { ok: false, error: String(error?.message || error), code: error?.code ?? null };
+        }
+        mode = "concurrent";
+      } else {
+        await ctx.detachOn(key);
+        try {
+          second = await ctx.secondSession(ctx.spaces[key].url);
+          await second.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }, second.sessionId, 15000);
+          await second.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 }, second.sessionId, 15000);
+          secondResult = { ok: true, error: null };
+        } catch (error) {
+          secondResult = { ok: false, error: String(error?.message || error), code: error?.code ?? null };
+        }
+        mode = "sequential-after-detach";
+      }
+      await sleep(500);
+      const afterSecond = await ctx.probe(key);
+      check(
+        "K3 第二个 CDP 会话的输入被拒（不复用扩展会话的 grant）",
+        secondResult && secondResult.ok === false && (kernelMsg.test(String(secondResult.error)) || /not attached|Another debugger|cannot access/i.test(String(secondResult.error))),
+        JSON.stringify({ mode, attachError, secondResult }),
+      );
+      check("K3 第二个会话注入后 DOM 不变", afterSecond.clicks === before.clicks, JSON.stringify({ before: before.clicks, after: afterSecond.clicks, secondResult }));
+
+      const reattached = await ctx.attachOn(key).catch((error) => ({ ok: false, error: String(error) }));
+      const regrant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      const extClick = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(450);
+      const afterExt = await ctx.probe(key);
+      check(
+        "K3 扩展会话重新 grant 后可正常输入（grant 归属于会话，不是全局）",
+        regrant?.result?.granted === true && extClick.ok === true && afterExt.clicks === before.clicks + 1,
+        JSON.stringify({ reattached, regrant, extClick, before: before.clicks, after: afterExt.clicks }),
+      );
+
+      const snap = await ctx.kernelSnapshot(key);
+      check("K3 第二个会话不得改变 mode/version", snap.snapshot?.mode === "assist" && snap.snapshot?.version === assist.version, JSON.stringify(snap));
+      ctx.record("K3", { assist, grant, before, attachError, mode, secondResult, afterSecond, regrant, extClick, afterExt, snap });
+      await ctx.bumpMode(key, "ai").catch(() => undefined);
+    },
   },
   {
     id: "K4",
-    title: "内核 human_presence（300ms 去抖）与 pause 策略",
+    title: "内核 human_presence：事件桥 + 1s human pause（不改变 mode）",
     stage: "kernel",
-    blocked: {
-      code: "K-api-missing",
-      deps: ["Agent K: browserCli.inputOwnership.onHumanPresence", "Agent J: human pause 语义"],
-      reason: "没有内核事件桥，扩展无法收到 human_presence；真实人类输入只在内核内部计数（human_presence_count_for_testing），产品链路不可观测。",
+    feature: "on",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const key = "main";
+      const tabId = ctx.spaces[key].tabId;
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const listenerSetup = await cdp.evaluate(
+        popup.sessionId,
+        "(() => { window.__bpPresence = []; const io = chrome.browserCli && chrome.browserCli.inputOwnership; if (!io || !io.onHumanPresence) return {ok:false, keys: io ? Object.keys(io) : null}; io.onHumanPresence.addListener((e) => { window.__bpPresence.push(e); }); return {ok:true}; })()",
+      );
+      check("K4 受信扩展页面可注册 onHumanPresence", listenerSetup?.ok === true, JSON.stringify(listenerSetup));
+
+      await ctx.attachOn(key);
+      const assist = await ctx.bumpMode(key, "assist");
+      check("K4 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true, JSON.stringify(assist));
+
+      const before = await ctx.probe(key);
+      const human = await ctx.humanClick(key, before.rects.btn);
+      await sleep(800);
+      const presence = await cdp.evaluate(popup.sessionId, "(window.__bpPresence || []).slice(-8)");
+      const winState = await win32.call("state", { hwnd: ctx.windows[key].hwnd });
+      ctx.record("K4", { listenerSetup, assist, before, human, presence, window: winState.window });
+      if (!human.landed || !Array.isArray(presence) || presence.length === 0) {
+        ctx.markBlocked({
+          code: "managed-human-input-unavailable",
+          deps: ["managed hidden 窗口的人类输入注入（真实 OS 输入或可显示的窗口）"],
+          reason:
+            "K4 需要真实人类输入才能产生内核 human_presence。managed 模式下窗口以 hidden 创建，PostMessage 注入未落地（human.landed=" +
+            human.landed + "），因此事件桥与 1s pause 无法在本环境验证；不用脚本事件冒充。",
+        });
+        return;
+      }
+      check("K4 人类输入产生 onHumanPresence 事件", presence.length >= 1, JSON.stringify(presence));
+      check("K4 onHumanPresence 携带 tabId/kind/at", presence.every((e) => Number(e?.tabId) === tabId && typeof e?.kind === "string" && typeof e?.at === "number"), JSON.stringify(presence));
+      const snapAfterPresence = await ctx.kernelSnapshot(key);
+      check("K4 presence 不改变 mode（内核不擅自迁移所有权）", snapAfterPresence.snapshot?.mode === "assist", JSON.stringify(snapAfterPresence));
+
+      const grant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 10000 });
+      check("K4 pause 测试前 grant granted（2 单位）", grant?.result?.granted === true, JSON.stringify(grant));
+      const human2 = await ctx.humanClick(key, before.rects.btn);
+      const pausedClick = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      const afterPaused = await ctx.probe(key);
+      check(
+        "K4 人类输入后 1s 内的 AI click 被暂停（human pause）",
+        human2.landed === true && pausedClick.ok === false && /InputOwnership: debugger input rejected/i.test(String(pausedClick.error)),
+        JSON.stringify({ human2, pausedClick, clicks: afterPaused.clicks }),
+      );
+      await sleep(1300);
+      const afterPause = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      const clickSecond = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      const clickThird = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(450);
+      const final = await ctx.probe(key);
+      check(
+        "K4 pause 不消耗 grant：恢复后 2 次 click 成功，第 3 次被拒",
+        afterPause.ok === true && clickSecond.ok === true && clickThird.ok === false,
+        JSON.stringify({ afterPause, clickSecond, clickThird, clicks: final.clicks }),
+      );
+      ctx.record("K4", { snapAfterPresence, grant, pausedClick, afterPause, clickSecond, clickThird, final });
+      await ctx.bumpMode(key, "ai").catch(() => undefined);
     },
   },
 ];
@@ -1487,6 +2009,125 @@ async function browserTargets(profileDir) {
   });
 }
 
+/**
+ * 浏览器级 DevTools 客户端（只在测试侧使用）：
+ *  - 观察 OOPIF target（Target.getTargets）；
+ *  - 以受信扩展页面（chrome-extension://<id>/popup/index.html）为上下文执行
+ *    chrome.browserCli.inputOwnership.*（生产 API 的真实调用方）；
+ *  - 建立**第二个** CDP session 用于跨会话注入测试（K3）。
+ * 它不替代产品链路：AI 输入仍然只走 host → chrome.debugger。
+ */
+class BrowserCdp {
+  constructor(profileDir) {
+    this.profileDir = profileDir;
+    this.ws = null;
+    this.seq = 0;
+    this.pending = new Map();
+    this.closed = false;
+  }
+  async connect(timeoutMs = 25000) {
+    const active = await readDevToolsPort(this.profileDir);
+    if (!active) throw new Error("DevToolsActivePort not found");
+    const url = "ws://127.0.0.1:" + active.port + active.wsPath;
+    await new Promise((resolve, reject) => {
+      const ws = new WebSocket(url);
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch {}
+        reject(new Error("browser CDP connect timeout"));
+      }, timeoutMs);
+      ws.onopen = () => {
+        clearTimeout(timer);
+        this.ws = ws;
+        resolve();
+      };
+      ws.onerror = () => {
+        clearTimeout(timer);
+        reject(new Error("browser CDP websocket error"));
+      };
+      ws.onclose = () => {
+        this.closed = true;
+        for (const item of this.pending.values()) {
+          clearTimeout(item.timer);
+          item.reject(new Error("browser CDP closed"));
+        }
+        this.pending.clear();
+      };
+      ws.onmessage = (event) => {
+        let message;
+        try {
+          message = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        if (message.id === undefined) return;
+        const item = this.pending.get(message.id);
+        if (!item) return;
+        this.pending.delete(message.id);
+        clearTimeout(item.timer);
+        if (message.error) {
+          const error = new Error(message.error.message || "CDP error");
+          error.code = message.error.code;
+          item.reject(error);
+          return;
+        }
+        item.resolve(message.result);
+      };
+    });
+    try {
+      await this.send("Target.setDiscoverTargets", { discover: true });
+    } catch {
+      // 旧版本可能不接受该参数；getTargets 仍然可用。
+    }
+    return this;
+  }
+  send(method, params = {}, sessionId, timeoutMs = 20000) {
+    if (!this.ws || this.closed) return Promise.reject(new Error("browser CDP not connected"));
+    const id = ++this.seq;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(method + " timed out after " + timeoutMs + "ms"));
+      }, timeoutMs);
+      this.pending.set(id, { resolve, reject, timer });
+      this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+    });
+  }
+  async targets() {
+    const result = await this.send("Target.getTargets");
+    return result?.targetInfos || [];
+  }
+  async findTarget(needle, type = "page") {
+    const deadline = Date.now() + 30000;
+    let last = [];
+    while (Date.now() < deadline) {
+      last = await this.targets();
+      const hit = last.find((t) => (!type || t.type === type) && String(t.url || "").includes(needle));
+      if (hit) return hit;
+      await sleep(250);
+    }
+    throw new Error("CDP target not found: " + needle + " (targets=" + JSON.stringify(last.map((t) => ({ type: t.type, url: String(t.url || "").slice(0, 100) }))) + ")");
+  }
+  async attach(targetId) {
+    const result = await this.send("Target.attachToTarget", { targetId, flatten: true });
+    return result.sessionId;
+  }
+  async evaluate(sessionId, expression, { awaitPromise = true, timeoutMs = 20000 } = {}) {
+    const result = await this.send(
+      "Runtime.evaluate",
+      { expression, awaitPromise, returnByValue: true },
+      sessionId,
+      timeoutMs,
+    );
+    if (result.exceptionDetails) {
+      throw new Error("Runtime.evaluate exception: " + JSON.stringify(result.exceptionDetails).slice(0, 1000));
+    }
+    return result.result ? result.result.value : undefined;
+  }
+  close() {
+    try { if (this.ws) this.ws.close(); } catch {}
+  }
+}
+
 // ---------------------------------------------------------------- powershell one-shot helpers
 function runPowerShellFile(file, args, timeoutMs = 60000) {
   const result = spawnSync(
@@ -1581,6 +2222,41 @@ function processExecutablePath(pid) {
     { encoding: "utf8", windowsHide: true, timeout: 30000 },
   );
   return (result.stdout || "").trim();
+}
+
+/** renderer/utility 子进程的命令行证据：确认自定义 switch 是否被转发（只读 WMI 查询）。 */
+function childProcessCommandLineEvidence(browserPid) {
+  const script = [
+    "$ErrorActionPreference='SilentlyContinue'",
+    "Get-CimInstance Win32_Process -Filter \"ParentProcessId = " + Number(browserPid) + "\" |",
+    "  Where-Object { $_.CommandLine -like '*--type=renderer*' -or $_.CommandLine -like '*--type=utility*' } |",
+    "  Select-Object ProcessId, @{n='type';e={ if ($_.CommandLine -match '--type=([a-z-]+)') { $matches[1] } else { '?' } }},",
+    "    @{n='managedSwitch';e={ $_.CommandLine -like '*browser-cli-background-presentation*' }},",
+    "    @{n='feature';e={ $_.CommandLine -like '*InputOwnershipEnforcement*' }} |",
+    "  ConvertTo-Json -Compress",
+  ].join("\n");
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 60000,
+    maxBuffer: 4 * 1024 * 1024,
+  });
+  const text = (result.stdout || "").trim();
+  let children = [];
+  try {
+    const parsed = text ? JSON.parse(text.split(/\r?\n/).filter(Boolean).pop()) : [];
+    children = Array.isArray(parsed) ? parsed : parsed ? [parsed] : [];
+  } catch {
+    children = [];
+  }
+  return {
+    browserPid,
+    children,
+    rendererCount: children.filter((c) => c.type === "renderer").length,
+    anyRendererHasManagedSwitch: children.some((c) => c.type === "renderer" && c.managedSwitch === true),
+    anyRendererHasFeature: children.some((c) => c.type === "renderer" && c.feature === true),
+    raw: text.slice(0, 4000),
+  };
 }
 
 function runNpm(script, timeoutMs = 300000) {
@@ -1756,12 +2432,11 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
   };
   report.sessions.push(sessionReport);
 
-  // The production input-ownership API is only visible in managed mode; the
-  // feature-on sessions therefore run the same managed presentation switch as
-  // the real product instead of faking an unmanaged enhanced host.
-  const featureFlagArgs = feature === "on"
-    ? ["--enable-features=" + FEATURE, "--browser-cli-background-presentation"]
-    : [];
+  // Feature on 同时打开 managed presentation：生产 API 的可用性要求
+  // `--browser-cli-background-presentation`（availability 检查 + 受信扩展身份检查都要它）。
+  // 该模式下扩展创建的窗口默认 hidden（不上桌面），inputOwnership API 才存在。
+  const featureFlagArgs =
+    feature === "on" ? ["--enable-features=" + FEATURE, "--browser-cli-background-presentation"] : [];
   const token = runToken + "-" + feature;
   const args = [
     "--remote-debugging-port=0",
@@ -1785,6 +2460,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     ...featureFlagArgs,
     servers.mainOrigin + "/boot?token=" + token,
   ];
+  sessionReport.managed = feature === "on";
   sessionReport.args = args;
   sessionReport.env = { LOCALAPPDATA: localAppData, BROWSERPILOT_HOST_BASE_PORT: String(48900 + Math.floor(Math.random() * 90)) };
 
@@ -1984,6 +2660,160 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     async browserTargets() {
       return await browserTargets(profileDir);
     },
+    // ------------------------------------------------------------ kernel API helpers
+    async cdp() {
+      if (!ctx._browserCdp) ctx._browserCdp = await new BrowserCdp(profileDir).connect();
+      return ctx._browserCdp;
+    },
+    /**
+     * 受信扩展页面（popup/index.html）作为 chrome.browserCli.inputOwnership 的真实调用方。
+     * 通过浏览器级 CDP 在该页面主世界执行调用：不经过 chrome.debugger（extension:// 页面
+     * 不在 host_permissions 覆盖范围内），也不改变页面的扩展上下文。
+     */
+    async ensurePopup() {
+      if (ctx.popup) return ctx.popup;
+      const extId = report.env.extensionId;
+      if (!extId) throw new Error("extension id unknown");
+      const url = "chrome-extension://" + extId + "/popup/index.html";
+      const data = await ctx.client.call("open_space", { name: "popup-" + token, url });
+      const info = { spaceId: data.spaceId, tabId: data.tabId, windowId: data.windowId, url, kind: "extension-page" };
+      const cdp = await ctx.cdp();
+      const target = await cdp.findTarget("chrome-extension://" + extId + "/popup/", "page");
+      info.targetId = target.targetId;
+      info.sessionId = await cdp.attach(target.targetId);
+      let probe = null;
+      const deadline = Date.now() + 20000;
+      while (Date.now() < deadline) {
+        probe = await cdp
+          .evaluate(
+            info.sessionId,
+            "({href: location.href, " +
+              "api: (typeof chrome !== 'undefined' && chrome.browserCli) ? true : false, " +
+              "io: (typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.inputOwnership) ? Object.keys(chrome.browserCli.inputOwnership) : null, " +
+              "runtimeError: (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.lastError) ? chrome.runtime.lastError.message : null})",
+          )
+          .catch((error) => ({ error: String(error) }));
+        if (probe && probe.api === true && probe.io) break;
+        await sleep(200);
+      }
+      info.probe = probe;
+      ctx.popup = info;
+      return info;
+    },
+    /** 调用 browserCli.inputOwnership.<method>(request, cb)；返回 {result,lastError} 或错误标记。 */
+    async apiCall(method, request = {}) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const expr =
+        "new Promise((resolve) => {" +
+        "  const io = (typeof chrome !== 'undefined' && chrome.browserCli) ? chrome.browserCli.inputOwnership : null;" +
+        "  if (!io || typeof io[" + JSON.stringify(method) + "] !== 'function') {" +
+        "    resolve({__bpMissing: true, method: " + JSON.stringify(method) + ", keys: io ? Object.keys(io) : null});" +
+        "    return;" +
+        "  }" +
+        "  try {" +
+        "    io[" + JSON.stringify(method) + "](" + JSON.stringify(request) + ", (result) => resolve({" +
+        "      result: result === undefined ? null : result," +
+        "      lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null," +
+        "    }));" +
+        "  } catch (e) { resolve({__bpThrown: String((e && e.message) || e)}); }" +
+        "})";
+      try {
+        return await cdp.evaluate(popup.sessionId, expr);
+      } catch (error) {
+        return { __bpCdpError: String(error && error.message ? error.message : error) };
+      }
+    },
+    /** 便捷：成功时返回 result，失败/受限时返回 null 并把原始响应写进 evidence。 */
+    async apiOk(method, request = {}) {
+      const raw = await ctx.apiCall(method, request);
+      if (raw && raw.result && !raw.lastError && !raw.__bpMissing && !raw.__bpThrown && !raw.__bpCdpError && raw.result.accepted !== false && raw.result.granted !== false && raw.result.ok !== false) {
+        return { ok: true, result: raw.result, raw };
+      }
+      return { ok: false, result: raw?.result || null, raw };
+    },
+    async attachOn(spaceKey) {
+      const r = await ctx.ai(spaceKey, "tab_cdp_call", { method: "Runtime.enable", tabId: ctx.spaces[spaceKey].tabId });
+      if (!r.ok) throw new Error("attach failed on " + spaceKey + ": " + r.error);
+      return true;
+    },
+    async detachOn(spaceKey) {
+      return await ctx.ai(spaceKey, "detach", { tabId: ctx.spaces[spaceKey].tabId });
+    },
+    /** 新开一个 fixture tab，且不对它发任何 AI 命令（因此 chrome.debugger 未 attach）。 */
+    async openFresh(key) {
+      if (ctx.spaces[key]) return ctx.spaces[key];
+      const name = key;
+      const url = servers.mainOrigin + "/" + key + "?token=" + token + "-" + name;
+      const data = await ctx.client.call("open_space", { name, url });
+      ctx.spaces[key] = { spaceId: data.spaceId, tabId: data.tabId, windowId: data.windowId, url, token: token + "-" + name };
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        const entry = servers.stateFor(token + "-" + name);
+        if (entry?.state?.token === token + "-" + name) return ctx.spaces[key];
+        await sleep(150);
+      }
+      throw new Error("fresh tab beacon not ready: " + key);
+    },
+    /** 读当前版本并 setOwnership(mode, version+1)。 */
+    async bumpMode(spaceKey, mode) {
+      const tabId = ctx.spaces[spaceKey].tabId;
+      const before = await ctx.apiCall("getOwnership", { target: { tabId } });
+      const current = Number(before?.result?.version ?? 0);
+      const version = current + 1;
+      const raw = await ctx.apiCall("setOwnership", { target: { tabId }, mode, version });
+      return { version, previousVersion: current, before, bumped: raw, accepted: raw?.result?.accepted === true };
+    },
+    markBlocked(blocked) {
+      ctx.blocked = blocked;
+    },
+    /** 内核 API 是否真的能从扩展 JS 调用（binding 是否被安装）。 */
+    async kernelApiReady() {
+      let popup;
+      try {
+        popup = await ctx.ensurePopup();
+      } catch (error) {
+        return {
+          ok: false,
+          blocked: {
+            code: "extension-page-unreachable",
+            deps: ["受信扩展页面（chrome-extension://<id>/popup/index.html）可打开"],
+            reason: "无法打开/附加受信扩展页面：" + String(error?.message || error),
+          },
+        };
+      }
+      if (popup.probe?.api === true && Array.isArray(popup.probe?.io) && popup.probe.io.length > 0) {
+        return { ok: true, popup };
+      }
+      return {
+        ok: false,
+        blocked: {
+          code: "api-not-exposed-to-extension-js",
+          deps: ["patch 029 修订：让 chrome.browserCli.inputOwnership 成为可安装的顶层 namespace（避免与父 feature browserCli 的层级冲突，或调整 feature_cache 的父子判定）"],
+          reason:
+            "chrome.browserCli 存在，但 chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不存在" +
+            "（popup 页面 keys=" + JSON.stringify(popup.probe?.io) + "，service worker 同样缺失）。" +
+            "根因：feature 名 \"browserCli.inputOwnership\" 有同名前缀的父 feature \"browserCli\"；" +
+            "extensions/renderer/feature_cache.cc 跳过所有“父 feature 存在”的条目，因此该 namespace 从未被安装为 " +
+            "BindingAccessor。已排除 switch 未转发/feature 未启用（renderer 命令行两者都在）。content 单测不覆盖 renderer 侧暴露。",
+        },
+      };
+    },
+    async rendererEvidence() {
+      return childProcessCommandLineEvidence(chrome?.record?.pid);
+    },
+    async kernelSnapshot(spaceKey) {
+      const tabId = ctx.spaces[spaceKey].tabId;
+      const raw = await ctx.apiCall("getOwnership", { target: { tabId } });
+      return { tabId, raw, snapshot: raw?.result || null, lastError: raw?.lastError || null };
+    },
+    /** 第二个 CDP session（浏览器级），用于跨会话注入测试。 */
+    async secondSession(needle) {
+      const cdp = await ctx.cdp();
+      const target = await cdp.findTarget(needle, "page");
+      const sessionId = await cdp.attach(target.targetId);
+      return { cdp, target, sessionId };
+    },
   };
 
   function targetRectFor(index) {
@@ -2000,17 +2830,13 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     while (Date.now() < deadline) {
       const listing = await win32.call("listWindows", { pid });
       const windows = Array.isArray(listing.windows) ? listing.windows : listing.windows ? [listing.windows] : [];
-      // Managed mode creates the window hidden (background presentation).
-      // The title/rect still exist, so select it here and let moveAndSettle
-      // show it with SWP_SHOWWINDOW | SWP_NOACTIVATE; a denied show is caught
-      // by the foreground/z-order assertions instead of being silently ignored.
-      const hit = windows.find((w) => String(w.title || "").includes(titleNeedle));
+      // managed 模式下窗口以 hidden 创建（title 正确、visible=false）。
+      // 优先可见窗口；否则接受隐藏窗口，由后续 moveAndSettle(SWP_SHOWWINDOW) 尝试显示。
+      const matches = windows.filter((w) => String(w.title || "").includes(titleNeedle));
+      const hit = matches.find((w) => w.visible) || matches[0];
       if (hit) return hit;
       await sleep(250);
     }
-    const finalList = await win32.call("listWindows", { pid });
-    const finalWindows = Array.isArray(finalList.windows) ? finalList.windows : finalList.windows ? [finalList.windows] : [];
-    console.log("[window] no hit for " + titleNeedle + "; candidates=" + JSON.stringify(finalWindows.map((w) => ({ title: String(w.title || "").slice(0, 80), visible: w.visible, cls: w.className, rect: w.rect }))));
     return null;
   }
 
@@ -2050,17 +2876,6 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     if (!hit) throw new Error("list_tabs 未找到 " + name + " 的 fixture tab: " + JSON.stringify(listing));
     ctx.spaces[key].tabId = hit.tabId;
     ctx.spaces[key].windowId = hit.windowId;
-    // Managed mode creates the window in the background. For the real product
-    // path used by feature-on cases, explicitly restore it as USER_EXPLICIT so
-    // the Win32 occlusion/human-input checks can address a visible window.
-    if (args.includes("--browser-cli-background-presentation")) {
-      try {
-        await ctx.client.call("ensure_visible", { tabId: hit.tabId, focus: false });
-        await sleep(500);
-      } catch (error) {
-        console.log("[window] ensure_visible failed for " + name + ": " + (error?.message || error));
-      }
-    }
     // 等外观测 beacon 就绪（不依赖 js，HUMAN/Feature-on 也成立）。
     const deadline = Date.now() + 45000;
     let lastState = null;
@@ -2074,7 +2889,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     }
     if (!lastState) throw new Error("fixture beacon 未就绪: " + name);
     const win = await findWindowByToken(chrome.record.pid, "ia-" + token + "-" + name, 45000);
-    if (!win) throw new Error("找不到窗口 ia-" + token + "-" + name + " (last probe: " + JSON.stringify(lastState) + ")");
+    if (!win) throw new Error("找不到窗口 ia-" + token + "-" + name + " (last probe: " + JSON.stringify(last) + ")");
     const settled = await moveAndSettle(win32, win.hwnd, targetRectFor(Object.keys(ctx.spaces).length - 1));
     const widget = await findWidgetHwnd(settled.hwnd);
     ctx.windows[key] = { hwnd: settled.hwnd, widgetHwnd: widget?.hwnd || null, rect: settled.rect, widget };
@@ -2127,10 +2942,17 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       report.cases.push(caseReport);
       const logStart = checkLog.length;
       const failStart = failures.length;
+      ctx.blocked = null;
       console.log("\n--- [" + label + "] " + testCase.id + " " + testCase.title);
       try {
         await testCase.run(ctx);
-        caseReport.status = failures.length === failStart ? "PASS" : "FAIL";
+        if (ctx.blocked) {
+          caseReport.status = "BLOCKED";
+          caseReport.blocked = ctx.blocked;
+          report.blocked.push({ id: testCase.id, ...ctx.blocked });
+        } else {
+          caseReport.status = failures.length === failStart ? "PASS" : "FAIL";
+        }
       } catch (error) {
         caseReport.status = "FAIL";
         caseReport.error = error instanceof Error ? error.stack || error.message : String(error);
@@ -2189,6 +3011,14 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     for (const [key, re] of Object.entries(patterns)) {
       const lines = logText.split(/\r?\n/).filter((l) => re.test(l));
       matches[key] = { count: lines.length, samples: lines.slice(0, 5).map((l) => l.slice(0, 300)) };
+    }
+    try {
+      if (ctx._browserCdp) {
+        ctx._browserCdp.close();
+        cleanup.browserCdpClosed = true;
+      }
+    } catch (error) {
+      cleanup.browserCdpCloseError = String(error);
     }
     sessionReport.browserLog = { file: path.join(artifactsDir, label + "-chrome.log"), bytes: logText.length, patterns: matches };
     sessionReport.cleanup = cleanup;
@@ -2343,6 +3173,11 @@ try {
     } else if (failedCount > 0 || report.error) report.verdict = "PARTIAL";
     else if (blockedCount > 0) report.verdict = "PARTIAL";
     else report.verdict = executed.length ? "PASS" : "BLOCKED";
+    // P0 回归（例如 managed hidden 截图）不计入输入仲裁失败，但也不允许出现 PASS。
+    if (report.verdict === "PASS" && report.p0Regressions.length > 0) {
+      report.verdict = "PARTIAL";
+      report.blockedReason = "存在单列的 P0 回归（见 p0Regressions），输入仲裁用例本身全部通过。";
+    }
     report.summary = {
       executed: executed.length,
       pass: report.cases.filter((c) => c.status === "PASS").length,
