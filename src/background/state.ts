@@ -46,6 +46,32 @@ export interface SpaceState {
   eventQueueTail: number;
 }
 
+/** 内核输入权快照的同步账本（P3 生产 API，`chrome.browserCli.inputOwnership`）。
+ *
+ *  **不是第二套 ownership**：模式永远由 `inputModeForSpace(SpaceState)` 重新派生；
+ *  这里只记录「最后一次成功告诉内核的 mode/version + 确认时间」，用于：
+ *   1. SW 重启后按单调 version 重新同步（内核可能还保留旧快照）；
+ *   2. 版本冲突时采纳内核更高的 version，绝不回退；
+ *   3. 30s 心跳丢失后把该目标标记 degraded（输入命令 fail closed）。
+ *
+ *  key = `win:<windowId>`（窗口级 ownership）或 `tab:<tabId>`（命令级 grant 目标）。 */
+export type KernelInputOwnershipMode = "ai" | "assist" | "human";
+
+export interface KernelInputOwnershipRecord {
+  version: number;
+  /** 最后一次成功同步给内核的模式（同步镜像，不是所有权真源）。 */
+  mode: KernelInputOwnershipMode;
+  /** 最近一次内核确认（setOwnership / heartbeat 成功）的时间。 */
+  lastAckAt: number;
+  /** 最近一次尝试同步的时间（诊断用；30s 判定使用内存里的 firstAttemptAt/lastAckAt）。 */
+  lastAttemptAt?: number;
+}
+
+export interface KernelInputOwnershipState {
+  targets: Record<string, KernelInputOwnershipRecord>;
+  updatedAt?: number;
+}
+
 /** 一条前台/目标租约。key 决定作用域：
  *  - `global`：真正会改变“哪个窗口在前台”的呈现操作，全进程互斥；
  *  - `space:<spaceId>`：只影响某个 Task Space（= 一个窗口）的操作，按目标互斥，不同 space 并行。
@@ -84,6 +110,8 @@ export interface GlobalState {
   /** 宿主浏览器能力探测结果（Phase 7）。换浏览器或换启动参数都会改变它，
    *  因此每次 SW 启动重新探测，不做跨会话持久化假设。 */
   hostCapabilities?: HostCapabilities;
+  /** 内核输入权快照同步账本（可选；普通 Chrome / Feature 关闭时完全不存在）。 */
+  kernelInputOwnership?: KernelInputOwnershipState;
   /** 人工接管中的 tabId：takeover Set 的持久层，SW 重启后由 mask.restoreMaskState 恢复。 */
   humanTakeoverTabIds?: number[];
   startTime: number;

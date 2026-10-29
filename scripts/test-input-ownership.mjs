@@ -525,8 +525,11 @@ export async function runInputOwnershipTests() {
     assert.match(ownershipSource, /export async function guardInputCommand\(/, "统一守卫必须存在");
 
     const commandsSource = fs.readFileSync("src/background/commands.ts", "utf8");
-    assert.match(commandsSource, /if \(INPUT_COMMANDS\.has\(name\)\) await guardInputCommand\(cmd\);/,
-      "dispatch 必须在 handler 之前调用统一守卫");
+    assert.match(
+      commandsSource,
+      /if \(INPUT_COMMANDS\.has\(name\)\) \{[\s\S]*?await guardInputCommand\(cmd\);[\s\S]*?withKernelInputScope\(/,
+      "dispatch 必须在 handler 之前调用统一守卫，并用内核命令 scope 包裹实际执行",
+    );
     assert.match(commandsSource, /if \(ACTION_NAMES\.has\(name\) && hasTakeover\(\)\)/, "既有 takeover 检查必须保留");
 
     for (const file of fs.readdirSync("src/background")) {

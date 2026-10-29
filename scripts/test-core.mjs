@@ -1066,3 +1066,7 @@ await import("./test-virtual-cursor.mjs");
 // ---------- 输入权仲裁（P3，扩展侧）：HUMAN / ASSIST / AI 派生视图 + grant ----------
 // 与独立的 test:input-ownership 共用同一份用例，避免两处漂移。
 await import("./test-input-ownership.mjs");
+
+// ---------- 输入权生产 API（P3）：chrome.browserCli.inputOwnership 客户端 ----------
+// 覆盖 API 探测/generic no-op/单调 version/10s 心跳/30s 失联/SW 重启/命令 scope。
+await import("./test-input-ownership-api.mjs");
