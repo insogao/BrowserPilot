@@ -7,7 +7,7 @@ import { registerMaskHandlers, requestTakeover, isHumanTakeover, maskOff } from 
 import { registerVirtualCursorHandlers } from "./virtual-cursor";
 import { isAttached } from "./debugger-bridge";
 import type { PopupGuide, PopupRequest, PopupStatus } from "../shared/types";
-import { claimSpaceForTab, registerSpaceLifecycleHandlers } from "./spaces";
+import { claimSpaceForTab, markInternalCommand, registerSpaceLifecycleHandlers } from "./spaces";
 import { detectHostCapabilities } from "./capabilities";
 
 const HEARTBEAT = "browserpilot.heartbeat";
@@ -136,10 +136,13 @@ async function handlePopup(msg: PopupRequest): Promise<unknown> {
         "get_template_detail", "compare_templates", "update_template", "rollback_template",
       ]);
       if (!msg.name || !allowed.has(msg.name)) throw new Error("不允许的模板管理命令");
-      return dispatch({ type: "command", name: msg.name, args: msg.args ?? {}, requestId: "options-" + Date.now() });
+      // 用户入口：命令对象在这里（SW 进程内）构造并打上不可伪造的内部标记。
+      return dispatch(markInternalCommand({
+        type: "command", name: msg.name, args: msg.args ?? {}, requestId: "options-" + Date.now(),
+      }));
     }
     case "stop": {
-      await dispatch({ type: "command", name: "stop", args: {}, requestId: "popup-stop-" + Date.now() });
+      await dispatch(markInternalCommand({ type: "command", name: "stop", args: {}, requestId: "popup-stop-" + Date.now() }));
       return { attached: false, mode: "idle" };
     }
     default:

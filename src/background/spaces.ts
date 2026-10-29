@@ -28,8 +28,56 @@ interface TabBrief {
   index?: number;
 }
 
+/** 用户入口（popup / options / 内核事件桥）的客户端身份。
+ *  **不是**一个可以从消息里携带的值：见 `markInternalCommand()`。 */
+export const INTERNAL_CLIENT_ID = "browserpilot-internal";
+/** Host 分配的外部 Agent 身份前缀；host.js 是唯一写入者。 */
+export const AGENT_CLIENT_PREFIX = "agent:";
+/** 既没有 host 注入的 Agent 身份、也不是扩展内部入口的调用方。
+ *  fail closed：没有任何特权（不能 grant、不能伪造 human_presence、不属于任何 space）。 */
+export const UNTRUSTED_CLIENT_ID = "anonymous:untrusted";
+
+/** 「扩展内部入口」命令标记。
+ *
+ *  身份不再从消息字段推断：popup/options/内核桥在 **同一个 SW 进程里** 构造 Command 对象，
+ *  用这个 WeakSet 打标。JSON/native messaging 反序列化出来的对象永远不可能带这个标记，
+ *  因此外部 Agent 无论自报 `_clientId`、`_channel`、`internal:true` 还是别的字段，都拿不到
+ *  用户身份。标记只活在当前 SW 实例的堆里，SW 重启后自然消失（重启后也不存在跨重启的命令）。 */
+const internalCommands = new WeakSet<object>();
+
+export function markInternalCommand<T extends Command>(cmd: T): T {
+  internalCommands.add(cmd);
+  return cmd;
+}
+
+export function isInternalCommand(cmd: Command): boolean {
+  return internalCommands.has(cmd);
+}
+
+/** 模板子命令继承父命令的“内部入口”属性（父命令带 `_clientId` 时子命令也带，无需标记）。 */
+export function inheritInternalCommand<T extends Command>(parent: Command, child: T): T {
+  if (internalCommands.has(parent)) internalCommands.add(child);
+  return child;
+}
+
+/**
+ * 命令调用方身份（唯一入口）。
+ *
+ * 信任规则（fail closed）：
+ *  1. 带 `_clientId`：只接受 host 分配的 `agent:<id>` 形状；任何其它值（包括
+ *     `"browserpilot-internal"`）一律降级为 UNTRUSTED_CLIENT_ID。这样即使 host 回归、
+ *     换实现或被绕过，保留 ID 也不会变成用户身份。
+ *  2. 不带 `_clientId`：只有当前 SW 里用 `markInternalCommand()` 打过标的命令才是用户入口；
+ *     其余（缺字段的未知传输、未来的新通道）一律 UNTRUSTED_CLIENT_ID。
+ */
 export function commandClientId(cmd: Command): string {
-  return cmd._clientId?.trim() || "browserpilot-internal";
+  const raw = typeof cmd._clientId === "string" ? cmd._clientId.trim() : "";
+  if (raw) {
+    return raw.startsWith(AGENT_CLIENT_PREFIX) && raw.length > AGENT_CLIENT_PREFIX.length
+      ? raw
+      : UNTRUSTED_CLIENT_ID;
+  }
+  return internalCommands.has(cmd) ? INTERNAL_CLIENT_ID : UNTRUSTED_CLIENT_ID;
 }
 
 function selector(cmd: Command): string | undefined {

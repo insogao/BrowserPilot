@@ -548,14 +548,16 @@ space 的输入模式（防跨 Agent DoS/探测）。
 - 新的 `human_presence` / `enterAssist` → 清掉未用完的 grant（人类优先，AI 必须重新申请）。
 - `grant_input` 只在 ASSIST 下有意义：HUMAN → `INPUT_HUMAN_OWNED`（grant 不能绕过
   ownership，必须先 `claim_space`）；AI → `INPUT_GRANT_NOT_IN_ASSIST`。
-  **仅用户入口（`browserpilot-internal`）可发**；非 owner → `SPACE_NOT_OWNED`；
-  owner Agent 自己调用 → `INPUT_GRANT_FORBIDDEN`。grant 是“人类允许 AI 这一次输入”的
-  凭据，如果 Agent 能自证，ASSIST 就失去意义。
+  **仅用户入口可发**（身份 = SW 进程内 `markInternalCommand` 标记，不是消息字段，见 §12.11）；
+  非 owner → `SPACE_NOT_OWNED`；owner Agent 自己调用 → `INPUT_GRANT_FORBIDDEN`。
+  grant 是“人类允许 AI 这一次输入”的凭据，如果 Agent 能自证，ASSIST 就失去意义。
 
 ### 12.6 `human_presence`（内核事件/测试入口）
 
-- 授权：**只接受用户入口（`browserpilot-internal`）或内核事件桥**。`args.internal === true`
-  不再构成旁路；owner Agent 即使带 `internal:true` 也会得到 `INPUT_PRESENCE_FORBIDDEN`。
+- 授权：**只接受扩展内部入口（popup / 内核事件桥，用 `markInternalCommand` 打标）**。
+  `args.internal === true`、`_clientId: "browserpilot-internal"`、`_channel` 等消息字段
+  一律不构成旁路（§12.11）；owner Agent 即使带这些字段也会得到 `INPUT_PRESENCE_FORBIDDEN`，
+  缺可信身份则直接 `INPUT_IDENTITY_UNTRUSTED`。
   非 owner 的 Agent 先被 `SPACE_NOT_OWNED` 拦住，不能替别人进入 ASSIST。
 - 目标解析：用户入口没有 `activeSpaceIds`，因此必须显式给 `space`/`spaceId` 或 `tabId`
   （内核事件天然带 `tabId`）；否则返回 `SPACE_NOT_FOUND`。
@@ -653,6 +655,49 @@ npm run test:input-ownership:browser
 6. **人类真实输入检测尚未接入**：本轮 `human_presence` 只有测试/未来内核入口；没有真实
    OS 输入探测（扩展没有该 API），必须等内核 patch。
 
+### 12.11 信任边界加固（2026-10-28，P3 审计后）
+
+**审计问题**：`grant_input` / `human_presence` 之前只认
+`commandClientId(cmd) === "browserpilot-internal"`，而 `commandClientId` 的实现是
+`cmd._clientId?.trim() || "browserpilot-internal"`。这是「字段缺失即最高权限」的 fail-open
+结构，且身份是否可伪造完全取决于 `native-host/host.js` 的一行字符串前缀。
+
+**真实 host 探针（原始输出；`npm run test:trust-boundary` 可复现）**：
+
+| 客户端自报 | host 转发给扩展的 `_clientId` | 结论 |
+|---|---|---|
+| `agentId: "browserpilot-internal"` | `agent:browserpilot-internal` | 不是保留 ID（前缀 `agent:`） |
+| `_clientId: "browserpilot-internal"` | `agent:socket-1`（被覆盖） | 不可伪造 |
+| `agentId: "a:b"` | 旧：`agent:a:b`；新：`agent:socket-1` | 冒号不再进入身份 |
+| `_channel: "internal"` | 旧：**原样转发**；新：丢弃 | 这是唯一真实的“可伪造字段”隐患 |
+
+结论：**TCP 路径当前不能直接伪造 `browserpilot-internal`**（前缀挡住了），但：
+1. 身份是“字符串约定”，不是结构性保证；任何 host 回归/换实现都会让它失守；
+2. `commandClientId` 的缺省回退把「没有字段」当成「用户」，属于 fail-open；
+3. 未知的 `_` 前缀字段会被原样转发——如果内部通道用一个消息字段表示，它立刻可被伪造。
+
+**修复（本轮已落地）**：
+
+1. **用户身份不是消息字段**：`spaces.ts` 新增进程内 `WeakSet<object>` +
+   `markInternalCommand()`。只有 SW 内部（`index.ts` 的 popup/options dispatch、内核事件桥）
+   构造的命令对象会被打标；JSON / native messaging 反序列化的对象永远不可能带这个标记。
+2. **`commandClientId()` fail closed**：`_clientId` 只接受 `agent:<id>` 形状；其它值（含
+   `browserpilot-internal`）→ `anonymous:untrusted`；没有 `_clientId` 且未打标 → 同样是
+   `anonymous:untrusted`。特权命令遇到不可信身份直接 `INPUT_IDENTITY_UNTRUSTED`。
+3. **模板子命令继承**：`inheritInternalCommand()` 保证内部入口发起的 `run_template`
+   子步骤仍属于用户入口，外部 Agent 的子步骤仍继承 `agent:<id>`。
+4. **host 服务端分配身份**：`agentId` 只允许 `[A-Za-z0-9._-]{1,64}`，保留 ID 表
+   （`browserpilot-internal` / `internal` / `user` / `kernel` / …）直接改派 `socket-<n>`；
+   转发采用**字段白名单**（`type`/`name`/`args`/`space` + host 注入的 `requestId`/`_clientId`），
+   任何 `_` 前缀字段、`_foregroundLeaseToken`、`args.internal` 都不再透传。
+5. **测试锁定**：`scripts/test-trust-boundary.mjs`（真实 host + 真实扩展命令层）、
+   `scripts/test-input-ownership.mjs` §11（离线负向用例 + 源码守卫）、
+   `scripts/test-input-ownership-browser.mjs`（真实 headless 浏览器上的伪造拒绝）。
+
+**用户入口仍然可用**：同一组操作改用 `markInternalCommand()` 后，`grant_input` 与
+`human_presence` 均成功（证据见 §13.0 与测试原始输出）。popup 的 `stop` / `template_command`
+已在 `index.ts` 打标，行为不变。
+
 ---
 
 ## 13. 内核侧待审 patch 方案（本轮不实施，不改 `D:\c\src`）
@@ -663,18 +708,78 @@ npm run test:input-ownership:browser
 > 的 `ForwardMouseEventWithLatencyInfo` :1676、`ForwardWheelEventWithLatencyInfo` :1743、
 > `ForwardKeyboardEventWithCommands` :1811、`IsIgnoringWebInputEvents` :3883），实施时需按当时
 > 版本复核。
+>
+> **2026-10-28 审计后更新**：扩展侧身份已改为不可伪造的进程内标记（§12.11），因此内核侧
+> 可以只信任「受信扩展通过受信 API 写入的快照」；§13.0 给出完整的信任边界与调用方校验，
+> §13.5 给出 grant 表，§13.9 给出独立验证与回滚。
+
+### 13.0 威胁模型：内核如何确认快照 / `human_presence` 来自受信扩展
+
+#### 13.0.1 信任层级（从低到高）
+
+| 主体 | 能做什么 | 能否成为「用户入口」 |
+|---|---|---|
+| 网页 / renderer / 页面脚本 | 只能触发页面自己的事件；`isTrusted=false` 的合成事件不参与仲裁 | 否 |
+| content script（本扩展） | 只能发固定的 `content_ready` / `mask_user_takeover` 消息 | 否 |
+| 本机任意进程（TCP 客户端） | 持 capability token 可当 Agent；自报 `agentId` 只能得到 `agent:<sanitized>` | 否 |
+| `native-host/host.js` | 唯一能给扩展注入 `_clientId` 的主体；只写 `agent:<id>` | 否（host 不是用户） |
+| 扩展 SW 内部入口（popup / options / 内核事件桥） | 进程内构造命令并 `markInternalCommand()` | **是（唯一）** |
+| 内核（Browser CLI 构建） | 只接受受信扩展 API 写入的快照 | 内核不产生用户身份，只消费扩展的结论 |
+
+#### 13.0.2 内核只信「受信扩展 + 受信 API」的三层校验
+
+`chrome.browserCli.inputOwnership.*` 是 chrome 层的 `ExtensionFunction`，运行在**浏览器进程**，
+调用方身份由 Chromium 自己给出（不是消息字段）。三层校验缺一不可：
+
+1. **构建期（API 是否存在）**
+   - 只有 Browser CLI 产品构建定义 `BUILDFLAG(BROWSER_CLI)` 时才注册
+     `chrome/browser/extensions/api/browser_cli/`；普通 Chrome / Chromium 没有这个 API，
+     扩展侧 `host_capabilities.mode === "generic"` 自动退化为纯 JS 命令守卫（§12）。
+   - `chrome/common/extensions/api/_api_features.json` 里给 `browserCli.inputOwnership`
+     加 `"allowlist": ["<Browser CLI 内置扩展 ID>"]`（旧版键名 `whitelist`，实施时按当时
+     Chromium 版本选键）；不在 allowlist 的扩展即使声明同名 permission 也拿不到 API。
+   - `browser_cli.json` 的 `permission` 名称使用产品私有命名空间，避免与公开 API 撞名。
+2. **扩展身份（调用方是谁）**
+   - 每个 `ExtensionFunction` 在 `Run()` 开头校验
+     `extension()->id() == kBrowserCliExtensionId`；常量由 `config/product-identity.env`
+     在构建期生成（与 `manifest.json` 的 `key` 同源），**不在运行时读 manifest 文本**。
+   - 扩展 ID = 扩展公钥 DER 的 SHA-256 前 128 bit 映射到 `a-p`，因此**钉住 ID 等价于钉住
+     公钥哈希**；替换 manifest `key` 会得到不同 ID，直接被拒。
+   - 同时拒绝：`source_context_type() != ExtensionFunction::SourceContextType::kExtension`、
+     `extension()->location()` 不在允许集合（`UNPACKED` / `EXTERNAL_PREF` / `EXTERNAL_REGISTRY`，
+     具体集合由产品安装方式决定）、incognito split mode、`browser_context()->IsOffTheRecord()`。
+   - 不提供任何 `contentScript` / `web page` 可达的重载：API 不注册 `content_script` context。
+3. **托管模式（产品是否允许）**
+   - `policy::BrowserCliEnabled`（managed policy）为 true 才注册 API；未托管/被禁用时
+     API 不存在，扩展侧同样退化为命令层守卫。
+   - 这样即使有人把扩展 sideload 到普通 Chrome，也拿不到内核快照写入能力。
+
+**明确拒绝**：renderer、网页、任意第三方扩展、DevTools 前端、`--remote-debugging-port`
+客户端都不能调用该 API。第三方 CDP 仍然能注入输入，但注入事件带 `kFromDebugger`，
+会被 controller 按当前快照一视同仁地丢弃（§13.5）——它只能拿“自动化”身份，拿不到“用户”身份。
+
+#### 13.0.3 快照与事件的方向性
+
+- **扩展 → 内核**：`setOwnership({windowId, mode, version})`、`setTabPolicy(...)`、
+  `grantInput({windowId, actions, ttlMs})`。全部是幂等写入 + 单调 version。
+- **内核 → 扩展**：`onHumanPresence({windowId, tabId, kind, at})`、`onOwnershipChanged(...)`。
+  只读事件，不携带任何“请把所有权改成 X”的指令；内核永不自行改 mode。
+- 内核不接受来自 renderer 的 `postMessage` / Mojo 直接调用；controller 只挂在
+  `WebContentsUserData` 上，由 `RenderWidgetHostImpl` 在浏览器进程内查询。
 
 ### 13.1 新增模块与公共接口
 
 | # | 文件 | 内容 |
 |---|---|---|
 | K1 | `content/public/browser/input_ownership.h`（新） | 面向 chrome 层的公共门面：`InputOwnershipMode {kAi,kAssist,kHuman}`、`InputOwnershipSnapshot {mode, version}`、`struct InputOwnershipController` 的静态入口（见下）。只前置声明 `WebContents` / `RenderWidgetHost` / `blink::WebInputEvent`，**不 include** `web_contents.h`，因此 `renderer_host/DEPS` 允许其被 RWHI 引用 |
-| K2 | `content/browser/input_ownership/input_ownership_controller.{h,cc}`（新） | 每个 `WebContents` 一个 controller（`WebContentsUserData<InputOwnershipController>`）；保存 `{mode, version, last_update, tab_policies, debugger_grant, human_presence_debounce}`；提供 `Decide()` / `ConsumeDebuggerGrant()` / `NoteHumanPresence()`；**只读快照 + 单调 version** |
+| K2 | `content/browser/input_ownership/input_ownership_controller.{h,cc}`（新） | 每个 `WebContents` 一个 controller（`WebContentsUserData<InputOwnershipController>`）；保存 `{mode, version, last_update, tab_policies, debugger_grant_table, human_presence_debounce}`；提供 `Decide()` / `ConsumeDebuggerGrant()` / `NoteHumanPresence()`；**只读快照 + 单调 version**；grant 表按 DevTools session 记录 `{remaining, expires_at, gesture_open_until}` |
 | K3 | `content/browser/renderer_host/render_widget_host_delegate.h` | 新增虚函数 `virtual InputOwnershipController* GetInputOwnershipController() { return nullptr; }`（默认 nullptr = 不启用） |
 | K4 | `content/browser/web_contents/web_contents_impl.{h,cc}` | 实现 `GetInputOwnershipController()` 返回本 WebContents 的 controller；在 WebContents 构造/销毁时创建/释放（覆盖 OOPIF、导航、窗口关闭） |
 | K5 | `content/browser/renderer_host/render_widget_host_impl.cc` | 三个 `Forward*` 汇合点调用 `Decide()`（见 §13.3） |
-| K6 | `content/browser/devtools/protocol/input_handler.cc` | `Input.insertText` 显式走同一 controller（它绕过 `ForwardKeyboardEvent`，见 §13.4）；`GetEventModifiers` / `GetMouseEventButton` 的 `kFromDebugger` 语义保持不变 |
-| K7 | `chrome/browser/extensions/api/browser_cli/browser_cli_input_ownership_api.{h,cc}` + `chrome/common/extensions/api/browser_cli.json` | 受信扩展 API：`browserCli.inputOwnership.setOwnership / setTabPolicy / getOwnership` 与 `onHumanPresence` 事件；继承现有 `BrowserCliGetCapabilitiesFunction` 的注册模式，额外校验扩展 ID + managed mode |
+| K6 | `content/browser/devtools/protocol/input_handler.cc` | `Input.insertText` 显式走同一 controller 的 `ConsumeDebuggerGrant(kText)`（它绕过 `ForwardKeyboardEvent`，见 §13.4）；`GetEventModifiers` / `GetMouseEventButton` 的 `kFromDebugger` 语义保持不变 |
+| K7 | `chrome/browser/extensions/api/browser_cli/browser_cli_input_ownership_api.{h,cc}` + `chrome/common/extensions/api/browser_cli.json` + `_api_features.json` | 受信扩展 API：`browserCli.inputOwnership.setOwnership / setTabPolicy / getOwnership / grantInput` 与 `onHumanPresence` / `onOwnershipChanged` 事件。**每个 Function 入口先过 `IsTrustedBrowserCliExtension()`**（§13.0.2 的三层校验），再写 controller；`grantInput` 是唯一能写 grant 表的入口 |
+| K8 | `chrome/browser/extensions/api/browser_cli/browser_cli_extension_identity.{h,cc}`（新） | 单一身份校验点：`kBrowserCliExtensionId`（构建期由 `config/product-identity.env` 生成）、`IsTrustedBrowserCliExtension(ExtensionFunction*)`、允许的 `Manifest::Location` 集合、managed policy 检查。所有 `browserCli.*` Function 复用，禁止各自复制判断 |
+| K9 | `chrome/browser/extensions/api/browser_cli/browser_cli_input_ownership_apitest.cc`（新，仅测试） | 扩展 API 的浏览器测试：受信扩展可写、伪造扩展 ID 被拒、API 未注册时调用得到 `lastError`；见 §13.9 |
 
 公共门面（K1）形状：
 
@@ -693,12 +798,14 @@ struct InputOwnershipSnapshot {
 };
 
 // 全部为静态入口；内部通过 WebContentsUserData 找到 controller。
+// 只有 chrome 层的受信扩展 API（K7/K8 校验通过）才允许调用这些写入口；
+// content 层不提供任何 renderer/Mojo 可达的绑定。
 void SetInputOwnership(WebContents* contents,
                        InputOwnershipMode mode,
                        uint64_t version);          // version 必须严格递增
 InputOwnershipSnapshot GetInputOwnership(WebContents* contents);
 void GrantDebuggerInput(WebContents* contents, uint32_t actions,
-                        base::TimeDelta ttl);      // 仅受信扩展可调用
+                        base::TimeDelta ttl);      // 仅受信扩展可调用；写 controller 的 grant 表
 void SetInputOwnershipTabPolicy(WebContents* contents, int tab_id,
                                 TabInputPolicy policy);  // P3 可选，先留空实现
 void SetHumanPresenceCallback(
@@ -717,18 +824,23 @@ class InputOwnershipController {
 
   Decision Decide(const blink::WebInputEvent& event, EventKind kind,
                   base::TimeTicks now);
-  bool ConsumeDebuggerGrant(EventKind kind, base::TimeTicks now);
+  bool ConsumeDebuggerGrant(const DevToolsAgentHost* session,
+                            EventKind kind, base::TimeTicks now);
   void NoteHumanPresence(const blink::WebInputEvent& event);
 
  private:
   InputOwnershipMode mode_ = InputOwnershipMode::kAssist;
   uint64_t version_ = 0;
-  base::TimeTicks last_extension_update_;
+  base::TimeTicks last_extension_update_;   // 只有受信扩展 API 会写它
   struct DebuggerGrant {
     uint32_t remaining = 0;
     base::TimeTicks expires_at;
     base::TimeTicks gesture_open_until;   // 一次手势内不再重复扣减
-  } grant_;
+    std::string owner_extension_id;       // 写入 grant 的扩展（审计用，不做跨进程校验）
+  };
+  // key = DevToolsAgentHost*（session）。第三方 CDP 会话拿不到 grant 的“用户授权”语义，
+  // 但可以消耗预算；见 §13.5 的已知限制。
+  base::flat_map<DevToolsAgentHost*, DebuggerGrant> grants_;
 };
 ```
 
@@ -739,9 +851,18 @@ class InputOwnershipController {
 2. `version_` 单调；`SetInputOwnership` 只接受更大的 version，重复/乱序幂等丢弃。
 3. `now - last_extension_update_ > 30s` → 视为 `kAssist`（AI 输入丢弃，人类始终可用）。
 4. controller 随 WebContents 销毁；不跨导航保存，不做全局单例。
-5. Feature 关闭 → `Decide()` 恒 `kDeliver`，`NoteHumanPresence()` 不触发，没有任何 IPC/事件。
+5. Feature 关闭 → `Decide()` 恒 `kDeliver`，`NoteHumanPresence()` 不触发，没有任何 IPC/事件；
+   `SetInputOwnership` / `GrantDebuggerInput` 直接 return（连状态都不写）。
+6. **写入口只有 chrome 层受信 API**（K7 + K8）；content 层不暴露任何写入口给 renderer/Mojo。
+7. grant 表只在 `GrantDebuggerInput()` 里增加，只在 `ConsumeDebuggerGrant()` 里减少；
+   `remaining == 0` 或 `now >= expires_at` 即删除该 session 的记录。
 
-### 13.3 三个汇合点的精确插入位置
+### 13.3 四个入口中的三个 `Forward*` 汇合点（第四个 `insertText` 见 §13.4）
+
+> P3 的输入仲裁共四个入口：`ForwardMouseEventWithLatencyInfo`、
+> `ForwardWheelEventWithLatencyInfo`、`ForwardKeyboardEventWithCommands`（本节 A/B/C）+
+> `InputHandler::InsertText`（§13.4，绕过键盘路径）。四个入口之外没有第二条注入路径；
+> `Input.dispatchTouchEvent` 等未纳入的路径在 §13.10 明确列出。
 
 **(A) `RenderWidgetHostImpl::ForwardMouseEventWithLatencyInfo`（:1676）** — 放在类型 CHECK 之后、
 `mouse_event_callbacks_` 循环之前（保证被丢弃的事件不会触发任何 observer/callback）：
@@ -812,7 +933,9 @@ class InputOwnershipController {
   if (base::FeatureList::IsEnabled(features::kInputOwnershipEnforcement)) {
     auto* controller = widget_host->delegate()
         ? widget_host->delegate()->GetInputOwnershipController() : nullptr;
-    if (controller && !controller->ConsumeDebuggerGrant(EventKind::kText,
+    // host() = 当前 InputHandler 所属的 DevToolsAgentHost（实施时按当时版本的
+    // InputHandler 成员/访问器取值），grant 表按 session 记录。
+    if (controller && !controller->ConsumeDebuggerGrant(host(), EventKind::kText,
                                                         base::TimeTicks::Now())) {
       callback->sendFailure(Response::ServerError(
           "InputOwnership: insertText rejected (grant required)"));
@@ -823,12 +946,34 @@ class InputOwnershipController {
 
 `Input.dispatchTouchEvent` / `DispatchWebTouchEvent`（:1655）在 P3 暂不纳入（见 §13.10）。
 
-### 13.5 `kFromDebugger` 判定与 grant 粒度
+### 13.5 `kFromDebugger` 判定、grant 表与来源绑定
 
-判定只有一处：`(event.GetModifiers() & blink::WebInputEvent::kFromDebugger) != 0`。
+#### 13.5.1 判定只有一处
+
+`(event.GetModifiers() & blink::WebInputEvent::kFromDebugger) != 0`。
 `GetEventModifiers()`（:97）与 `GetMouseEventButton()`（:165）已经给所有 `Input.dispatch*`
 事件置位；`InputInjector::OnInputEventAck()`（:839）已经用同一位过滤 ack。**不新增 modifier 位**
-（§11 决定 4）。
+（§11 决定 4）。人类输入 = `!kFromDebugger`，**永远投递**（窗口级不丢弃）。
+
+#### 13.5.2 grant 表（内核侧第二道防线）
+
+- 写入：只有 `chrome.browserCli.inputOwnership.grantInput({windowId, actions, ttlMs})` 能写；
+  该 Function 先过 §13.0.2 的三层校验，再调用 `GrantDebuggerInput()`。
+- 记录：`{remaining, expires_at, gesture_open_until, owner_extension_id}`，按
+  `DevToolsAgentHost*`（session）分桶；`remaining` 上限 `10000`、`ttl` 上限 `600000ms`
+  （与扩展侧 §12.5 的常量一致）。
+- 消耗：只有 `Decide()` 的自动化分支与 `InputHandler::InsertText` 会调用
+  `ConsumeDebuggerGrant(session, kind, now)`；没有 grant → `kDrop`（`insertText` 返回
+  `ServerError`）。
+- 清理：`remaining == 0`、过期、`setOwnership` 变更、WebContents 销毁都会删除对应记录。
+- **已知限制（明确记录）**：`chrome.debugger` 的注入会话与第三方 CDP 会话在内核里都是
+  `DevToolsAgentHost`，`kFromDebugger` 不区分来源（§11 决定 4）。因此第三方 CDP 可以
+  *消耗* grant 预算，但不能*增加*它；最坏结果是“人类授权的 N 次输入被第三方抢走”，
+  不会出现“无授权也能输入”。如果未来需要严格绑定到扩展自己的 session，可让
+  `grantInput` 额外携带扩展侧的 `debuggee` 标识，并在 `ExtensionDevToolsClientHost`
+  上做匹配；P3 不做（避免依赖未稳定的内部类型）。
+
+#### 13.5.3 手势级计数（不是逐事件）
 
 grant 计数按**输入手势**，而不是按单个 `WebInputEvent`（否则一次 click 的
 pressed+released、一次 press 的 keyDown+keyUp+char 会吃掉多次 grant）：
@@ -848,7 +993,7 @@ pressed+released、一次 press 的 keyDown+keyUp+char 会吃掉多次 grant）�
 `sendSuccess()`（既有逻辑）。也就是说第三方 CDP 会收到成功应答但页面没有输入——这是
 有意的 fail-closed；`insertText` 路径则显式返回 `ServerError`，便于第三方诊断。
 
-### 13.6 `human_presence` 上报
+### 13.6 `human_presence` 上报（只由受信扩展消费）
 
 复用既有 `RenderWidgetHost::InputEventObserver`（`content/public/browser/render_widget_host.h:250`），
 或在 `Decide()` 的人类分支里直接调用 `controller->NoteHumanPresence(event)`：
@@ -857,19 +1002,43 @@ pressed+released、一次 press 的 keyDown+keyUp+char 会吃掉多次 grant）�
 2. controller 内 300ms 去抖（鼠标 move 洪泛只保留最后一个），去抖后通过
    `SetHumanPresenceCallback()` 注册的回调上报；chrome 层把它转成
    `browserCli.inputOwnership.onHumanPresence({windowId, tabId, kind, at})`。
+   **事件只投递给 §13.0.2 校验通过的扩展**；扩展卸载/失联时事件直接丢弃（不广播给其它扩展）。
 3. 扩展收到后按 §12.6 走 500ms 去抖 → `enterAssist()`；默认 `pause` 策略下人类输入照常投递。
+   扩展侧的身份判定不依赖事件内容：内核事件桥在扩展 SW 内部用 `markInternalCommand()`
+   调用 `humanPresenceCommand`（§12.11），外部 Agent 无法伪造同样的调用。
 4. 内核**不**自行改 mode；人类输入只产生事件，不产生状态迁移。
+5. 反向保护：内核**不**接受任何“扩展说人类在场”的直接写 mode 调用；
+   `human_presence` 只产生事件，`enterAssist` 的决策仍在扩展层（人类优先、可审计）。
 
 ### 13.7 Feature、灰度与回滚
 
+#### 13.7.1 Feature 开关
+
 - `base::Feature kInputOwnershipEnforcement` 放 `content/public/common/content_features.{h,cc}`，
-  `FEATURE_DISABLED_BY_DEFAULT`。
-- 关闭时：`SetInputOwnership` / `GrantDebuggerInput` 直接 return；`Decide()` 恒 `kDeliver`；
-  不注册 observer、不发事件、不增加任何分支开销（一次 feature 检查）。
-- 灰度：先只开 `human_presence` 上报（只读），确认误报率；再开 HUMAN 丢弃；最后开 ASSIST grant。
-- 回滚：一个编号 patch 集合整体 revert；扩展侧守卫独立存在，回滚内核后仍是「今天的语义 +
-  更严格的命令门禁」（`host_capabilities.mode === "generic"` 时只启用命令层守卫）。
+  `FEATURE_DISABLED_BY_DEFAULT`；`chrome://flags/#input-ownership-enforcement` 可显式开启（仅开发）。
+- 关闭时（默认）：
+  - `SetInputOwnership` / `GrantDebuggerInput` / `SetInputOwnershipTabPolicy` 直接 return；
+  - `Decide()` 恒 `kDeliver`；`ConsumeDebuggerGrant()` 恒 true；
+  - `NoteHumanPresence()` 不触发，不注册 observer，不发任何事件；
+  - 每个入口只有一次 `base::FeatureList::IsEnabled()` 检查（静态缓存），不改变任何既有分支顺序。
+- 回归证据：同一套 browser test 在 feature off 下必须全部恢复今天的 DOM 计数/事件序列；
+  `Input.dispatch*` 的参数与默认行为零改动。
+
+#### 13.7.2 灰度顺序（每一档都可独立回滚）
+
+1. 只开 `human_presence` 上报（只读）：观察误报率与事件量，不影响投递。
+2. 开 HUMAN 丢弃：只对 `ownership=user` 的窗口生效，人类输入不受影响。
+3. 开 ASSIST grant：先只对显式 `grant_input` 的窗口生效。
+4. 全量：扩展侧 `setOwnership` 心跳覆盖所有 space。
+
+#### 13.7.3 回滚
+
+- 内核：一个编号 patch 集合整体 revert（K1-K9 同进同退）；feature 常量保留但不再被引用。
+- 扩展：命令层守卫独立于内核能力，回滚内核后仍是「今天的语义 + 更严格的命令门禁」；
+  `host_capabilities.mode === "generic"` 时只启用命令层守卫。
 - 数据面：`SpaceState.assist` 是可选字段，回滚不需要迁移 `storage.session`。
+- 信任边界修复（§12.11）与内核 patch 无耦合：即使内核方案全部回滚，外部客户端仍然
+  无法伪造用户身份。
 
 ### 13.8 失败模式（内核侧）
 
@@ -884,16 +1053,28 @@ pressed+released、一次 press 的 keyDown+keyUp+char 会吃掉多次 grant）�
 | 人类用快捷键关窗 | 空间消失 | `windows.onRemoved` → ownership inactive；controller 随 WebContents 销毁 |
 | grant 泄漏 | AI 持续操作 | 计数 + 绝对 TTL；手势级扣减；ownership 变更/新 presence 清空 |
 | 事件洪泛 | 大量 presence | controller 300ms 去抖 + 扩展 500ms 去抖 |
+| 伪造扩展调用 API | 非 allowlist 扩展 / 非 managed mode | API 未注册或 `lastError`；controller 状态不变（§13.0.2） |
+| 扩展侧身份不可信 | 缺 host 身份且非内部标记 | `INPUT_IDENTITY_UNTRUSTED`，不消耗 grant、不改 mode（§12.11） |
+| 第三方 CDP 抢 grant 预算 | 人类授权的 N 次被提前消耗 | 只会“少放”，不会“多放”；重新 `grant_input` 即可（§13.5.2 已知限制） |
 
-### 13.9 内核 patch 的验证计划（实施时）
+### 13.9 独立验证计划（实施时；与扩展侧测试分开跑）
 
-1. `InputOwnershipBrowserTest`：真实 `Input.dispatchMouseEvent`/`insertText`，断言 AI 可点、
-   HUMAN 不点（DOM 计数不变）、ASSIST 无 grant 不点、grant 后恰好一次。
-2. `human_presence`：用不带 `kFromDebugger` 的 `RenderWidgetHostImpl::ForwardMouseEvent`
-   模拟人类输入，断言 300ms 去抖后只上报一次。
-3. OOPIF：iframe 内按钮 + 主帧/子帧输入，断言同一 controller 生效。
-4. Feature-off 回归：同一套测试在 feature 关闭时全部恢复今天的行为。
-5. 浏览器 UI 快捷键：HUMAN 下 Ctrl+L / Ctrl+T / F5 仍生效（不属于页面输入权）。
+| 层级 | 测试 | 断言 |
+|---|---|---|
+| 单元 | `InputOwnershipControllerTest`（content_unittests） | version 单调/乱序丢弃；30s 过期→ASSIST；grant 手势级扣减；feature off 恒 `kDeliver`；人类输入永不被 drop |
+| 单元 | 仲裁纯函数表驱动 | `Decide(mode, fromDebugger, kind, hasGrant)` 覆盖 3×2×5×2 组合，与 §4 的表格逐项一致 |
+| 浏览器 | `InputOwnershipBrowserTest` | 真实 `Input.dispatchMouseEvent` / `insertText`：AI 可点；HUMAN DOM 计数不变；ASSIST 无 grant 不点；grant 后恰好一次；`insertText` 无 grant 返回 `ServerError` |
+| 浏览器 | OOPIF / 子帧 | iframe 内按钮在主帧与子帧输入下都受同一 controller 约束 |
+| 浏览器 | 浏览器 UI 快捷键 | HUMAN 下 Ctrl+L / Ctrl+T / F5 仍生效（不纳入页面输入权） |
+| 真实输入 | 独立 CI 机器（隔离 profile） | 用不带 `kFromDebugger` 的 `RenderWidgetHostImpl::ForwardMouseEvent` 模拟 OS 人类输入：事件必达页面，300ms 去抖后只上报一次 `human_presence`；自动化注入在 HUMAN/ASSIST 下被丢弃 |
+| 安全负向 | 扩展 API 身份测试（K9） | 非 allowlist 扩展 ID 调用 `browserCli.inputOwnership.*` 得到 `lastError`；普通 Chrome 无该 API；managed policy 关闭时 API 不存在；API 不接受任何“调用方身份”参数（身份只来自 `ExtensionFunction`） |
+| 安全负向 | 第三方 CDP | 第二个 CDP 客户端在 HUMAN 下注入鼠标/键盘/`insertText` 全部不落地；ASSIST 下无 grant 不落地 |
+| 回归 | Feature-off 全量 | 上述 browser test 在 feature 关闭时逐项恢复今天行为（DOM 计数/事件序列一致） |
+| 回滚 | patch revert 演练 | 单独 revert K1-K9 后编译通过、扩展侧 `test:input-ownership*` 全绿、`host_capabilities` 自动降级 |
+
+**独立验证原则**：内核测试不得复用扩展侧 JS 断言作为唯一证据；同一行为必须同时有
+（a）内核单测/浏览器测试的 DOM/事件证据，和（b）扩展侧 `input_status` / 审计事件证据。
+两套测试由不同 CI job 跑，结果都贴原始输出（本仓库已有扩展侧原始输出，见 §12.9/§12.11）。
 
 ### 13.10 明确未覆盖（待后续 patch）
 
@@ -903,6 +1084,21 @@ pressed+released、一次 press 的 keyDown+keyUp+char 会吃掉多次 grant）�
    `InputHandler::InsertText` 这一条 DevTools 路径。
 3. **自动化来源细分**（DevTools 手工调试 vs 插件 AI）：沿用 `kFromDebugger` 不区分（§11 决定 4）。
 4. **grant token 的跨进程校验**：P3 内核 grant 表由受信扩展 API 写入，token 只用于扩展侧
-   审计；内核按 `{remaining, ttl}` 计数，不解析 token。
+   审计；内核按 `{remaining, ttl}` 计数，不解析 token，也不做 session 级来源绑定（§13.5.2）。
 5. **内核侧审计事件**：P3 只做 UMA/`TRACE_EVENT` 与 `human_presence` 回调，不新增 DevTools
    domain；扩展仍是审计真源。
+6. **扩展 ID allowlist 的运维**：ID 常量随产品构建生成；扩展签名/公钥轮换需要同步发版
+   （这是有意的：轮换等同于更换受信主体）。
+
+### 13.11 与扩展侧信任修复的衔接（已落地）
+
+- 扩展侧用户身份 = `markInternalCommand()` 的进程内 WeakSet 标记（§12.11），内核侧
+  不需要、也不能信任任何“扩展说自己是用户”的消息字段。
+- 内核事件桥（未来 `browserCli.inputOwnership.onHumanPresence` 的扩展侧回调）在 SW 内部
+  构造命令并打标，等价于 popup 入口；外部 Agent 即使同时持有 capability token，
+  也无法产生同样的调用。
+- 内核 `grantInput` 的授权语义来自**人类在 popup/遮罩上的显式操作**；扩展侧 `grant_input`
+  仍要求进程内标记。两层都不接受 `_clientId` / `_channel` / `internal` 字段。
+- 因此 P3 的信任链是：人类点击（扩展 UI）→ SW 内部标记 → 受信扩展 API（内核校验扩展 ID /
+  managed mode）→ controller 快照/grant → `RenderWidgetHostImpl` 仲裁。
+  链上任何一环都不依赖可伪造的消息字段。

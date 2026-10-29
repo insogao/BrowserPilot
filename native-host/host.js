@@ -179,10 +179,52 @@ function tokenMatches(supplied) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// 外部客户端身份**只由 Host 服务端分配**：`agent:<sanitized-id>`。
+// 规则：
+//  - 客户端自报的 `agentId` 只作为“期望名”，必须通过字符集/长度校验且不是保留 ID；
+//  - 校验失败或使用保留 ID → 分配 `socket-<连接序号>`（永不回显客户端原文）；
+//  - `_clientId` / `_foregroundLeaseToken` / 任何 `_` 前缀字段都只允许 Host 注入；
+//  - 转发给扩展的命令是**字段白名单**（type/name/args/space），未来新增的内部字段不会
+//    因为“忘了剥离”而泄漏到不可信客户端可控的位置。
+const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+// 保留 ID：用户入口/内部通道名，以及容易被误认为特权身份的词。
+// 扩展侧的身份判定不依赖这个表（见 src/background/spaces.ts），这里只是纵深防御 + 明确拒绝。
+const RESERVED_AGENT_IDS = new Set([
+  "browserpilot-internal", "internal", "user", "human", "popup", "options",
+  "kernel", "host", "system", "admin", "root", "anonymous", "untrusted",
+]);
+const COMMAND_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+/** 服务端分配身份。返回值永远匹配 AGENT_ID_PATTERN（或 socket-<n>）。 */
+function assignAgentId(msg, socket) {
+  const raw = typeof msg.agentId === "string" ? msg.agentId.trim() : "";
+  if (!raw) return "socket-" + socket.bpClientId;
+  if (!AGENT_ID_PATTERN.test(raw) || RESERVED_AGENT_IDS.has(raw.toLowerCase())) {
+    console.error("[host] rejected agentId " + JSON.stringify(raw.slice(0, 80)) + " from socket " + socket.bpClientId + "; assigning socket-" + socket.bpClientId);
+    return "socket-" + socket.bpClientId;
+  }
+  return raw;
+}
+
+/** args 只保留普通字段：内部标记（`internal` / `_*`）不允许从外部注入。 */
+function sanitizeArgs(args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (key === "internal" || key.startsWith("_")) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function handleFromClient(msg, socket) {
   if (!msg || typeof msg !== "object") return;
   if (msg.type !== "command") {
     socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: false, error: "only command messages accepted" }) + "\n");
+    return;
+  }
+  if (typeof msg.name !== "string" || !COMMAND_NAME_PATTERN.test(msg.name)) {
+    socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: false, error: "bad_command_name" }) + "\n");
     return;
   }
   // ping/reload 仅用于本机发现与开发热更新；所有浏览器数据/操作命令必须持有 capability token。
@@ -210,18 +252,16 @@ function handleFromClient(msg, socket) {
   const externalRequestId = msg.requestId ?? null;
   const internalRequestId = "bp:" + socket.bpClientId + ":" + (++requestSeq);
   pending.set(internalRequestId, { socket, requestId: externalRequestId });
-  const declaredAgentId = typeof msg.agentId === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(msg.agentId)
-    ? msg.agentId
-    : "socket-" + socket.bpClientId;
-  // 身份与内部租约字段只允许 Host 注入，外部消息中的同名字段一律覆盖/丢弃。
-  const {
-    authToken: _ignored,
-    agentId: _agentId,
-    _clientId: _spoofedClientId,
-    _foregroundLeaseToken: _spoofedLease,
-    ...forward
-  } = msg;
-  sendToExtension({ ...forward, requestId: internalRequestId, _clientId: "agent:" + declaredAgentId });
+  const agentId = assignAgentId(msg, socket);
+  const forward = {
+    type: "command",
+    name: msg.name,
+    args: sanitizeArgs(msg.args),
+    ...(typeof msg.space === "string" && msg.space.trim() ? { space: msg.space.trim() } : {}),
+    requestId: internalRequestId,
+    _clientId: "agent:" + agentId,
+  };
+  sendToExtension(forward);
 }
 
 function writeSessionFile(port) {

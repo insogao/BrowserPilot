@@ -38,6 +38,7 @@ async function bundleInputOwnership() {
         'export { drainEvents } from "./src/background/events.ts";',
         'export { loadState, patchSpace } from "./src/background/state.ts";',
         'export { claim_space } from "./src/background/spaces.ts";',
+        'export { commandClientId, markInternalCommand, INTERNAL_CLIENT_ID, UNTRUSTED_CLIENT_ID } from "./src/background/spaces.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
       loader: "ts",
@@ -103,6 +104,9 @@ export async function runInputOwnershipTests() {
   const cmd = (name, args = {}, extra = {}) => ({
     type: "command", name, args, requestId: "io-" + (++seq), _clientId: "agent:a", ...extra,
   });
+  /** 用户入口：与 popup/内核桥一致——在进程内构造命令并打上不可伪造的内部标记。 */
+  const internal = (name, args = {}) =>
+    io.markInternalCommand({ type: "command", name, args, requestId: "internal-" + (++seq) });
   const setState = async (state) => {
     await globalThis.chrome.storage.session.set({ [STATE_KEY]: state });
   };
@@ -116,6 +120,17 @@ export async function runInputOwnershipTests() {
       return error;
     }
     assert.fail((label ?? "") + ": 期望抛出 " + code + "，实际成功放行");
+  };
+  /** 信任边界用：只要失败码在允许集合里就算“被拒绝”，并打印实际码作为证据。 */
+  const expectFailure = async (promise, codes, label) => {
+    try {
+      await promise;
+    } catch (error) {
+      assert.ok(codes.includes(error.code), (label ?? "") + ": 期望失败码 " + codes.join("/") + "，实际 " + error.code + " (" + error.message + ")");
+      console.log("  [deny] " + label + " -> " + error.code + " (" + error.message + ")");
+      return error;
+    }
+    assert.fail((label ?? "") + ": 期望被拒绝，实际成功");
   };
 
   try {
@@ -225,14 +240,14 @@ export async function runInputOwnershipTests() {
     // ------------------------------------------------------------------
     await setState(makeState({ "space-a": { ownership: "user" } }));
     await expectCode(
-      io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions: 1 }, { _clientId: "browserpilot-internal" })),
+      io.grantInputCommand(internal("grant_input", { spaceId: "space-a", actions: 1 })),
       "INPUT_HUMAN_OWNED",
       "HUMAN 下 grant_input",
     );
 
     await setState(makeState());
     await expectCode(
-      io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions: 1 }, { _clientId: "browserpilot-internal" })),
+      io.grantInputCommand(internal("grant_input", { spaceId: "space-a", actions: 1 })),
       "INPUT_GRANT_NOT_IN_ASSIST",
       "AI 下 grant_input",
     );
@@ -245,14 +260,14 @@ export async function runInputOwnershipTests() {
     );
     for (const actions of [0, -1, 1.5, "3", NaN]) {
       await expectCode(
-        io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions }, { _clientId: "browserpilot-internal" })),
+        io.grantInputCommand(internal("grant_input", { spaceId: "space-a", actions })),
         "INPUT_GRANT_INVALID",
         "非法 actions=" + String(actions),
       );
     }
     for (const ttlMs of [0, -5, 1.5, 700_000]) {
       await expectCode(
-        io.grantInputCommand(cmd("grant_input", { spaceId: "space-a", actions: 1, ttlMs }, { _clientId: "browserpilot-internal" })),
+        io.grantInputCommand(internal("grant_input", { spaceId: "space-a", actions: 1, ttlMs })),
         "INPUT_GRANT_INVALID",
         "非法 ttlMs=" + String(ttlMs),
       );
@@ -264,7 +279,7 @@ export async function runInputOwnershipTests() {
     );
 
     const issued = await io.grantInputCommand(
-      cmd("grant_input", { spaceId: "space-a", actions: 2, ttlMs: 5000 }, { _clientId: "browserpilot-internal" }),
+      internal("grant_input", { spaceId: "space-a", actions: 2, ttlMs: 5000 }),
     );
     assert.equal(issued.mode, "assist");
     assert.equal(issued.grant.actions, 2);
@@ -284,7 +299,7 @@ export async function runInputOwnershipTests() {
     assert.equal(status.grant.actions, 2);
 
     const internalGrant = await io.grantInputCommand(
-      cmd("grant_input", { space: "space-a", actions: 3, ttlMs: 5000 }, { _clientId: "browserpilot-internal" }),
+      internal("grant_input", { space: "space-a", actions: 3, ttlMs: 5000 }),
     );
     assert.equal(internalGrant.grant.actions, 3, "用户入口（internal）必须能发放 grant");
 
@@ -341,7 +356,7 @@ export async function runInputOwnershipTests() {
     assert.ok(audit("input_assist_entered").some((e) => e.args.reason === "kernel:mouse"));
 
     await io.grantInputCommand(
-      cmd("grant_input", { spaceId: "space-a", actions: 5, ttlMs: 5000 }, { _clientId: "browserpilot-internal" }),
+      internal("grant_input", { spaceId: "space-a", actions: 5, ttlMs: 5000 }),
     );
     assert.ok((await readSpace()).assist.grant, "grant 应存在");
     await io.enterAssist("space-a", { reason: "more-human-input" });
@@ -373,10 +388,9 @@ export async function runInputOwnershipTests() {
       "owner Agent 加 internal:true 也不能伪造 human_presence",
     );
 
-    const scheduled = await io.humanPresenceCommand({
-      ...cmd("human_presence", { space: "space-a", source: "kernel:mouse", debounceMs: 40 }),
-      _clientId: "browserpilot-internal",
-    });
+    const scheduled = await io.humanPresenceCommand(
+      internal("human_presence", { space: "space-a", source: "kernel:mouse", debounceMs: 40 }),
+    );
     assert.equal(scheduled.mode, "ai");
     assert.equal(scheduled.scheduled, true);
     assert.equal(scheduled.debounceMs, 40);
@@ -399,25 +413,23 @@ export async function runInputOwnershipTests() {
     assert.equal(io.inputModeForSpace(await readSpace()), "assist");
     assert.equal(audit("input_assist_entered").length, before + 1, "同一 burst 只允许一次 ASSIST 进入事件");
 
-    const immediate = await io.humanPresenceCommand({
-      ...cmd("human_presence", { space: "space-a", source: "kernel:key", immediate: true }),
-      _clientId: "browserpilot-internal",
-    });
+    const immediate = await io.humanPresenceCommand(
+      internal("human_presence", { space: "space-a", source: "kernel:key", immediate: true }),
+    );
     assert.equal(immediate.mode, "assist");
     assert.equal(immediate.changed, true);
 
     await setState(makeState({ "space-a": { ownership: "user" } }));
-    const alreadyHuman = await io.humanPresenceCommand({
-      ...cmd("human_presence", { space: "space-a", source: "kernel:mouse" }),
-      _clientId: "browserpilot-internal",
-    });
+    const alreadyHuman = await io.humanPresenceCommand(
+      internal("human_presence", { space: "space-a", source: "kernel:mouse" }),
+    );
     assert.equal(alreadyHuman.mode, "human");
     assert.equal(alreadyHuman.changed, false, "HUMAN 空间不得被 human_presence 改写");
     assert.equal(alreadyHuman.reason, "already-human");
 
     await setState(makeState({ "space-a": { ownership: "inactive" } }));
     await expectCode(
-      io.humanPresenceCommand({ ...cmd("human_presence", { space: "space-a" }), _clientId: "browserpilot-internal" }),
+      io.humanPresenceCommand(internal("human_presence", { space: "space-a" })),
       "SPACE_INACTIVE",
       "inactive 空间",
     );
@@ -460,7 +472,7 @@ export async function runInputOwnershipTests() {
     );
     await expectCode(
       io.grantInputCommand(
-        cmd("grant_input", { tabId: 22, actions: 1 }, { _clientId: "browserpilot-internal" }),
+        internal("grant_input", { tabId: 22, actions: 1 }),
       ),
       "INPUT_HUMAN_OWNED",
       "显式 tabId 的 grant_input 命中自己的 HUMAN 空间",
@@ -469,7 +481,7 @@ export async function runInputOwnershipTests() {
     await setState(makeState({ "space-a": { assist: { since: Date.now() } } }));
     await expectCode(
       io.grantInputCommand(
-        cmd("grant_input", { tabId: 999, spaceId: "space-a", actions: 1 }, { _clientId: "browserpilot-internal" }),
+        internal("grant_input", { tabId: 999, spaceId: "space-a", actions: 1 }),
       ),
       "TAB_OUTSIDE_SPACE",
       "tabId 不属于该 space",
@@ -529,6 +541,86 @@ export async function runInputOwnershipTests() {
       assert.match(popupSource, new RegExp('"' + name + '"'), "CommandName 缺少 " + name);
     }
     console.log("PASS input-ownership: single ownership state machine (source guards), no new ownership values");
+
+    // ------------------------------------------------------------------
+    // 11. 信任边界：用户入口身份不可由消息字段伪造
+    // ------------------------------------------------------------------
+    // 身份唯一入口只有两种：host 分配的 `agent:<id>`，或 SW 进程内 WeakSet 标记。
+    assert.equal(io.commandClientId({ type: "command", name: "ping", requestId: "x", _clientId: "agent:real" }), "agent:real");
+    assert.equal(io.commandClientId({ type: "command", name: "ping", requestId: "x", _clientId: "  agent:real  " }), "agent:real");
+    assert.equal(io.commandClientId({ type: "command", name: "ping", requestId: "x", _clientId: "browserpilot-internal" }), io.UNTRUSTED_CLIENT_ID,
+      "保留 ID 直接出现在 _clientId 里不得被当成用户身份");
+    assert.equal(io.commandClientId({ type: "command", name: "ping", requestId: "x", _clientId: "agent:" }), io.UNTRUSTED_CLIENT_ID);
+    assert.equal(io.commandClientId({ type: "command", name: "ping", requestId: "x", _clientId: "socket-1" }), io.UNTRUSTED_CLIENT_ID);
+    assert.equal(io.commandClientId({ type: "command", name: "ping", requestId: "x" }), io.UNTRUSTED_CLIENT_ID,
+      "缺 _clientId 且未打内部标记 → 不可信（绝不回退到 browserpilot-internal）");
+    assert.equal(io.commandClientId({ type: "command", name: "ping", requestId: "x", _channel: "internal" }), io.UNTRUSTED_CLIENT_ID,
+      "`_channel` 之类的消息字段不得产生用户身份");
+    assert.equal(io.commandClientId(io.markInternalCommand({ type: "command", name: "ping", requestId: "x" })), io.INTERNAL_CLIENT_ID,
+      "只有进程内标记才是用户入口");
+
+    await setState(makeState({ "space-a": { assist: { since: Date.now() } } }));
+    const spoofGrantCases = [
+      ["_clientId=browserpilot-internal", { _clientId: "browserpilot-internal" }],
+      ["_clientId=agent:browserpilot-internal（非 owner）", { _clientId: "agent:browserpilot-internal" }],
+      ["_channel=internal（无 _clientId）", { _channel: "internal" }],
+      ["args.internal=true（owner Agent）", { _clientId: "agent:a", args: { spaceId: "space-a", actions: 1, internal: true } }],
+    ];
+    for (const [label, extra] of spoofGrantCases) {
+      await expectFailure(
+        io.grantInputCommand({
+          type: "command", name: "grant_input", args: { spaceId: "space-a", actions: 1 },
+          requestId: "spoof-g-" + (++seq), ...extra,
+        }),
+        ["INPUT_IDENTITY_UNTRUSTED", "INPUT_GRANT_FORBIDDEN", "SPACE_NOT_OWNED"],
+        "grant_input 伪造 " + label,
+      );
+    }
+    assert.equal((await readSpace()).assist.grant, undefined, "伪造 grant 请求不得留下任何 grant");
+
+    await setState(makeState());
+    const spoofPresenceCases = [
+      ["_clientId=browserpilot-internal", { _clientId: "browserpilot-internal" }],
+      ["_channel=internal（无 _clientId）", { _channel: "internal" }],
+      ["args.internal=true（owner Agent）", { _clientId: "agent:a", args: { space: "space-a", source: "spoof", internal: true } }],
+    ];
+    for (const [label, extra] of spoofPresenceCases) {
+      await expectFailure(
+        io.humanPresenceCommand({
+          type: "command", name: "human_presence", args: { space: "space-a", source: "spoof" },
+          requestId: "spoof-p-" + (++seq), ...extra,
+        }),
+        ["INPUT_IDENTITY_UNTRUSTED", "INPUT_PRESENCE_FORBIDDEN", "SPACE_NOT_OWNED"],
+        "human_presence 伪造 " + label,
+      );
+    }
+    assert.equal(io.inputModeForSpace(await readSpace()), "ai", "伪造 presence 不得把空间拉进 ASSIST");
+
+    // 用户入口仍然可用：同一组操作换成进程内标记即可成功。
+    await setState(makeState({ "space-a": { assist: { since: Date.now() } } }));
+    const legitGrant = await io.grantInputCommand(internal("grant_input", { spaceId: "space-a", actions: 1, ttlMs: 5000 }));
+    assert.equal(legitGrant.mode, "assist");
+    assert.equal(legitGrant.grant.actions, 1);
+    await setState(makeState());
+    const legitPresence = await io.humanPresenceCommand(
+      internal("human_presence", { space: "space-a", source: "kernel:mouse", immediate: true }),
+    );
+    assert.equal(legitPresence.changed, true, "用户入口（进程内标记）必须仍能进入 ASSIST");
+    console.log("PASS input-ownership: user identity is a process-local marker; wire fields cannot forge it");
+
+    // 源码守卫：任何“缺字段即用户”的回退都不允许回来。
+    const spacesSource = fs.readFileSync("src/background/spaces.ts", "utf8");
+    assert.doesNotMatch(spacesSource, /\|\|\s*["']browserpilot-internal["']/,
+      "commandClientId 不得回退到用户身份");
+    assert.match(spacesSource, /const internalCommands = new WeakSet<object>\(\)/,
+      "内部身份必须是进程内 WeakSet 标记");
+    const indexSource = fs.readFileSync("src/background/index.ts", "utf8");
+    assert.equal((indexSource.match(/dispatch\(markInternalCommand\(/g) ?? []).length, 2,
+      "popup/options 的两个 dispatch 必须打内部标记");
+    const hostSource = fs.readFileSync("native-host/host.js", "utf8");
+    assert.match(hostSource, /RESERVED_AGENT_IDS/, "host 必须拒绝保留 agentId");
+    assert.doesNotMatch(hostSource, /\.\.\.forward/, "host 不得把客户端对象原样展开转发（字段白名单）");
+    console.log("PASS input-ownership: source guards keep identity fail-closed (no field-based fallback)");
   } finally {
     if (prevTabs === undefined) delete globalThis.chrome.tabs;
     else globalThis.chrome.tabs = prevTabs;

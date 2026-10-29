@@ -24,8 +24,16 @@ import {
   type AssistGrant,
   type SpaceState,
 } from "./state";
-import { commandClientId, TaskSpaceError } from "./spaces";
+import {
+  INTERNAL_CLIENT_ID,
+  UNTRUSTED_CLIENT_ID,
+  commandClientId,
+  TaskSpaceError,
+} from "./spaces";
 import { recordEvent } from "./events";
+
+// INTERNAL_CLIENT_ID 定义在 spaces.ts（身份唯一入口）；这里 re-export 仅为兼容既有调用方/文档。
+export { INTERNAL_CLIENT_ID };
 
 export type InputMode = "human" | "assist" | "ai";
 
@@ -35,7 +43,8 @@ export type InputOwnershipErrorCode =
   | "INPUT_GRANT_INVALID"
   | "INPUT_GRANT_NOT_IN_ASSIST"
   | "INPUT_GRANT_FORBIDDEN"
-  | "INPUT_PRESENCE_FORBIDDEN";
+  | "INPUT_PRESENCE_FORBIDDEN"
+  | "INPUT_IDENTITY_UNTRUSTED";
 
 export class InputOwnershipError extends Error {
   constructor(
@@ -54,8 +63,6 @@ export const DEFAULT_GRANT_TTL_MS = 60_000;
 /** 硬上限：禁止“一个 grant 管一整天”的滥用（grant 只是一次协助的通行证）。 */
 export const MAX_GRANT_TTL_MS = 10 * 60_000;
 export const MAX_GRANT_ACTIONS = 10_000;
-/** 用户入口（popup / options / 内部测试）的可信身份；Agent 身份由 host 注入为 `agent:<id>`。 */
-export const INTERNAL_CLIENT_ID = "browserpilot-internal";
 
 /** 需要输入权守卫的命令：凡是会向页面注入输入或可代页面执行任意逻辑的命令。
  *  `js` / `tab_cdp_call` 与既有 ACTION_NAMES 一致地纳入：它们能 `el.click()`、能直接
@@ -155,8 +162,19 @@ async function requireSpace(cmd: Command): Promise<SpaceState> {
   return space;
 }
 
-/** 只有 space 的 owner 或用户入口（internal）可以发放/查询敏感输入权凭据。 */
+/** 只有 space 的 owner 或用户入口（internal）可以发放/查询敏感输入权凭据。
+ *  身份不可信（缺 host 身份且非内部入口）一律 fail closed，绝不按“无主空间”放行。 */
 function assertCallerMayAdminister(space: SpaceState, clientId: string): void {
+  if (clientId === UNTRUSTED_CLIENT_ID) {
+    audit("input_command_rejected", {
+      spaceId: space.spaceId, clientId, command: "input_admin", code: "INPUT_IDENTITY_UNTRUSTED", reason: "no-verified-identity",
+    });
+    throw new InputOwnershipError(
+      "INPUT_IDENTITY_UNTRUSTED",
+      "调用方身份不可信：缺少 host 分配的 agent 身份，且不是扩展内部入口（space=" + space.spaceId + "）",
+      { spaceId: space.spaceId, clientId },
+    );
+  }
   if (clientId === INTERNAL_CLIENT_ID) return;
   if (space.ownerClientId && space.ownerClientId !== clientId) {
     throw new TaskSpaceError("SPACE_NOT_OWNED", "Task Space 属于其他 Agent: " + space.spaceId);
@@ -571,10 +589,11 @@ export interface HumanPresenceResult {
 }
 
 /**
- * human_presence：未来内核事件 / 测试入口，进入 ASSIST。
+ * human_presence：内核事件 / 用户入口 / 测试入口，进入 ASSIST。
  *
- * 防滥用：
- *  - 只有用户入口（browserpilot-internal）或显式 `internal:true` 的内核/测试调用可触发；
+ * 防滥用（身份不可由消息字段伪造）：
+ *  - 只接受扩展内部入口（popup/内核事件桥用 `markInternalCommand()` 打标）；
+ *    `args.internal === true`、`_clientId: "browserpilot-internal"`、`_channel` 等字段一律无效；
  *  - 非 owner 的 Agent 一律 SPACE_NOT_OWNED（不能替别人进 ASSIST）；
  *  - HUMAN 空间是无操作（用户已经在控制，不需要也不允许“再接管”）。
  */

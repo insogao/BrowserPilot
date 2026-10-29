@@ -15,6 +15,7 @@ import { pushEvent } from "./native-bridge";
 import { getL0Snapshot } from "./content-bridge";
 import { loadBundledTemplates } from "./bundled";
 import { sleep } from "./cdp";
+import { commandClientId, inheritInternalCommand } from "./spaces";
 
 // ---------------------------------------------------------------------------
 // 模版载体之「命令序列」的求值表达式构建（内联进 js 步骤，esbuild 会原样打包）。
@@ -913,7 +914,8 @@ let globalRunGeneration = 0;
 const clientRunGenerations = new Map<string, number>();
 
 function runClientKey(cmd: Command): string {
-  return cmd._clientId?.trim() || "browserpilot-internal";
+  // 身份唯一入口：只认 host 注入的 `agent:<id>` 或 SW 进程内打标的用户入口。
+  return commandClientId(cmd);
 }
 
 interface RunGeneration {
@@ -1147,7 +1149,7 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
     // 恢复窗口（minimized→normal）在 macOS 上会置前，是弹窗来源。只有显式前台/步骤强制才 ensure_visible。
     const shouldEnsureVisible = stepArgs.ensureVisible === true || (visibleRun && stepArgs.ensureVisible !== false);
     if (visibleTab !== undefined && VISIBLE_BEFORE_STEP.has(step.name) && shouldEnsureVisible) {
-      await runOne({
+      await runOne(inheritInternalCommand(cmd, {
         type: "command",
         name: "ensure_visible",
         args: { tabId: visibleTab, focus: true },
@@ -1155,9 +1157,9 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
         space: cmd.space,
         _clientId: cmd._clientId,
         _foregroundLeaseToken: cmd._foregroundLeaseToken,
-      });
+      }));
     }
-    const stepCmd: Command = {
+    const stepCmd: Command = inheritInternalCommand(cmd, {
       type: "command",
       name: step.name,
       args: stepArgs,
@@ -1165,7 +1167,7 @@ export async function runTemplate(cmd: Command): Promise<unknown> {
       space: cmd.space,
       _clientId: cmd._clientId,
       _foregroundLeaseToken: cmd._foregroundLeaseToken,
-    };
+    });
     try {
       lastResult = await runStepWithRetry(step, stepCmd);
       if (isRunCancelled(generation, clientKey)) throw new Error("template_cancelled");
