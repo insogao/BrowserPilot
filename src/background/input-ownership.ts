@@ -44,7 +44,12 @@ export type InputOwnershipErrorCode =
   | "INPUT_GRANT_NOT_IN_ASSIST"
   | "INPUT_GRANT_FORBIDDEN"
   | "INPUT_PRESENCE_FORBIDDEN"
-  | "INPUT_IDENTITY_UNTRUSTED";
+  | "INPUT_IDENTITY_UNTRUSTED"
+  /** 内核输入权快照不可确认（同步失败/超过 30s 未确认）：AI 输入必须 fail closed。
+   *  只有 enhanced host 且内核 API 存在时才会出现；普通 Chrome 永远不会抛这个码。 */
+  | "INPUT_KERNEL_SYNC_LOST"
+  /** 内核 API 存在但缺少 grant/命令 scope 方法（半实现的宿主）：ASSIST 输入拒绝。 */
+  | "INPUT_OWNERSHIP_API_INCOMPLETE";
 
 export class InputOwnershipError extends Error {
   constructor(
@@ -198,6 +203,8 @@ export interface InputGuardResult {
   mode: InputMode;
   spaceId: string;
   tabId?: number;
+  /** space 绑定的窗口；内核 ownership 快照按窗口（展开到该窗口的 WebContents）同步。 */
+  windowId?: number;
   /** ASSIST 放行时本次消耗后剩余的 grant 次数（0 = 本次用尽）。 */
   grantRemaining?: number;
 }
@@ -298,7 +305,7 @@ export async function guardInputCommand(cmd: Command): Promise<InputGuardResult 
     );
   }
 
-  if (mode === "ai") return { mode, spaceId: space.spaceId, tabId };
+  if (mode === "ai") return { mode, spaceId: space.spaceId, tabId, windowId: space.windowId };
 
   const consumed = await consumeAssistGrant(space.spaceId, { clientId, command: cmd.name, tabId });
   if (!consumed.ok) {
@@ -317,7 +324,7 @@ export async function guardInputCommand(cmd: Command): Promise<InputGuardResult 
       { spaceId: space.spaceId, tabId, mode, command: cmd.name, clientId, reason: consumed.reason },
     );
   }
-  return { mode, spaceId: space.spaceId, tabId, grantRemaining: consumed.remaining };
+  return { mode, spaceId: space.spaceId, tabId, windowId: space.windowId, grantRemaining: consumed.remaining };
 }
 
 // ---------------------------------------------------------------------------
@@ -340,6 +347,30 @@ export function cancelPendingPresence(spaceId: string): boolean {
 onOwnershipChanged((spaceId) => {
   cancelPendingPresence(spaceId);
 });
+
+/** 派生输入模式发生变化（assist enter/exit）的同步通知。
+ *
+ *  ownership 写入由 `state.onOwnershipChanged` 通知；assist 租约的增删只发生在
+ *  `enterAssist` / `exitAssist`，不会调用 `patchSpace`，因此需要单独一个收口。
+ *  监听器必须是同步、非阻塞的（内核同步由 input-ownership-api.ts 自己排队）。 */
+export type InputModeChangeListener = (spaceId: string, reason: string) => void;
+
+const modeChangeListeners = new Set<InputModeChangeListener>();
+
+export function onInputModeChanged(listener: InputModeChangeListener): () => void {
+  modeChangeListeners.add(listener);
+  return () => modeChangeListeners.delete(listener);
+}
+
+function notifyInputModeChanged(spaceId: string, reason: string): void {
+  for (const listener of modeChangeListeners) {
+    try {
+      listener(spaceId, reason);
+    } catch {
+      /* 监听器失败不得影响状态写入 */
+    }
+  }
+}
 
 export interface EnterAssistOptions {
   reason?: string;
@@ -374,6 +405,7 @@ export async function enterAssist(spaceId: string, opts: EnterAssistOptions = {}
       source: opts.source ?? "human_presence",
       reason,
     });
+    notifyInputModeChanged(spaceId, "assist-enter:" + reason);
   }
   return changed;
 }
@@ -389,7 +421,10 @@ export async function exitAssist(spaceId: string, reason = "explicit"): Promise<
     space.updatedAt = Date.now();
     removed = true;
   });
-  if (removed) audit("input_assist_exited", { spaceId, reason });
+  if (removed) {
+    audit("input_assist_exited", { spaceId, reason });
+    notifyInputModeChanged(spaceId, "assist-exit:" + reason);
+  }
   return removed;
 }
 

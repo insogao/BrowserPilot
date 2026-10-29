@@ -33,6 +33,7 @@
     "test:cursor": "node scripts/test-virtual-cursor.mjs",
     "test:cursor:browser": "node scripts/test-virtual-cursor-browser.mjs",
     "test:input-ownership": "node scripts/test-input-ownership.mjs",
+    "test:input-ownership-api": "node scripts/test-input-ownership-api.mjs",
     "test:input-ownership:browser": "node scripts/test-input-ownership-browser.mjs",
     "test:input-arbitration": "node scripts/test-input-arbitration-e2e.mjs",
     "test:input-arbitration:matrix": "node scripts/test-input-arbitration-e2e.mjs --matrix",

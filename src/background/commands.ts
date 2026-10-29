@@ -32,6 +32,10 @@ import {
   humanPresenceCommand,
   inputStatusCommand,
 } from "./input-ownership";
+import {
+  kernelInputOwnershipStatusForWindow,
+  withKernelInputScope,
+} from "./input-ownership-api";
 
 function getManifestVersion(): string {
   try {
@@ -185,7 +189,14 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
 
   // 输入权仲裁（P3）：HUMAN/ASSIST/AI 只是 ownership(+assist) 的派生视图。
   grant_input: (cmd) => grantInputCommand(cmd),
-  input_status: (cmd) => inputStatusCommand(cmd),
+  // input_status 额外返回内核同步视图（只在 enhanced host 上有意义；generic 下 state=unsupported）。
+  input_status: async (cmd) => {
+    const status = await inputStatusCommand(cmd);
+    return {
+      ...status,
+      kernel: kernelInputOwnershipStatusForWindow(status.windowId, status.mode),
+    };
+  },
   human_presence: (cmd) => humanPresenceCommand(cmd),
 
   import_template: (cmd) => tpl.importTemplate(cmd),
@@ -311,7 +322,13 @@ export async function dispatch(cmd: Command): Promise<unknown> {
     // HUMAN → INPUT_HUMAN_OWNED；ASSIST 无 grant → INPUT_ASSIST_REQUIRES_GRANT；
     // ASSIST 有 grant → 消耗一次后放行；AI → 放行。守卫放在 handler 之前，
     // 因此被拒绝时不会 attach/不会发任何 CDP Input.*。
-    if (INPUT_COMMANDS.has(name)) await guardInputCommand(cmd);
+    // 守卫之后再用内核命令 scope 包住真正的 handler（仅 enhanced host）：
+    //   - AI：确认内核快照新鲜，失联则 fail closed（不静默继续 AI）；
+    //   - ASSIST：一条命令 = 一次内核 grant + begin/end，异常由绝对截止兜底。
+    if (INPUT_COMMANDS.has(name)) {
+      const guard = await guardInputCommand(cmd);
+      return await withKernelInputScope(cmd, guard, () => KNOWN[name](cmd), { attach: ensureAttach });
+    }
     return await KNOWN[name](cmd);
   } finally {
     endMaskActivity();

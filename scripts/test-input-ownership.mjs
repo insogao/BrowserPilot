@@ -38,7 +38,9 @@ async function bundleInputOwnership() {
         'export { drainEvents } from "./src/background/events.ts";',
         'export { loadState, patchSpace } from "./src/background/state.ts";',
         'export { claim_space } from "./src/background/spaces.ts";',
+        'export { ensureCommandSpace } from "./src/background/spaces.ts";',
         'export { commandClientId, markInternalCommand, INTERNAL_CLIENT_ID, UNTRUSTED_CLIENT_ID } from "./src/background/spaces.ts";',
+        'export * from "./src/background/popup-entry.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
       loader: "ts",
@@ -100,6 +102,16 @@ export async function runInputOwnershipTests() {
   };
 
   const io = await bundleInputOwnership();
+  const prevWindows = globalThis.chrome.windows;
+  globalThis.chrome.windows = {
+    ...(prevWindows ?? {}),
+    async get(windowId) {
+      return { id: windowId, state: "normal", focused: false };
+    },
+    async getLastFocused() {
+      return { id: 1, state: "normal", focused: false };
+    },
+  };
   let seq = 0;
   const cmd = (name, args = {}, extra = {}) => ({
     type: "command", name, args, requestId: "io-" + (++seq), _clientId: "agent:a", ...extra,
@@ -525,8 +537,11 @@ export async function runInputOwnershipTests() {
     assert.match(ownershipSource, /export async function guardInputCommand\(/, "统一守卫必须存在");
 
     const commandsSource = fs.readFileSync("src/background/commands.ts", "utf8");
-    assert.match(commandsSource, /if \(INPUT_COMMANDS\.has\(name\)\) await guardInputCommand\(cmd\);/,
-      "dispatch 必须在 handler 之前调用统一守卫");
+    assert.match(
+      commandsSource,
+      /if \(INPUT_COMMANDS\.has\(name\)\) \{[\s\S]*?await guardInputCommand\(cmd\);[\s\S]*?withKernelInputScope\(/,
+      "dispatch 必须在 handler 之前调用统一守卫，并用内核命令 scope 包裹实际执行",
+    );
     assert.match(commandsSource, /if \(ACTION_NAMES\.has\(name\) && hasTakeover\(\)\)/, "既有 takeover 检查必须保留");
 
     for (const file of fs.readdirSync("src/background")) {
@@ -621,9 +636,141 @@ export async function runInputOwnershipTests() {
     assert.match(hostSource, /RESERVED_AGENT_IDS/, "host 必须拒绝保留 agentId");
     assert.doesNotMatch(hostSource, /\.\.\.forward/, "host 不得把客户端对象原样展开转发（字段白名单）");
     console.log("PASS input-ownership: source guards keep identity fail-closed (no field-based fallback)");
+
+    // ------------------------------------------------------------------
+    // 12. popup 用户入口（P3）：固定动作 + 进程内标记 + 消息字段不可注入
+    // ------------------------------------------------------------------
+    // 12.1 构造器是唯一入口：三个动作的 args 由 SW 固定，popup 只能选 space。
+    const popupGrantCmd = io.buildPopupInputCommand("grant_input", { spaceId: "space-a", tabId: 11 });
+    assert.equal(popupGrantCmd.name, "grant_input");
+    assert.deepEqual(popupGrantCmd.args, { spaceId: "space-a", tabId: 11, actions: 1 },
+      "grant_input 必须固定 actions=1，popup 不能放大授权");
+    assert.equal(io.commandClientId(popupGrantCmd), io.INTERNAL_CLIENT_ID,
+      "popup 输入命令必须是进程内标记的用户入口");
+
+    const popupPresenceCmd = io.buildPopupInputCommand("human_presence", { spaceId: "space-a", tabId: 11 });
+    assert.equal(popupPresenceCmd.name, "human_presence");
+    assert.deepEqual(popupPresenceCmd.args, { spaceId: "space-a", tabId: 11, source: "popup:user", immediate: true },
+      "human_presence 必须固定 source=popup:user + immediate=true");
+    assert.equal(io.commandClientId(popupPresenceCmd), io.INTERNAL_CLIENT_ID);
+
+    const popupShowCmd = io.buildPopupInputCommand("ensure_visible", { spaceId: "space-a", tabId: 11 });
+    assert.equal(popupShowCmd.name, "ensure_visible");
+    assert.deepEqual(popupShowCmd.args, { spaceId: "space-a", tabId: 11, focus: false },
+      "显示窗口必须固定 focus=false（不抢用户焦点）");
+    assert.equal(io.commandClientId(popupShowCmd), io.INTERNAL_CLIENT_ID);
+
+    // 消息/调用方塞进来的多余字段一律被丢弃（构造器只读取 spaceId/tabId）。
+    const injected = io.buildPopupInputCommand("grant_input", {
+      spaceId: "space-a", tabId: 11, actions: 99, ttlMs: 999999,
+      source: "spoof", immediate: false, internal: true, _clientId: "browserpilot-internal",
+    });
+    assert.equal(injected.args.actions, 1, "actions 不得被调用方覆盖");
+    assert.equal(injected.args.ttlMs, undefined, "ttlMs 不进入 popup 授权（走命令层默认 60s）");
+    assert.equal(injected.args.source, undefined);
+    assert.equal(injected.args.internal, undefined);
+    assert.equal(injected.args._clientId, undefined);
+
+    // 一旦离开 SW 进程（JSON 反序列化），内部标记必须消失。
+    const roundtrip = JSON.parse(JSON.stringify(popupGrantCmd));
+    assert.equal(io.commandClientId(roundtrip), io.UNTRUSTED_CLIENT_ID,
+      "JSON roundtrip 必须丢失内部标记（外部 host 不能复用 popup 身份）");
+
+    // 12.2 用 popup 实际会构造的命令走一遍命令层：授权/ASSIST/状态都可复现。
+    await setState(makeState({ "space-a": { assist: { since: Date.now() } } }));
+    const popupGrantResult = await io.grantInputCommand(
+      io.buildPopupInputCommand("grant_input", { spaceId: "space-a", tabId: 11 }),
+    );
+    assert.equal(popupGrantResult.mode, "assist");
+    assert.equal(popupGrantResult.grant.actions, 1);
+    const popupStatusCmd = io.buildPopupStatusCommand({ spaceId: "space-a", tabId: 11 });
+    assert.equal(io.commandClientId(popupStatusCmd), io.INTERNAL_CLIENT_ID);
+    const popupStatus = await io.inputStatusCommand(popupStatusCmd);
+    assert.equal(popupStatus.mode, "assist");
+    assert.equal(popupStatus.grantActionsRemaining, 1);
+
+    await setState(makeState());
+    const popupPresenceResult = await io.humanPresenceCommand(
+      io.buildPopupInputCommand("human_presence", { spaceId: "space-a", tabId: 11 }),
+    );
+    assert.equal(popupPresenceResult.mode, "assist");
+    assert.equal(popupPresenceResult.changed, true);
+    assert.equal(popupPresenceResult.source, "popup:user");
+    assert.equal(io.inputModeForSpace(await readSpace()), "assist");
+
+    // 用户入口可以操作 Agent 拥有的空间（包括 HUMAN 空间）；Agent 之间的隔离不变。
+    await setState(makeState({ "space-a": { ownership: "user" } }));
+    const internalUse = io.markInternalCommand({
+      type: "command", name: "use_space", args: { spaceId: "space-a" }, requestId: "internal-use",
+    });
+    assert.equal((await io.ensureCommandSpace(internalUse)).spaceId, "space-a",
+      "用户入口必须能对 Agent 拥有的 HUMAN 空间执行 ensure_visible 等操作");
+    await expectCode(
+      io.ensureCommandSpace(cmd("use_space", { spaceId: "space-a" }, { _clientId: "agent:b" })),
+      "SPACE_NOT_OWNED",
+      "其他 Agent 仍不得操作用户入口选择的 space",
+    );
+    console.log("PASS input-ownership: popup entry builds fixed, internally marked commands (grant/presence/show)");
+
+    // 12.3 源码守卫：popup 不读身份字段；SW 三个 case 都走构造器；外部通道无入口。
+    const popupTsSource = fs.readFileSync("src/popup/index.ts", "utf8");
+    // 只检查可执行代码：注释里出现“_clientId”是在解释“不使用它”。
+    const popupTsCode = popupTsSource
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    assert.doesNotMatch(popupTsCode, /_clientId|browserpilot-internal|__bpInternal/,
+      "popup 不得读取/发送可伪造的身份字段");
+    assert.doesNotMatch(popupTsCode, /URLSearchParams|location\.(search|hash)/,
+      "popup 不得从 URL 参数读取身份或目标");
+    assert.doesNotMatch(popupTsCode, /chrome\.runtime\.onMessage/,
+      "popup 只能通过 handlePopup 入口，不能自己监听命令");
+    assert.match(popupTsCode, /chrome\.runtime\.sendMessage/);
+    for (const kind of ["grant_input", "human_presence", "ensure_visible"]) {
+      assert.match(popupTsCode, new RegExp('kind: "' + kind + '"'), "popup 缺少动作 " + kind);
+    }
+    const popupHtml = fs.readFileSync("src/popup/index.html", "utf8");
+    for (const id of [
+      "space-select", "human-presence", "grant-input", "show-window", "input-refresh",
+      "input-mode", "input-ownership", "input-grant", "input-kernel", "input-target", "input-toast",
+    ]) {
+      assert.match(popupHtml, new RegExp('id="' + id + '"'), "popup 缺少自动化选择器 #" + id);
+    }
+
+    const popupEntrySource = fs.readFileSync("src/background/popup-entry.ts", "utf8");
+    assert.match(popupEntrySource, /markInternalCommand\(\{/, "popup 命令构造器必须打进程内标记");
+    assert.match(popupEntrySource, /actions: 1/);
+    assert.match(popupEntrySource, /source: "popup:user"/);
+    assert.match(popupEntrySource, /immediate: true/);
+    assert.match(popupEntrySource, /focus: false/);
+    assert.doesNotMatch(popupEntrySource, /msg\./, "构造器不得透传 popup 消息字段");
+
+    const popupIndexSource = fs.readFileSync("src/background/index.ts", "utf8");
+    assert.doesNotMatch(popupIndexSource, /export\s+(?:async\s+)?function\s+handlePopup/,
+      "handlePopup 不得导出（外部模块/通道不能直接调用）");
+    assert.match(popupIndexSource, /__bpErrorCode/, "popup 错误必须带稳定错误码");
+    const inputCasesStart = popupIndexSource.indexOf('case "grant_input":');
+    const inputCasesEnd = popupIndexSource.indexOf('case "stop":', inputCasesStart);
+    assert.ok(inputCasesStart >= 0 && inputCasesEnd > inputCasesStart, "handlePopup 缺少三个输入权 case");
+    const inputCases = popupIndexSource.slice(inputCasesStart, inputCasesEnd);
+    for (const kind of ["human_presence", "ensure_visible"]) {
+      assert.match(inputCases, new RegExp('case "' + kind + '":'), "handlePopup 缺少 case " + kind);
+    }
+    assert.match(inputCases, /isPopupSender\(sender\)/,
+      "三个用户动作必须校验 sender 是 popup 页面");
+    assert.match(inputCases, /dispatch\(buildPopupInputCommand\(msg\.kind, resolved\.target\)\)/,
+      "三个用户动作必须 dispatch 进程内构造的 Command");
+    assert.doesNotMatch(inputCases, /msg\.args|msg\.name|_clientId/,
+      "三个用户动作不得透传消息里的命令/身份字段");
+
+    const nativeBridgeSource = fs.readFileSync("src/background/native-bridge.ts", "utf8");
+    assert.doesNotMatch(nativeBridgeSource, /markInternalCommand|buildPopupInputCommand|handlePopup/,
+      "外部 host 通道（native-bridge）不得拥有任何用户入口标记能力");
+    console.log("PASS input-ownership: popup source guards (no forgeable fields, fixed actions, popup-only sender)");
   } finally {
     if (prevTabs === undefined) delete globalThis.chrome.tabs;
     else globalThis.chrome.tabs = prevTabs;
+    if (prevWindows === undefined) delete globalThis.chrome.windows;
+    else globalThis.chrome.windows = prevWindows;
   }
 }
 

@@ -51,6 +51,14 @@ async function mouseEvent(
   await send(tabId, "Input.dispatchMouseEvent", { type, x, y, button, clickCount, ...extra });
 }
 
+/** CDP `buttons` bitmask: left=1, right=2, middle=4. Drag moves must carry it,
+ * otherwise pages that check `event.buttons === 1` treat the gesture as hover. */
+function buttonMask(button: string): number {
+  if (button === "right") return 2;
+  if (button === "middle") return 4;
+  return 1;
+}
+
 export async function click(tabId: number, a: Args): Promise<unknown> {
   return withCdpAllow(tabId, async () => {
     await ensureAttach(tabId);
@@ -120,7 +128,7 @@ export async function down(tabId: number, a: Args): Promise<unknown> {
     if (!coord) throw new Error("down 无法定位目标");
     await cursorTo(tabId, coord, a);
     const button = (a.button as string) ?? "left";
-    await mouseEvent(tabId, "mousePressed", coord.x, coord.y, button, 1);
+    await mouseEvent(tabId, "mousePressed", coord.x, coord.y, button, 1, { buttons: buttonMask(button) });
     return { pressed: true, x: coord.x, y: coord.y, button };
   });
 }
@@ -133,7 +141,7 @@ export async function up(tabId: number, a: Args): Promise<unknown> {
     if (!coord) throw new Error("up 无法定位目标");
     await cursorTo(tabId, coord, a);
     const button = (a.button as string) ?? "left";
-    await mouseEvent(tabId, "mouseReleased", coord.x, coord.y, button, 1);
+    await mouseEvent(tabId, "mouseReleased", coord.x, coord.y, button, 1, { buttons: 0 });
     return { released: true, x: coord.x, y: coord.y, button };
   });
 }
@@ -148,11 +156,19 @@ export async function drag(tabId: number, a: Args): Promise<unknown> {
     if (!fromC || !toC) throw new Error("drag 需要 from/to 或 ref/x,y");
     await cursorTo(tabId, fromC, a);
     const button = (a.button as string) ?? "left";
-    await mouseEvent(tabId, "mousePressed", fromC.x, fromC.y, button, 1);
+    const mask = buttonMask(button);
+    await mouseEvent(tabId, "mousePressed", fromC.x, fromC.y, button, 1, { buttons: mask });
     await sleep(40);
-    await mouseEvent(tabId, "mouseMoved", toC.x, toC.y, "none", 0);
-    await sleep(40);
-    await mouseEvent(tabId, "mouseReleased", toC.x, toC.y, button, 1);
+    // A single jump to the destination is not a drag for pages that inspect
+    // pointermove/buttons; emit intermediate moves with the pressed bit set.
+    const steps = 5;
+    for (let i = 1; i <= steps; i++) {
+      const x = Math.round(fromC.x + ((toC.x - fromC.x) * i) / steps);
+      const y = Math.round(fromC.y + ((toC.y - fromC.y) * i) / steps);
+      await mouseEvent(tabId, "mouseMoved", x, y, "none", 0, { buttons: mask });
+      await sleep(16);
+    }
+    await mouseEvent(tabId, "mouseReleased", toC.x, toC.y, button, 1, { buttons: 0 });
     return { dragged: true, from: { x: fromC.x, y: fromC.y }, to: { x: toC.x, y: toC.y } };
   });
 }
