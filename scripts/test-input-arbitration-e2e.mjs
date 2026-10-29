@@ -71,7 +71,8 @@ const KEEP_OPEN = argv.includes("--keep-open");
 const STAGE_ARG = (argv.find((a) => a.startsWith("--stage=")) || "").slice("--stage=".length).trim();
 const STAGES = new Set((STAGE_ARG || "all").split(",").map((s) => s.trim()).filter(Boolean));
 const FEATURE_ARG = (argv.find((a) => a.startsWith("--feature=")) || "").slice("--feature=".length).trim();
-const FEATURE_FILTER = new Set((FEATURE_ARG || "off,on").split(",").map((s) => s.trim()).filter(Boolean));
+const FEATURE_FILTER = new Set((FEATURE_ARG || "off,on,on-visible").split(",").map((s) => s.trim()).filter(Boolean));
+const SESSION_FEATURES = ["off", "on", "on-visible"];
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nowIso = () => new Date().toISOString();
@@ -383,21 +384,163 @@ const CASES = [
   // ------------------------------------------------------------ ASSIST（blocked）
   {
     id: "A1",
-    title: "ASSIST：无 grant 全部拒绝（扩展命令层）",
+    title: "ASSIST 用户入口：popup human_presence + #grant-input，一条命令成功、第二条拒绝",
     stage: "assist",
-    blocked: BLOCK_ASSIST_ENTRY,
+    feature: "on",
+    async run(ctx) {
+      const key = "a1";
+      await ctx.openFresh(key);
+      const spaceId = ctx.spaces[key].spaceId;
+      if ((await ctx.inputStatus(key)).mode !== "ai") await ctx.claim(key);
+
+      const status0 = await ctx.popupSend("input_status", spaceId);
+      check("A1 popup input_status 返回 ai", status0?.response?.input?.mode === "ai", JSON.stringify(status0).slice(0, 700));
+
+      const ctrl = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const afterCtrl = await ctx.probe(key);
+      check("A1 对照：AI 模式 click 落地", ctrl.ok === true && afterCtrl.clicks === 1, JSON.stringify({ ctrl, clicks: afterCtrl.clicks }));
+
+      const presence = await ctx.popupSend("human_presence", spaceId);
+      await sleep(400);
+      const statusAssist = await ctx.popupSend("input_status", spaceId);
+      check(
+        "A1 popup human_presence 进入 ASSIST 且 ownership 仍为 agent",
+        presence?.ok === true &&
+          (presence?.response?.mode === "assist" || statusAssist?.response?.input?.mode === "assist") &&
+          statusAssist?.response?.input?.ownership === "agent",
+        JSON.stringify({ presence, statusAssist }).slice(0, 900),
+      );
+
+      const noGrant = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const afterNoGrant = await ctx.probe(key);
+      check(
+        "A1 ASSIST 无 grant → INPUT_ASSIST_REQUIRES_GRANT 且 DOM 不变",
+        noGrant.ok === false && noGrant.errorCode === "INPUT_ASSIST_REQUIRES_GRANT" && afterNoGrant.clicks === afterCtrl.clicks,
+        JSON.stringify({ noGrant, clicks: afterNoGrant.clicks }),
+      );
+
+      const selected = await ctx.popupSelectSpace(spaceId);
+      await sleep(700); // 等 popup 的 refresh() 重新渲染并启用按钮
+      let button = await ctx.popupClick("#grant-input");
+      if (button?.disabled === true) {
+        await sleep(700);
+        button = await ctx.popupClick("#grant-input");
+      }
+      await sleep(900);
+      const toast = await ctx.popupText("input-toast");
+      const statusGrant = await ctx.popupSend("input_status", spaceId);
+      check(
+        "A1 popup #space-select + #grant-input 按钮接线成功（grant 出现）",
+        selected?.ok === true && button?.clicked === true && statusGrant?.response?.input?.grant?.actions === 1,
+        JSON.stringify({ selected, button, toast, statusGrant }).slice(0, 900),
+      );
+
+      const click1 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const s1 = await ctx.probe(key);
+      check("A1 用户授权后第 1 条 click 落地", click1.ok === true && s1.clicks === afterNoGrant.clicks + 1, JSON.stringify({ click1, clicks: s1.clicks }));
+
+      const click2 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const s2 = await ctx.probe(key);
+      check(
+        "A1 第 2 条 click 被拒（grant 用尽，一次授权一条命令）",
+        click2.ok === false && click2.errorCode === "INPUT_ASSIST_REQUIRES_GRANT" && s2.clicks === s1.clicks,
+        JSON.stringify({ click2, clicks: [s1.clicks, s2.clicks] }),
+      );
+      ctx.record("A1", { status0, presence, statusAssist, noGrant, selected, button, toast, statusGrant, click1, click2, clicks: [afterCtrl.clicks, s2.clicks] });
+    },
   },
   {
     id: "A2",
-    title: "ASSIST：grant 按命令消费 1 次（一次成功、第二次拒绝）",
+    title: "ASSIST 用户入口（重复验证）：直接 sendMessage grant_input，一次性消费",
     stage: "assist",
-    blocked: { ...BLOCK_ASSIST_ENTRY, reason: BLOCK_ASSIST_ENTRY.reason + " grant_input 同样需要内部入口。" },
+    feature: "on",
+    async run(ctx) {
+      const key = "a2";
+      await ctx.openFresh(key);
+      const spaceId = ctx.spaces[key].spaceId;
+      if ((await ctx.inputStatus(key)).mode !== "ai") await ctx.claim(key);
+      await ctx.popupSend("human_presence", spaceId);
+      await sleep(300);
+      const noGrant = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      check("A2 ASSIST 无 grant 被拒", noGrant.ok === false && noGrant.errorCode === "INPUT_ASSIST_REQUIRES_GRANT", JSON.stringify(noGrant));
+      const grant = await ctx.popupSend("grant_input", spaceId);
+      check("A2 popup grant_input 返回 actions=1", grant?.response?.grant?.actions === 1, JSON.stringify(grant).slice(0, 700));
+      const click1 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(400);
+      const s1 = await ctx.probe(key);
+      check("A2 授权后 click 落地", click1.ok === true && s1.clicks === 1, JSON.stringify({ click1, clicks: s1.clicks }));
+      const afterUse = await ctx.popupSend("input_status", spaceId);
+      check("A2 消费后 input_status 不再有可用 grant", afterUse?.response?.input?.grantActionsRemaining === null || afterUse?.response?.input?.grant?.actions === undefined, JSON.stringify(afterUse).slice(0, 700));
+      const click2 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(300);
+      const s2 = await ctx.probe(key);
+      check("A2 第 2 条 click 被拒", click2.ok === false && click2.errorCode === "INPUT_ASSIST_REQUIRES_GRANT" && s2.clicks === s1.clicks, JSON.stringify({ click2, clicks: s2.clicks }));
+      ctx.record("A2", { noGrant, grant, click1, click2, clicks: [s1.clicks, s2.clicks], afterUse });
+    },
   },
   {
     id: "A3",
-    title: "ASSIST：grant 过期 / 用尽 / 取消 / ownership 变更后拒绝",
+    title: "ASSIST 用户入口：取消（新 presence 清 grant）/ ownership 变更 / 60s 过期",
     stage: "assist",
-    blocked: BLOCK_ASSIST_ENTRY,
+    feature: "on",
+    async run(ctx) {
+      const key = "a3";
+      await ctx.openFresh(key);
+      const spaceId = ctx.spaces[key].spaceId;
+      if ((await ctx.inputStatus(key)).mode !== "ai") await ctx.claim(key);
+      await ctx.popupSend("human_presence", spaceId);
+      await sleep(300);
+
+      // 1) 新 presence 清掉未使用的 grant
+      const g1 = await ctx.popupSend("grant_input", spaceId);
+      await sleep(250);
+      const p2 = await ctx.popupSend("human_presence", spaceId);
+      await sleep(250);
+      const afterPresenceGrant = await ctx.popupSend("input_status", spaceId);
+      const clickCancel = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      check(
+        "A3 新的 human_presence 清掉未使用 grant → click 被拒",
+        g1?.response?.grant?.actions === 1 &&
+          p2?.ok === true &&
+          (afterPresenceGrant?.response?.input?.grantActionsRemaining === null || afterPresenceGrant?.response?.input?.grant === null) &&
+          clickCancel.ok === false &&
+          clickCancel.errorCode === "INPUT_ASSIST_REQUIRES_GRANT",
+        JSON.stringify({ g1, p2, afterPresenceGrant, clickCancel }).slice(0, 1000),
+      );
+
+      // 2) ownership 变更（handoff）清 assist/grant，命令层 HUMAN 拒绝
+      const g2 = await ctx.popupSend("grant_input", spaceId);
+      await sleep(200);
+      mustCheck("A3 handoff_space", await ctx.handoff(key));
+      const clickHuman = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      check(
+        "A3 ownership 变更 → assist/grant 清空，AI click 变成 INPUT_HUMAN_OWNED",
+        g2?.response?.grant?.actions === 1 && clickHuman.ok === false && clickHuman.errorCode === "INPUT_HUMAN_OWNED",
+        JSON.stringify({ g2, clickHuman }),
+      );
+      mustCheck("A3 claim_space 恢复", await ctx.claim(key));
+
+      // 3) 用户入口 grant 的 60s 过期（popup 固定 actions=1 / 60s）
+      await ctx.popupSend("human_presence", spaceId);
+      await sleep(300);
+      const g3 = await ctx.popupSend("grant_input", spaceId);
+      const beforeExpiry = await ctx.popupSend("input_status", spaceId);
+      await sleep(61000);
+      // 长等待可能让 SW 休眠、native host 退出；先 poke SW 让 host 重连，再测过期。
+      const channel = await ctx.ensureAgentChannel(spaceId);
+      const clickExpired = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      const afterExpiry = await ctx.popupSend("input_status", spaceId);
+      check(
+        "A3 60s 后 grant 过期 → click 被拒（INPUT_ASSIST_REQUIRES_GRANT）",
+        g3?.response?.grant?.actions === 1 && clickExpired.ok === false && clickExpired.errorCode === "INPUT_ASSIST_REQUIRES_GRANT",
+        JSON.stringify({ g3, beforeExpiry, clickExpired, afterExpiry }).slice(0, 1200),
+      );
+      ctx.record("A3", { g1, p2, afterPresenceGrant, clickCancel, g2, clickHuman, g3, beforeExpiry, clickExpired, afterExpiry });
+    },
   },
   {
     id: "A4",
@@ -577,6 +720,9 @@ const CASES = [
     feature: "on",
     async run(ctx) {
       await ctx.resetMain();
+      // 扩展会自动把 kernel 同步成 ai；这里显式切到 ASSIST（心跳 10s 内会修正，短窗口内验证）
+      const assist = await ctx.bumpMode("main", "assist");
+      check("S6 前置：内核切到 ASSIST（短窗口）", assist.accepted === true, JSON.stringify(assist));
       const before = await ctx.probe("main");
       const typeR = await ctx.ai("main", "type", { text: "dropped", typingDelayMs: 10, cursor: false });
       const fillR = await ctx.ai("main", "fill", { selector: "#input", value: "dropped" });
@@ -609,7 +755,8 @@ const CASES = [
           after.scrollTop === before.scrollTop,
         JSON.stringify({ keyR, dragR, wheelR, before: { v: before.inputValue, keys: before.keys.length, drag: before.drag, wheelEvents: before.wheelEvents }, after: { v: after.inputValue, keys: after.keys.length, drag: after.drag, wheelEvents: after.wheelEvents } }),
       );
-      ctx.record("S6", { typeR, fillR, keyR, dragR, wheelR, before, after });
+      ctx.record("S6", { assist, typeR, fillR, keyR, dragR, wheelR, before, after });
+      await ctx.bumpMode("main", "ai").catch(() => undefined);
     },
   },
 
@@ -673,6 +820,8 @@ const CASES = [
     feature: "on",
     async run(ctx) {
       await ctx.resetOopif();
+      const assist = await ctx.bumpMode("oopif", "assist");
+      check("O4 前置：内核切到 ASSIST（短窗口）", assist.accepted === true, JSON.stringify(assist));
       const before = await ctx.probe("oopif");
       const point = ctx.pointInFrame(before);
       const r = await ctx.ai("oopif", "click", { x: point.x, y: point.y, cursor: false });
@@ -693,11 +842,10 @@ const CASES = [
       } else {
         check("O4 Feature on：人类子帧点击仍落地（人类永不锁死，OOPIF 同样生效）", false, JSON.stringify({ before: before.childClicks, after: afterHuman.childClicks, human }));
       }
-      ctx.record("O4", { point, r, before, afterAi, afterHuman });
+      ctx.record("O4", { assist, point, r, before, afterAi, afterHuman });
+      await ctx.bumpMode("oopif", "ai").catch(() => undefined);
     },
   },
-
-  // ------------------------------------------------------------ 多窗口
   {
     id: "M1",
     title: "多窗口：一个 HUMAN 一个 AI，输入仲裁互不干扰",
@@ -758,6 +906,9 @@ const CASES = [
     async run(ctx) {
       await ctx.resetMain();
       await ctx.resetMulti();
+      const assistA = await ctx.bumpMode("main", "assist");
+      const assistB = await ctx.bumpMode("multi", "assist");
+      check("M3 前置：内核 A/B 切到 ASSIST（短窗口）", assistA.accepted === true && assistB.accepted === true, JSON.stringify({ assistA, assistB }));
       const beforeA = await ctx.probe("main");
       const beforeB = await ctx.probe("multi");
       const aiA = await ctx.ai("main", "click", { selector: "#btn", cursor: false });
@@ -784,11 +935,11 @@ const CASES = [
       } else {
         check("M3 Feature on：两个窗口的人类点击都落地", false, JSON.stringify({ A: afterHumanA.clicks, B: afterHumanB.clicks, humanA, humanB }));
       }
-      ctx.record("M3", { aiA, aiB, beforeA, afterA, beforeB, afterB, afterHumanA, afterHumanB });
+      ctx.record("M3", { assistA, assistB, aiA, aiB, beforeA, afterA, beforeB, afterB, afterHumanA, afterHumanB });
+      await ctx.bumpMode("main", "ai").catch(() => undefined);
+      await ctx.bumpMode("multi", "ai").catch(() => undefined);
     },
   },
-
-  // ------------------------------------------------------------ Feature 基线
   {
     id: "F1",
     title: "Feature off 基线：完整 AI 输入序列（鼠标/滚轮/键盘/insertText/JS）全部落地",
@@ -836,76 +987,69 @@ const CASES = [
   },
   {
     id: "F2",
-    title: "Feature on：默认 ASSIST 无 grant -> 所有 CDP Input 被内核丢弃；Runtime.evaluate 仍可改 DOM（边界）",
+    title: "Feature on：扩展自动同步 kernel mode=ai，agent 输入落地；内核短窗口切 HUMAN 后 Input.* 被拒（边界）",
     stage: "baseline",
     feature: "on",
     async run(ctx) {
       await ctx.resetMain();
+      const snap = await ctx.kernelSnapshot("main");
+      check("F2 扩展自动同步：内核 mode=ai", snap.snapshot?.mode === "ai", JSON.stringify(snap));
+      const status = await ctx.inputStatus("main");
+      check(
+        "F2 扩展 input_status 的 kernel 视图 ready 且 mode=ai",
+        status.kernel?.state === "ready" && status.kernel?.kernelMode === "ai",
+        JSON.stringify(status).slice(0, 900),
+      );
+
       const before = await ctx.probe("main");
-      // 1) 鼠标：命令层成功，但内核丢弃 -> 命令返回 clicked:true，DOM 不变。
-      const click = await ctx.ai("main", "click", { selector: "#btn", cursor: false });
-      const dbl = await ctx.ai("main", "dblclick", { selector: "#btn", cursor: false });
-      const hover = await ctx.ai("main", "hover", { selector: "#btn", cursor: false });
-      const wheel = await ctx.ai("main", "wheel", { selector: "#scroll", deltaY: -500, cursor: false });
-      const key = await ctx.ai("main", "tab_cdp_call", { method: "Input.dispatchKeyEvent", params: { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65 } });
-      const keyUp = await ctx.ai("main", "tab_cdp_call", { method: "Input.dispatchKeyEvent", params: { type: "keyUp", key: "a", code: "KeyA", windowsVirtualKeyCode: 65 } });
-      // 2) insertText：内核显式拒绝（可诊断）。
-      const insert = await ctx.ai("main", "tab_cdp_call", { method: "Input.insertText", params: { text: "blocked" } });
-      // 3) Runtime.evaluate：不属于输入事件，内核不仲裁 -> DOM 仍可被修改。
-      const js = await ctx.ai("main", "js", { expression: "window.__jsRuns = (window.__jsRuns||0)+1; document.getElementById('count').textContent='js-touched'; 'ok'" });
-      await sleep(300);
+      const results = {
+        click: await ctx.ai("main", "click", { selector: "#btn", cursor: false }),
+        wheel: await ctx.ai("main", "wheel", { selector: "#scroll", deltaY: -400, cursor: false }),
+        insert: await ctx.ai("main", "tab_cdp_call", { method: "Input.insertText", params: { text: "x" } }),
+        key: await ctx.ai("main", "tab_cdp_call", { method: "Input.dispatchKeyEvent", params: { type: "keyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65 } }),
+      };
+      await sleep(500);
       const after = await ctx.probe("main");
-      const kernelMsg = /InputOwnership: debugger input rejected/i;
       check(
-        "F2 Feature on：所有 CDP Input.* 被内核显式拒绝（-32000, no valid grant）",
-        [click, dbl, hover, wheel, key, keyUp, insert].every((r) => r.ok === false && kernelMsg.test(String(r.error))),
-        JSON.stringify({ click, dbl, hover, wheel, key, keyUp, insert }),
+        "F2 内核 mode=ai 时 agent 输入全部落地",
+        Object.values(results).every((r) => r.ok === true) && after.clicks === before.clicks + 1 && after.wheelEvents === before.wheelEvents + 1,
+        JSON.stringify({ results, clicks: [before.clicks, after.clicks], wheel: [before.wheelEvents, after.wheelEvents] }),
       );
+
+      // 内核短窗口切 HUMAN：扩展下一次 10s 心跳会修正回 ai，因此这里只做短窗口断言。
+      const human = await ctx.bumpMode("main", "human");
+      const blocked = await ctx.ai("main", "click", { selector: "#btn", cursor: false });
+      await sleep(200);
+      const afterHuman = await ctx.probe("main");
       check(
-        "F2 Feature on：被拒后 DOM 完全不变（clicks/wheel/keys）",
-        after.clicks === before.clicks && after.wheelEvents === before.wheelEvents && after.keys.length === before.keys.length,
-        JSON.stringify({ before: { clicks: before.clicks, wheelEvents: before.wheelEvents, keys: before.keys.length }, after: { clicks: after.clicks, wheelEvents: after.wheelEvents, keys: after.keys.length } }),
+        "F2 内核 HUMAN（短窗口）：agent click 被 -32000 拒绝且 DOM 不变",
+        human.accepted === true && blocked.ok === false && /InputOwnership: debugger input rejected/i.test(String(blocked.error)) && afterHuman.clicks === after.clicks,
+        JSON.stringify({ human, blocked, clicks: [after.clicks, afterHuman.clicks] }),
       );
-      check("F2 Feature on：Runtime.evaluate 仍可改 DOM（输入仲裁边界，不是页面修改隔离）", js.ok === true && after.jsRuns === before.jsRuns + 1 && after.countText === "js-touched", JSON.stringify({ js, jsRuns: [before.jsRuns, after.jsRuns], countText: after.countText }));
-      ctx.record("F2", { click, dbl, hover, wheel, key, keyUp, insert, js, before, after });
+      const js = await ctx.ai("main", "js", { expression: "window.__jsRuns=(window.__jsRuns||0)+1; document.getElementById('count').textContent='js-touched'; 'ok'" });
+      // beacon 200ms 周期：等状态真正反映 js 执行结果，避免读到动作前的快照。
+      const afterJs = await ctx.waitState("main", (st) => st.countText === "js-touched", 3000);
+      check(
+        "F2 内核 HUMAN：Runtime.evaluate 仍可改 DOM（输入事件仲裁边界）",
+        js.ok === true && afterJs.countText === "js-touched",
+        JSON.stringify({ js, countText: afterJs.countText }),
+      );
+      ctx.record("F2", { snap, status, before, after, results, human, blocked, afterHuman, js, afterJs });
+      await ctx.bumpMode("main", "ai").catch(() => undefined);
     },
   },
   {
     id: "F3",
-    title: "Feature on（API 已编译但扩展 JS 不可见）：产品输入面全部 fail-fast，非输入命令仍可用 —— 可诊断性与风险",
+    title: "Feature on：非输入命令可用 + managed hidden 产品截图 P0 单列",
     stage: "baseline",
     feature: "on",
     async run(ctx) {
       await ctx.resetMain();
-      const before = await ctx.probe("main");
-      const commands = [
-        ["click", { selector: "#btn", cursor: false }],
-        ["dblclick", { selector: "#btn", cursor: false }],
-        ["hover", { selector: "#btn", cursor: false }],
-        ["drag", { from: { x: 100, y: 220 }, to: { x: 250, y: 220 }, cursor: false }],
-        ["wheel", { selector: "#scroll", deltaY: -300, cursor: false }],
-        ["down", { selector: "#btn", cursor: false }],
-        ["up", { selector: "#btn", cursor: false }],
-        ["press", { key: "Enter" }],
-        ["type", { text: "x", cursor: false }],
-        ["fill", { selector: "#input", value: "x" }],
-        ["tab_cdp_call", { method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 500, y: 100, button: "left", buttons: 1, clickCount: 1 } }],
-      ];
-      const results = [];
-      for (const [name, args] of commands) results.push({ name, ...(await ctx.ai("main", name, args)) });
-      const after = await ctx.probe("main");
-      const kernelMsg = /InputOwnership: debugger input rejected/i;
-      check(
-        "F3 Feature on：11 个输入命令全部显式失败且错误可识别",
-        results.every((r) => r.ok === false && kernelMsg.test(String(r.error))),
-        JSON.stringify(results.map((r) => ({ name: r.name, ok: r.ok, error: String(r.error || "").slice(0, 120) }))),
-      );
-      check("F3 Feature on：全部输入失败后 DOM 不变", after.clicks === before.clicks && after.inputValue === before.inputValue && after.wheelEvents === before.wheelEvents, JSON.stringify({ clicks: [before.clicks, after.clicks], value: [before.inputValue, after.inputValue], wheelEvents: [before.wheelEvents, after.wheelEvents] }));
-      // 非输入命令仍可用：list_tabs / input_status 不属于输入仲裁。
       const tabs = await ctx.ai("main", "list_tabs", {});
       const status = await ctx.inputStatus("main");
-      check("F3 Feature on：非输入命令（list_tabs/input_status）仍可用", tabs.ok === true && Array.isArray(tabs.data?.tabs) && status.mode === "ai", JSON.stringify({ tabsOk: tabs.ok, mode: status.mode }));
-      // 截图：managed hidden 窗口的 P0 回归单独记录，不作为输入仲裁用例的通过条件。
+      check("F3 非输入命令（list_tabs/input_status）仍可用", tabs.ok === true && Array.isArray(tabs.data?.tabs) && status.mode === "ai", JSON.stringify({ tabsOk: tabs.ok, mode: status.mode }));
+
+      // 截图：managed hidden 窗口的产品截图失败单列为 P0，不作为输入仲裁用例的通过条件。
       const shotProduct = await ctx.ai("main", "screenshot", { format: "png", tabId: ctx.spaces.main.tabId });
       const shotSurface = await ctx.ai("main", "tab_cdp_call", {
         method: "Page.captureScreenshot",
@@ -924,11 +1068,8 @@ const CASES = [
         fromSurfaceFalse: { ok: shotNoSurface.ok, error: String(shotNoSurface.error || "").slice(0, 400), bytes: String(shotNoSurface.data?.result?.data || "").length },
         window: winState.window,
       };
-      // 产品 screenshot 命令失败 = P0；同时记录原始 CDP 的三方对照（fromSurface=true 直连可出图，
-      // fromSurface=false 被 -32000 拒绝），便于 P0 owner 区分“产品策略/超时”与“内核能力”。
       const productShotBroken = shotProduct.ok !== true;
-      const rawCdPSurfaceOk = shotSurface.ok === true && String(shotSurface.data?.result?.data || "").length > 1000;
-      ctx.record("F3", { shotEvidence, productShotBroken, rawCdPSurfaceOk });
+      ctx.record("F3", { shotEvidence, productShotBroken });
       if (productShotBroken) {
         report.p0Regressions.push({
           id: "P0-managed-hidden-product-screenshot",
@@ -936,174 +1077,205 @@ const CASES = [
           detail: shotEvidence,
           note:
             "managed hidden 窗口：产品 screenshot 命令失败（合成器帧 8000ms 超时 + fromSurface=false 返回 -32000 " +
-            "Only screenshots from surface are allowed）。原始 CDP 直连 Page.captureScreenshot(fromSurface=true) " +
-            "在本轮是成功的（bytes=" + String(shotSurface.data?.result?.data || "").length + "），说明内核能出帧，" +
-            "问题在产品截图路径/策略或超时。与输入仲裁无关，单列；不因此把 K/A 用例算失败，也不伪造截图 PASS。",
+            "Only screenshots from surface are allowed）。原始 CDP 直连 fromSurface=true 在本轮 bytes=" +
+            String(shotSurface.data?.result?.data || "").length + "。与输入仲裁无关，单列。",
         });
         report.notes.push("F3：managed hidden 窗口的产品截图失败已单列为 P0 回归（见 report.p0Regressions）；不作为输入仲裁用例的失败。");
       } else {
         report.notes.push("F3：managed hidden 窗口的产品截图成功（bytes=" + String(shotProduct.data?.base64 || "").length + "）。");
       }
-      report.notes.push(
-        "风险（Feature on + kernel API 未由扩展推送）：扩展侧 mode=ai，但内核快照默认 ASSIST 且没有 grant，" +
-          "产品输入面 100% fail-fast。patch 029 已提供 production API，但本构建里 chrome.browserCli.inputOwnership " +
-          "在扩展 JS 中不可见（见 K0 / P0），因此没有调用方能推送 mode；打开 Feature 仍然等于禁用 AI 输入。" +
-          "所有 Input.* 的拒绝是可诊断的 ServerError（-32000），不是静默成功。",
-      );
-      ctx.record("F3", { results, before, after, tabs, status });
     },
   },
-
-  // ------------------------------------------------------------ 内核生产 API（patch 029）
+  // ------------------------------------------------------------ 韧性（SW 重启 / 30s 心跳失联）
   {
-    id: "K0",
-    title: "内核 API 可用性 + managed 窗口是否可投递（环境检查，K1-K4 的前置）",
-    stage: "kernel",
+    id: "R1",
+    title: "SW 重启恢复：新 SW 重新探测 API、版本不回退、heartbeat/setOwnership 重放、输入恢复",
+    stage: "resilience",
     feature: "on",
     async run(ctx) {
-      const popup = await ctx.ensurePopup();
-      // 诊断：命名空间到底暴露了哪些成员；并检查 service worker 上下文（同一 renderer 侧
-      // feature 可用性计算，但可排除“页面被当成非 privileged 上下文”的假设）。
-      const cdp0 = await ctx.cdp();
-      const nsKeys = await cdp0.evaluate(
-        popup.sessionId,
-        "({top: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : null, " +
-          "capsKeys: (typeof chrome !== 'undefined' && chrome.browserCli) ? Object.keys(chrome.browserCli) : null, " +
-          "caps: (typeof chrome !== 'undefined' && chrome.browserCli && chrome.browserCli.getCapabilities) ? 'fn' : 'missing', " +
-          "chromeKeys: Object.keys(chrome).filter((k) => /browser|input|owner/i.test(k)), " +
-          "nested: (typeof chrome !== 'undefined' && chrome.browserCli) ? typeof chrome.browserCli.inputOwnership : 'no-browserCli'})",
-      ).catch((error) => ({ error: String(error) }));
-      let swProbe = null;
-      try {
-        const targets0 = await cdp0.targets();
-        const swTarget = targets0.find((t) => t.type === "service_worker" && String(t.url).includes(report.env.extensionId));
-        if (swTarget) {
-          const swSession = await cdp0.attach(swTarget.targetId);
-          swProbe = await cdp0.evaluate(
-            swSession,
-            "({keys: chrome.browserCli ? Object.keys(chrome.browserCli) : null, io: !!(chrome.browserCli && chrome.browserCli.inputOwnership)})",
-          );
-        } else {
-          swProbe = { missing: true, types: targets0.map((t) => t.type + ":" + String(t.url).slice(0, 60)) };
-        }
-      } catch (error) {
-        swProbe = { error: String(error?.message || error) };
-      }
-      const renderer = await ctx.rendererEvidence();
-      const winState0 = await win32.call("state", { hwnd: ctx.windows.main.hwnd });
-      ctx.record("K0", { popup: popup.probe, nsKeys, swProbe, renderer, window: winState0.window });
+      const key = "r1";
+      await ctx.openFresh(key);
+      const spaceId = ctx.spaces[key].spaceId;
+      const tabId = ctx.spaces[key].tabId;
+      await ctx.attachOn(key);
+      const setAi = await ctx.bumpMode(key, "ai");
+      const snapBefore = await ctx.kernelSnapshot(key);
+      const before = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(450);
+      const s0 = await ctx.probe(key);
+      check("R1 重启前 mode=ai 且 click 落地", setAi.accepted === true && before.ok === true && s0.clicks === 1, JSON.stringify({ setAi, before, clicks: s0.clicks }));
 
-      check(
-        "K0 受信扩展页面里 chrome.browserCliInputOwnership 命名空间存在（getCapabilities 也在）",
-        popup.probe?.api === true && nsKeys?.caps === "fn" && Array.isArray(nsKeys?.top) && nsKeys.top.length > 0,
-        JSON.stringify({ probe: popup.probe, nsKeys }),
-      );
-      check(
-        "K0 managed 模式生效：窗口以 hidden 创建（visible=false）",
-        winState0.window?.visible === false,
-        JSON.stringify(winState0.window),
-      );
-      check(
-        "K0 renderer 进程收到 --enable-features=InputOwnershipEnforcement",
-        renderer.rendererCount > 0 && renderer.anyRendererHasFeature === true,
-        JSON.stringify({ rendererCount: renderer.rendererCount, anyRendererHasFeature: renderer.anyRendererHasFeature }),
-      );
-      check(
-        "K0 对照证据：renderer 进程确实收到了 --browser-cli-background-presentation（排除 switch 未转发假设）",
-        renderer.rendererCount > 0 && renderer.anyRendererHasManagedSwitch === true,
-        JSON.stringify(renderer.children),
-      );
-      check(
-        "K0 对照证据：--enable-features=InputOwnershipEnforcement 也到达 renderer",
-        renderer.anyRendererHasFeature === true,
-        JSON.stringify({ anyRendererHasFeature: renderer.anyRendererHasFeature }),
-      );
+      const swBefore = await ctx.swEval("({href: String(self.location.href), api: !!(typeof chrome !== 'undefined' && chrome.browserCliInputOwnership)})");
+      check("R1 重启前 SW 上下文可见 API", swBefore?.api === true, JSON.stringify(swBefore));
+      const oldSwTarget = ctx.swTargetId;
 
-      const apiExposed =
-        popup.probe?.api === true &&
-        Array.isArray(popup.probe?.io) &&
-        popup.probe.io.includes("setOwnership") &&
-        popup.probe.io.includes("grantInput");
-      if (!apiExposed) {
-        const detail = { popup: popup.probe, nsKeys, swProbe, renderer, window: winState0.window };
-        report.p0Regressions.push({
-          id: "P0-input-ownership-api-not-exposed-to-extension-js",
-          at: nowIso(),
-          detail,
-          note:
-            "patch 029 的 chrome.browserCli.inputOwnership 已编译进 chrome.dll（schema/feature/函数注册都在），" +
-            "但扩展 JS（popup 页面与 service worker）只能看到 getCapabilities，chrome 上也没有其它 inputOwnership 路径。" +
-            "根因（源码级）：extensions/renderer/feature_cache.cc 在枚举 namespace 时跳过所有“父 feature 存在”的条目" +
-            "（api_feature_provider->GetParent(*feature) != nullptr），而 _api_features.json 里同时存在父 feature " +
-            "\"browserCli\"（getCapabilities）与子命名空间 feature \"browserCli.inputOwnership\"；后者因此不会被当成" +
-            "顶层 namespace 安装 BindingAccessor（对比 enterprise.platformKeys 这类能工作的点号 namespace：它们没有同名的父 feature）。" +
-            "已排除的两个假设：renderer 确实收到了 --browser-cli-background-presentation 与 --enable-features。K1-K4 因此无法通过生产 API 执行。",
-        });
+      const stop = await ctx.stopExtensionWorkers();
+      check("R1 ServiceWorker.stopAllWorkers 调用成功", stop.ok === true, JSON.stringify(stop));
+      await sleep(1000);
+      const wake = await ctx.popupSend("input_status", spaceId);
+      const swTarget = await ctx.waitForServiceWorker(25000);
+      check(
+        "R1 SW 在停止后重新出现（target 存在；Chrome 可能复用同一 target id）",
+        !!swTarget,
+        JSON.stringify({ oldSwTarget, swTarget, sameTargetId: swTarget?.targetId === oldSwTarget, wakeOk: wake?.ok }),
+      );
+      const channel = await ctx.ensureAgentChannel(spaceId);
+      check("R1 native host 以新 session 重连", channel.ok === true, JSON.stringify(channel));
+
+      ctx.swSessionId = null;
+      const swAfter = await ctx.swEval("({api: !!(typeof chrome !== 'undefined' && chrome.browserCliInputOwnership), keys: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : null})");
+      check("R1 新 SW 重新探测到 inputOwnership API", swAfter?.api === true && Array.isArray(swAfter.keys) && swAfter.keys.includes("setOwnership"), JSON.stringify(swAfter));
+
+      const snapAfter = await ctx.kernelSnapshot(key);
+      check(
+        "R1 重启后内核 version 不回退",
+        snapAfter.snapshot && Number(snapAfter.snapshot.version) >= Number(snapBefore.snapshot?.version ?? 0),
+        JSON.stringify({ before: snapBefore, after: snapAfter }),
+      );
+      const hb = await ctx.apiCall("heartbeat", { target: { tabId }, version: snapAfter.snapshot.version });
+      check("R1 重启后 heartbeat(当前 version) 被接受且 stale=false", hb?.result?.ok === true && hb.result.stale === false, JSON.stringify(hb));
+      const setAi2 = await ctx.bumpMode(key, "ai");
+      check("R1 重启后 setOwnership(version+1) 被接受", setAi2.accepted === true, JSON.stringify(setAi2));
+
+      const after = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      await sleep(450);
+      const s1 = await ctx.probe(key);
+      check("R1 重启后 AI 输入恢复", after.ok === true && s1.clicks === s0.clicks + 1, JSON.stringify({ after, clicks: s1.clicks }));
+      ctx.record("R1", { setAi, snapBefore, before, swBefore, stop, swTarget, channel, swAfter, snapAfter, hb, setAi2, after, clicks: [s0.clicks, s1.clicks] });
+    },
+  },
+  {
+    id: "R2",
+    title: "30s 心跳失联：目标窗口无心跳 → 内核 stale/effective ASSIST，AI 输入被拒；heartbeat 恢复",
+    stage: "resilience",
+    feature: "on",
+    async run(ctx) {
+      // 不属于任何 Task Space 的独立窗口：扩展的周期同步不会覆盖它 → 没有心跳。
+      const created = await ctx.createUntrackedWindow("r2");
+      check("R2 创建未跟踪窗口且 beacon 就绪", created.ok === true && Number.isInteger(created.tabId), JSON.stringify(created).slice(0, 700));
+      if (!created.ok) {
         ctx.markBlocked({
-          code: "api-not-exposed-to-extension-js",
-          deps: [
-            "patch 029 修订：让 chrome.browserCli.inputOwnership 作为可安装的 namespace 暴露给扩展 JS",
-            "（方案：把命名空间改成无父 feature 的名字，如 browserCliInputOwnership/inputOwnership；或把函数并入 browserCli namespace；",
-            "或在 extensions/renderer/feature_cache.cc 里把点号 namespace 与其父 feature 区分开）",
-          ],
-          reason:
-            "chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不可见（popup keys=" +
-            JSON.stringify(popup.probe?.io) + "，service worker io=" + String(swProbe?.io) +
-            "）。根因：命名空间 feature \"browserCli.inputOwnership\" 与父 feature \"browserCli\" 同名前缀，" +
-            "extensions/renderer/feature_cache.cc 把有父 feature 的条目当作子 feature 跳过，namespace 的 BindingAccessor 从未安装。" +
-            "（已排除 switch 未转发与 feature 未启用的假设。）",
+          code: "untracked-window-failed",
+          deps: ["popup 可在 Task Space 之外创建窗口"],
+          reason: "无法创建未跟踪窗口：" + JSON.stringify(created),
+        });
+        return;
+      }
+      const tabId = created.tabId;
+      const state0 = created.state;
+      const attach = await ctx.popupDebuggerAttach(tabId);
+      check("R2 popup attach chrome.debugger（未跟踪窗口）", attach?.attached === true, JSON.stringify(attach));
+      if (attach?.attached !== true) {
+        await ctx.closeWindow(created.windowId);
+        ctx.record("R2", { created, attach });
+        ctx.markBlocked({
+          code: "debugger-attach-unavailable",
+          deps: ["popup 页面可对未跟踪窗口 attach chrome.debugger"],
+          reason: "popup attach 失败：" + JSON.stringify(attach),
         });
         return;
       }
 
-      const apiProbe = await ctx.apiCall("getOwnership", { target: { tabId: ctx.spaces.main.tabId } });
+      const setAi = await ctx.bumpModeOnTab(tabId, "ai");
+      const snap0 = await ctx.kernelSnapshotOnTab(tabId);
+      check("R2 初始 mode=ai / stale=false", setAi.accepted === true && snap0.snapshot?.mode === "ai" && snap0.snapshot?.stale === false, JSON.stringify({ setAi, snap0 }));
+
+      const x = Math.round((state0.rects.btn.x + state0.rects.btn.w / 2) * (Number(state0.viewport.dpr) || 1));
+      const y = Math.round((state0.rects.btn.y + state0.rects.btn.h / 2) * (Number(state0.viewport.dpr) || 1));
+      const press = () => ctx.popupDebuggerSend(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+      const release = () => ctx.popupDebuggerSend(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+      const readState = async () => (servers.stateFor(created.token) || {}).state || null;
+
+      const controlPress = await press();
+      const controlRelease = await release();
+      await sleep(400);
+      const sControl = await readState();
       check(
-        "K0 getOwnership 可调用（无 lastError）",
-        apiProbe && !apiProbe.lastError && !apiProbe.__bpMissing && apiProbe.result && typeof apiProbe.result.mode === "string",
-        JSON.stringify(apiProbe),
+        "R2 对照：mode=ai 时 CDP 输入未被内核拒绝",
+        controlPress.ok === true && controlRelease.ok === true,
+        JSON.stringify({ controlPress, controlRelease, clicks: sControl?.clicks }),
       );
 
-      await ctx.attachOn("main");
-      const snapBefore = await ctx.kernelSnapshot("main");
-      // 扩展客户端可能已经自动同步过 setOwnership(ai)，初始态不保证 assist/0；
-      // 只要求快照可读、mode 合法，然后用 version+1 推进来验证版本语义。
+      await sleep(31500);
+      const snapStale = await ctx.kernelSnapshotOnTab(tabId);
+      check("R2 >30s 无心跳：配置 mode 仍 ai、stale=true", snapStale.snapshot?.mode === "ai" && snapStale.snapshot?.stale === true, JSON.stringify(snapStale));
+      const stalePress = await press();
+      const staleRelease = await release();
+      await sleep(400);
+      const sStale = await readState();
       check(
-        "K0 内核快照可读且 mode 合法（不硬断言 assist/0）",
-        snapBefore.snapshot &&
-          ["ai", "assist", "human"].includes(snapBefore.snapshot.mode) &&
-          Number.isInteger(snapBefore.snapshot.version) &&
-          snapBefore.snapshot.version >= 0 &&
-          typeof snapBefore.snapshot.stale === "boolean",
+        "R2 stale 下 AI 输入被内核拒绝（-32000，debugger input rejected）",
+        stalePress.ok === false && /InputOwnership: debugger input rejected/i.test(String(stalePress.lastError || stalePress.error)),
+        JSON.stringify({ stalePress, staleRelease, clicks: sStale?.clicks }),
+      );
+
+      const hb = await ctx.apiCall("heartbeat", { target: { tabId }, version: snapStale.snapshot.version });
+      const snapRecovered = await ctx.kernelSnapshotOnTab(tabId);
+      check("R2 heartbeat 恢复：ok 且 stale=false", hb?.result?.ok === true && hb.result.stale === false && snapRecovered.snapshot?.stale === false, JSON.stringify({ hb, snapRecovered }));
+      const okPress = await press();
+      const okRelease = await release();
+      await sleep(400);
+      const sRecovered = await readState();
+      check(
+        "R2 恢复后（mode=ai）CDP 输入重新被投递（不再被内核拒绝）",
+        okPress.ok === true && okRelease.ok === true,
+        JSON.stringify({ okPress, okRelease, clicks: sRecovered?.clicks }),
+      );
+
+      const detach = await ctx.popupDebuggerDetach(tabId);
+      const closed = await ctx.closeWindow(created.windowId);
+      ctx.record("R2", { created: { windowId: created.windowId, tabId, token: created.token }, attach, setAi, snap0, controlPress, controlRelease, snapStale, stalePress, staleRelease, hb, snapRecovered, okPress, okRelease, clicks: [sControl?.clicks, sStale?.clicks, sRecovered?.clicks], detach, closed });
+    },
+  },
+  // ------------------------------------------------------------ 内核生产 API（patch 029）  // ------------------------------------------------------------ 内核生产 API（patch 029）  // ------------------------------------------------------------ 内核生产 API（patch 029）
+  {
+    id: "K0",
+    title: "内核 API 可用性 + 未跟踪窗口的 AI 输入投递（环境检查，K1-K4 的前置）",
+    stage: "kernel",
+    feature: "on",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const created = await ctx.createUntrackedWindow("k0");
+      check("K0 创建未跟踪窗口（无扩展心跳）且 beacon 就绪", created.ok === true && Number.isInteger(created.tabId), JSON.stringify(created).slice(0, 700));
+      if (!created.ok) {
+        ctx.markBlocked({ code: "untracked-window-failed", deps: ["popup 可创建未跟踪窗口"], reason: JSON.stringify(created) });
+        return;
+      }
+      const attach = await ctx.popupDebuggerAttach(created.tabId);
+      check("K0 popup attach chrome.debugger", attach?.attached === true, JSON.stringify(attach));
+      if (attach?.attached !== true) {
+        await ctx.closeWindow(created.windowId);
+        ctx.markBlocked({ code: "debugger-attach-unavailable", deps: ["popup 可 attach 未跟踪窗口"], reason: JSON.stringify(attach) });
+        return;
+      }
+      const createdState = { ...created.state, tabId: created.tabId };
+      const snapBefore = await ctx.kernelSnapshotOnTab(created.tabId);
+      check(
+        "K0 内核快照可读且 mode 合法（未跟踪目标初始为 assist/0）",
+        snapBefore.snapshot && ["ai", "assist", "human"].includes(snapBefore.snapshot.mode) && Number.isInteger(snapBefore.snapshot.version),
         JSON.stringify(snapBefore),
       );
-
-      const setAi = await ctx.bumpMode("main", "ai");
+      const setAi = await ctx.bumpModeOnTab(created.tabId, "ai");
       check(
         "K0 setOwnership(ai, version+1) 被接受且 version 递增",
-        setAi.bumped?.result?.accepted === true &&
-          setAi.bumped.result.mode === "ai" &&
-          setAi.bumped.result.version === snapBefore.snapshot.version + 1,
+        setAi.accepted === true && setAi.bumped?.result?.version === snapBefore.snapshot.version + 1,
         JSON.stringify({ snapBefore, setAi }),
       );
-
-      await ctx.resetMain();
-      const before = await ctx.probe("main");
-      const click = await ctx.ai("main", "click", { selector: "#btn", cursor: false });
-      await sleep(450);
-      const after = await ctx.probe("main");
-      const delivered = click.ok === true && after.clicks === before.clicks + 1;
-      check("K0 mode=ai 时 AI click 真实落地（managed 窗口可输入）", delivered, JSON.stringify({ click, before: before.clicks, after: after.clicks }));
-
-      const winState = await win32.call("state", { hwnd: ctx.windows.main.hwnd });
-      ctx.record("K0", { popup: popup.probe, apiProbe, snapBefore, setAi, click, before, after, window: winState.window });
-      if (!delivered) {
-        report.p0Regressions.push({
-          id: "P0-managed-mode-input-not-delivered",
-          at: nowIso(),
-          detail: { click, beforeClicks: before.clicks, afterClicks: after.clicks, window: winState.window },
-          note: "managed 模式下即使内核 mode=ai，AI 输入也没有落地；K2/K3 的“grant 后成功”子项无法验证。",
-        });
-      }
+      const control = await ctx.kernelMouseClick(createdState);
+      await sleep(500);
+      const after = (servers.stateFor(created.token) || {}).state || {};
+      check(
+        "K0 mode=ai 时 popup/debugger 的 AI click 真实落地",
+        control.press.ok === true && control.release.ok === true && after.clicks === 1,
+        JSON.stringify({ control, clicks: after.clicks }),
+      );
+      const detach = await ctx.popupDebuggerDetach(created.tabId);
+      const closed = await ctx.closeWindow(created.windowId);
+      ctx.record("K0", { created: { tabId: created.tabId, token: created.token }, attach, snapBefore, setAi, control, clicks: after.clicks, detach, closed });
     },
   },
   {
@@ -1117,98 +1289,83 @@ const CASES = [
         ctx.markBlocked(ready.blocked);
         return;
       }
-      const key = "main";
-      const tabId = ctx.spaces[key].tabId;
-      await ctx.attachOn(key);
-      const human = await ctx.bumpMode(key, "human");
-      check(
-        "K1 setOwnership(human) accepted（mode=human）",
-        human.bumped?.result?.accepted === true && human.bumped.result.mode === "human" && human.bumped.result.version === human.version,
-        JSON.stringify(human),
-      );
-      const snap = await ctx.kernelSnapshot(key);
-      check("K1 getOwnership 配置态 mode=human", snap.snapshot?.mode === "human" && snap.snapshot?.stale === false, JSON.stringify(snap));
+      const created = await ctx.createUntrackedWindow("k1");
+      check("K1 创建未跟踪窗口且 beacon 就绪", created.ok === true, JSON.stringify(created).slice(0, 600));
+      if (!created.ok) {
+        ctx.markBlocked({ code: "untracked-window-failed", deps: ["popup 可创建未跟踪窗口"], reason: JSON.stringify(created) });
+        return;
+      }
+      const tabId = created.tabId;
+      const state = { ...created.state, tabId };
+      const attach = await ctx.popupDebuggerAttach(tabId);
+      check("K1 popup attach chrome.debugger", attach?.attached === true, JSON.stringify(attach));
+      if (attach?.attached !== true) {
+        await ctx.closeWindow(created.windowId);
+        ctx.markBlocked({ code: "debugger-attach-unavailable", deps: ["popup 可 attach 未跟踪窗口"], reason: JSON.stringify(attach) });
+        return;
+      }
+      // 先推进到 version 1，再切 human（version 2），这样 stale-version 测试用 v1 而不是 0
+      await ctx.bumpModeOnTab(tabId, "ai");
+      const human = await ctx.bumpModeOnTab(tabId, "human");
+      check("K1 setOwnership(human) accepted", human.accepted === true && human.bumped?.result?.mode === "human", JSON.stringify(human));
+      const snap = await ctx.kernelSnapshotOnTab(tabId);
+      check("K1 getOwnership 配置态 mode=human / stale=false", snap.snapshot?.mode === "human" && snap.snapshot?.stale === false, JSON.stringify(snap));
 
       const conflict = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "ai", version: human.version });
       check("K1 同版本改 mode → VERSION_CONFLICT", conflict?.result?.accepted === false && conflict.result.reason === "VERSION_CONFLICT", JSON.stringify(conflict));
       const staleVersion = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: human.version - 1 });
-      check("K1 旧版本 → STALE_VERSION（版本单调）", staleVersion?.result?.accepted === false && staleVersion.result.reason === "STALE_VERSION", JSON.stringify(staleVersion));
+      check("K1 旧版本 → STALE_VERSION", staleVersion?.result?.accepted === false && staleVersion.result.reason === "STALE_VERSION", JSON.stringify(staleVersion));
       const badVersion = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: 0 });
-      // version 的 schema minimum=1，绑定层会直接抛 TypeError（根本到不了内核）；
-      // 两种拒绝都算正确：绑定层 TypeError 或内核 INVALID_ARGUMENT。
-      check(
-        "K1 version=0 → 绑定层/内核拒绝（TypeError at least 1 或 INVALID_ARGUMENT）",
-        /INVALID_ARGUMENT/.test(String(badVersion?.lastError)) ||
-          /at least 1|must be greater than or equal/i.test(String(badVersion?.__bpThrown)),
-        JSON.stringify(badVersion),
-      );
+      check("K1 version=0 → 绑定层/内核拒绝", /INVALID_ARGUMENT/.test(String(badVersion?.lastError)) || /at least 1/i.test(String(badVersion?.__bpThrown)), JSON.stringify(badVersion));
 
-      await ctx.resetMain(); // Runtime.evaluate 不属于输入事件，HUMAN 下仍可用
-      const before = await ctx.probe(key);
-      const commands = [
-        ["click", { selector: "#btn", cursor: false }],
-        ["dblclick", { selector: "#btn", cursor: false }],
-        ["hover", { selector: "#btn", cursor: false }],
-        ["drag", { from: { x: 100, y: 220 }, to: { x: 250, y: 220 }, cursor: false }],
-        ["wheel", { selector: "#scroll", deltaY: -300, cursor: false }],
-        ["down", { selector: "#btn", cursor: false }],
-        ["up", { selector: "#btn", cursor: false }],
-        ["press", { key: "Enter" }],
-        ["type", { text: "should-not-appear", cursor: false }],
-        ["fill", { selector: "#input", value: "should-not-appear" }],
-        ["tab_cdp_call", { method: "Input.dispatchMouseEvent", params: { type: "mousePressed", x: 500, y: 100, button: "left", buttons: 1, clickCount: 1 } }],
-      ];
-      const results = [];
-      for (const [name, args] of commands) results.push({ name, ...(await ctx.ai(key, name, args)) });
+      const x = Math.round((state.rects.btn.x + state.rects.btn.w / 2) * (Number(state.viewport.dpr) || 1));
+      const y = Math.round((state.rects.btn.y + state.rects.btn.h / 2) * (Number(state.viewport.dpr) || 1));
+      const inputs = {
+        mousePressed: await ctx.popupDebuggerSend(tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }),
+        mouseReleased: await ctx.popupDebuggerSend(tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 }),
+        keyDown: await ctx.popupDebuggerSend(tabId, "Input.dispatchKeyEvent", { type: "rawKeyDown", key: "a", code: "KeyA", windowsVirtualKeyCode: 65 }),
+        insertText: await ctx.popupDebuggerSend(tabId, "Input.insertText", { text: "should-not-appear" }),
+      };
       await sleep(450);
-      const after = await ctx.probe(key);
+      const afterInputs = (servers.stateFor(created.token) || {}).state || {};
       const kernelMsg = /InputOwnership: debugger input rejected/i;
       check(
-        "K1 HUMAN：11 个输入命令全部被内核拒绝（-32000，可诊断）",
-        results.every((r) => r.ok === false && kernelMsg.test(String(r.error))),
-        JSON.stringify(results.map((r) => ({ name: r.name, ok: r.ok, error: String(r.error || "").slice(0, 120) }))),
+        "K1 HUMAN：mouse/key/insertText 全部被内核拒绝（-32000）",
+        Object.values(inputs).every((r) => r.ok === false && kernelMsg.test(String(r.lastError || r.error))),
+        JSON.stringify(inputs),
       );
       check(
-        "K1 HUMAN：DOM 完全不变（clicks/input/wheel/keys）",
-        after.clicks === before.clicks && after.inputValue === before.inputValue && after.wheelEvents === before.wheelEvents && after.keys.length === before.keys.length,
-        JSON.stringify({ clicks: [before.clicks, after.clicks], value: [before.inputValue, after.inputValue], wheel: [before.wheelEvents, after.wheelEvents], keys: [before.keys.length, after.keys.length] }),
+        "K1 HUMAN：DOM 不变（clicks/inputValue）",
+        afterInputs.clicks === 0 && afterInputs.inputValue === "",
+        JSON.stringify({ clicks: afterInputs.clicks, value: afterInputs.inputValue }),
       );
-      const js = await ctx.ai(key, "js", { expression: "window.__jsRuns=(window.__jsRuns||0)+1; document.getElementById('count').textContent='js-touched'; 'ok'" });
-      const afterJs = await ctx.probe(key);
+
+      const js = await ctx.popupDebuggerSend(tabId, "Runtime.evaluate", { expression: "window.__jsRuns=(window.__jsRuns||0)+1; document.getElementById('count').textContent='js-touched'; 'ok'", returnByValue: true });
+      await sleep(400);
+      const afterJs = (servers.stateFor(created.token) || {}).state || {};
       check(
-        "K1 HUMAN：Runtime.evaluate 仍可改 DOM（输入事件仲裁边界，不是页面修改隔离）",
-        js.ok === true && afterJs.jsRuns === before.jsRuns + 1 && afterJs.countText === "js-touched",
-        JSON.stringify({ js, jsRuns: [before.jsRuns, afterJs.jsRuns], countText: afterJs.countText }),
+        "K1 HUMAN：Runtime.evaluate 仍可改 DOM（输入事件仲裁边界）",
+        js.ok === true && afterJs.jsRuns === 1 && afterJs.countText === "js-touched",
+        JSON.stringify({ js, jsRuns: afterJs.jsRuns, countText: afterJs.countText }),
       );
 
-      const humanClick = await ctx.humanClick(key, afterJs.rects.btn);
-      const afterHuman = await ctx.probe(key);
-      const humanLanded = humanClick.landed === true && afterHuman.clicks === afterJs.clicks + 1;
-      const winState = await win32.call("state", { hwnd: ctx.windows[key].hwnd });
-      ctx.record("K1", { human, snap, conflict, staleVersion, badVersion, before, after, results, js, afterJs, humanClick, afterHuman, humanLanded, window: winState.window });
-      if (humanLanded) {
-        check("K1 HUMAN：人类点击仍落地（人类永不锁死）", true, JSON.stringify({ clicks: afterHuman.clicks, humanClick }));
-        await sleep(1200); // human pause
-      } else {
-        report.notes.push("K1：managed hidden 窗口无法通过 PostMessage 产生人类输入；人类输入不被锁由 feature-off 的 H2/H4/O3/M1 真实链路证明，此处不伪造。");
-      }
-
-      const restore = await ctx.bumpMode(key, "ai");
-      await ctx.resetMain();
-      const beforeRestoreClick = await ctx.probe(key);
-      const restoredClick = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(450);
-      const afterRestoreClick = await ctx.probe(key);
+      const restore = await ctx.bumpModeOnTab(tabId, "ai");
+      const restored = await ctx.kernelMouseClick(state);
+      await sleep(500);
+      const afterRestore = (servers.stateFor(created.token) || {}).state || {};
       check(
         "K1 恢复 mode=ai 后 AI click 重新落地",
-        restore.bumped?.result?.accepted === true && restoredClick.ok === true && afterRestoreClick.clicks === beforeRestoreClick.clicks + 1,
-        JSON.stringify({ restore, restoredClick, before: beforeRestoreClick.clicks, after: afterRestoreClick.clicks }),
+        restore.accepted === true && restored.press.ok === true && afterRestore.clicks === 1,
+        JSON.stringify({ restore, restored, clicks: afterRestore.clicks }),
       );
+      const detach = await ctx.popupDebuggerDetach(tabId);
+      const closed = await ctx.closeWindow(created.windowId);
+      ctx.record("K1", { created: { tabId, token: created.token }, attach, human, snap, conflict, staleVersion, badVersion, inputs, afterInputs, js, afterJs, restore, restored, clicks: afterRestore.clicks, detach, closed });
     },
   },
   {
     id: "K2",
-    title: "内核 ASSIST：无 grant 拒绝、grant 一次性消费、TTL、用尽、scope/取消、session detach",
+    title: "内核 ASSIST（未跟踪窗口）：grant 消费/TTL/用尽/scope/cancel/session detach",
     stage: "kernel",
     feature: "on",
     async run(ctx) {
@@ -1217,161 +1374,94 @@ const CASES = [
         ctx.markBlocked(ready.blocked);
         return;
       }
-      const key = "k2";
-      await ctx.openFresh(key);
-      const tabId = ctx.spaces[key].tabId;
-
-      const noSession = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 5000 });
-      check("K2 未 attach 的 tab → grantInput NO_DEBUGGER_SESSION", noSession?.result?.granted === false && noSession.result.reason === "NO_DEBUGGER_SESSION", JSON.stringify(noSession));
-
-      await ctx.attachOn(key);
-      const attachedTargets = await ctx.extensionDebuggerTargets();
-      const attachedEntry = (attachedTargets?.targets || []).find((t) => Number(t.tabId) === Number(tabId));
-      check(
-        "K2 attach 证据：chrome.debugger.getTargets 中该 tab attached=true",
-        attachedTargets?.ok === true && attachedEntry?.attached === true,
-        JSON.stringify({ tabId, attachedTargets }),
-      );
-      const browserTargetsForTab = await (await ctx.cdp()).targets().catch((error) => ({ error: String(error) }));
-      const tabLevelTargets = Array.isArray(browserTargetsForTab)
-        ? browserTargetsForTab.filter((t) => t.type === "tab" && String(t.url || "").includes("token="))
-        : [];
-      const pageTargetForTab = Array.isArray(browserTargetsForTab)
-        ? browserTargetsForTab.filter((t) => t.type === "page" && String(t.url || "").includes(ctx.spaces[key].token))
-        : [];
-      const assist = await ctx.bumpMode(key, "assist");
-      check("K2 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true && assist.bumped.result.mode === "assist", JSON.stringify(assist));
-
-      const before = await ctx.probe(key);
-      const noGrant = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const afterNoGrant = await ctx.probe(key);
-      const kernelMsg = /InputOwnership: debugger input rejected/i;
-      check(
-        "K2 ASSIST 无 grant：click 被拒绝且 DOM 不变",
-        noGrant.ok === false && kernelMsg.test(String(noGrant.error)) && afterNoGrant.clicks === before.clicks,
-        JSON.stringify({ noGrant, before: before.clicks, after: afterNoGrant.clicks }),
-      );
-
-      const grant1 = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
-      if (grant1?.result?.granted !== true) {
-        const reason = grant1?.result?.reason || grant1?.lastError || "unknown";
-        const detail = { tabId, attachedEntry, attachedTargets, tabLevelTargets, pageTargetForTab, grant1, noSession, assist };
-        if (reason === "NO_DEBUGGER_SESSION") {
-          report.p0Regressions.push({
-            id: "P0-input-ownership-session-mapping",
-            at: nowIso(),
-            detail,
-            note:
-              "扩展已 attach（chrome.debugger.getTargets 显示该 tab attached=true，且 tab_cdp_call 成功），" +
-              "但 grantInput 返回 NO_DEBUGGER_SESSION。精确失败点：browser_cli_input_ownership_api.cc::ResolveDebuggerSession " +
-              "用 content::DevToolsAgentHost::GetForTab(web_contents)（WebContentsDevToolsAgentHost / \"tab\" target）；" +
-              "chrome.debugger.attach({tabId}) 走的是 DevToolsAgentHost::GetOrCreateFor(web_contents)（RenderFrameDevToolsAgentHost，" +
-              "debugger_api.cc:967）。两者不是同一个 host，随后 agent_host->GetInputOwnershipSessionForClient(client) 在错误的 " +
-              "host 上做 SessionByClient(client) → nullptr → NO_DEBUGGER_SESSION。修复：用 client 自己的 host" +
-              "（ExtensionDevToolsClientHost::agent_host()）或 GetOrCreateFor(web_contents)，再取 session token。",
-          });
-          ctx.record("K2", detail);
-          ctx.markBlocked({
-            code: "product-session-mapping-bug",
-            deps: ["M: 修正 ResolveDebuggerSession 的 DevToolsAgentHost 选择（GetForTab → client 的 host / GetOrCreateFor）"],
-            reason:
-              "扩展 chrome.debugger 会话已 attach（getTargets attached=true），grantInput 仍返回 NO_DEBUGGER_SESSION；" +
-              "GetForTab 返回 WebContentsDevToolsAgentHost（通常为 nullptr），与 attach 使用的 RenderFrameDevToolsAgentHost 不一致。",
-          });
-          return;
-        }
-        check("K2 grantInput(actions:1) granted", false, JSON.stringify(detail));
+      const created = await ctx.createUntrackedWindow("k2");
+      check("K2 创建未跟踪窗口且 beacon 就绪", created.ok === true, JSON.stringify(created).slice(0, 600));
+      if (!created.ok) {
+        ctx.markBlocked({ code: "untracked-window-failed", deps: ["popup 可创建未跟踪窗口"], reason: JSON.stringify(created) });
         return;
       }
-      check("K2 grantInput(actions:1) granted", grant1.result.actions === 1 && typeof grant1.result.expiresAt === "number", JSON.stringify(grant1));
-      const click1 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const state1 = await ctx.probe(key);
-      check("K2 grant 后第 1 条 click 成功", click1.ok === true && state1.clicks === afterNoGrant.clicks + 1, JSON.stringify({ click1, clicks: state1.clicks }));
+      const tabId = created.tabId;
+      const state = { ...created.state, tabId };
+      const readClicks = () => ((servers.stateFor(created.token) || {}).state || {}).clicks;
+      const attach = await ctx.popupDebuggerAttach(tabId);
+      check("K2 popup attach chrome.debugger", attach?.attached === true, JSON.stringify(attach));
+      if (attach?.attached !== true) {
+        await ctx.closeWindow(created.windowId);
+        ctx.markBlocked({ code: "debugger-attach-unavailable", deps: ["popup 可 attach 未跟踪窗口"], reason: JSON.stringify(attach) });
+        return;
+      }
+      const assist = await ctx.bumpModeOnTab(tabId, "assist");
+      check("K2 setOwnership(assist) accepted", assist.accepted === true && assist.bumped?.result?.mode === "assist", JSON.stringify(assist));
+      const kernelMsg = /InputOwnership: debugger input rejected/i;
 
-      const click2 = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const state2 = await ctx.probe(key);
-      check(
-        "K2 第 2 条 click 被拒（grant 用尽，1 次命令 = 1 单位）",
-        click2.ok === false && kernelMsg.test(String(click2.error)) && state2.clicks === state1.clicks,
-        JSON.stringify({ click2, clicks: [state1.clicks, state2.clicks] }),
-      );
+      const noGrant = await ctx.kernelMouseClick(state);
+      check("K2 ASSIST 无 grant：click 被内核拒绝且 DOM 不变", noGrant.rejected === true && kernelMsg.test(String(noGrant.error)) && readClicks() === 0, JSON.stringify({ noGrant, clicks: readClicks() }));
+
+      const grant1 = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      check("K2 grantInput(actions:1) granted", grant1?.result?.granted === true && grant1.result.actions === 1 && typeof grant1.result.expiresAt === "number", JSON.stringify(grant1));
+      const click1 = await ctx.kernelMouseClick(state);
+      await sleep(450);
+      check("K2 grant 后第 1 条 click 成功", click1.press.ok === true && click1.release.ok === true && readClicks() === 1, JSON.stringify({ click1, clicks: readClicks() }));
+      const click2 = await ctx.kernelMouseClick(state);
+      await sleep(450);
+      check("K2 第 2 条 click 被拒（grant 用尽）", click2.rejected === true && kernelMsg.test(String(click2.error)) && readClicks() === 1, JSON.stringify({ click2, clicks: readClicks() }));
 
       const grantTtl = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 150 });
       await sleep(500);
-      const clickTtl = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const stateTtl = await ctx.probe(key);
-      check(
-        "K2 TTL 到期后 click 被拒（绝对截止，不被输入延长）",
-        grantTtl?.result?.granted === true && clickTtl.ok === false && stateTtl.clicks === state2.clicks,
-        JSON.stringify({ grantTtl, clickTtl, clicks: stateTtl.clicks }),
-      );
+      const clickTtl = await ctx.kernelMouseClick(state);
+      await sleep(450);
+      check("K2 TTL 到期后 click 被拒（绝对截止）", grantTtl?.result?.granted === true && clickTtl.rejected === true && readClicks() === 1, JSON.stringify({ grantTtl, clickTtl, clicks: readClicks() }));
 
       const grantScope = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
       const commandId = "k2-scope-ok-" + Date.now();
       const begin = await ctx.apiCall("beginInputCommand", { target: { tabId }, commandId, kind: "click" });
       check("K2 beginInputCommand 成功（预扣 1 单位）", begin?.result?.ok === true, JSON.stringify(begin));
-      const clickScope = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const stateScope = await ctx.probe(key);
-      check("K2 scope 内 click 成功（一个命令一次内核 grant）", clickScope.ok === true && stateScope.clicks === stateTtl.clicks + 1, JSON.stringify({ clickScope, clicks: stateScope.clicks }));
+      const clickScope = await ctx.kernelMouseClick(state);
+      await sleep(450);
+      check("K2 scope 内 click 成功", clickScope.press.ok === true && readClicks() === 2, JSON.stringify({ clickScope, clicks: readClicks() }));
       const end = await ctx.apiCall("endInputCommand", { target: { tabId }, commandId, outcome: "ok" });
       check("K2 endInputCommand(ok) closed", end?.result?.closed === true, JSON.stringify(end));
-      const clickAfterScope = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const stateAfterScope = await ctx.probe(key);
-      check(
-        "K2 scope 结束后（预算用尽）click 被拒",
-        clickAfterScope.ok === false && stateAfterScope.clicks === stateScope.clicks,
-        JSON.stringify({ clickAfterScope, clicks: stateAfterScope.clicks }),
-      );
+      const clickAfterScope = await ctx.kernelMouseClick(state);
+      await sleep(450);
+      check("K2 scope 结束后（预算用尽）click 被拒", clickAfterScope.rejected === true && readClicks() === 2, JSON.stringify({ clickAfterScope, clicks: readClicks() }));
 
       const grantCancel = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
       const cancelId = "k2-scope-cancel-" + Date.now();
       const beginCancel = await ctx.apiCall("beginInputCommand", { target: { tabId }, commandId: cancelId, kind: "click" });
       const endCancel = await ctx.apiCall("endInputCommand", { target: { tabId }, commandId: cancelId, outcome: "cancelled" });
-      const clickRefund = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const stateRefund = await ctx.probe(key);
+      const clickRefund = await ctx.kernelMouseClick(state);
+      await sleep(450);
       check(
         "K2 cancel 未授权输入的 scope → 退还 1 单位，click 成功",
-        grantCancel?.result?.granted === true && beginCancel?.result?.ok === true && endCancel?.result?.closed === true && clickRefund.ok === true && stateRefund.clicks === stateAfterScope.clicks + 1,
-        JSON.stringify({ grantCancel, beginCancel, endCancel, clickRefund, clicks: stateRefund.clicks }),
+        grantCancel?.result?.granted === true && beginCancel?.result?.ok === true && endCancel?.result?.closed === true && clickRefund.press.ok === true && readClicks() === 3,
+        JSON.stringify({ grantCancel, beginCancel, endCancel, clickRefund, clicks: readClicks() }),
       );
 
       const grantDetach = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 8000 });
-      const detach = await ctx.detachOn(key);
-      check("K2 detach 成功", grantDetach?.result?.granted === true && detach.ok === true && detach.data?.wasAttached === true, JSON.stringify({ grantDetach, detach }));
-      const clickDetached = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const stateDetached = await ctx.probe(key);
+      const detach1 = await ctx.popupDebuggerDetach(tabId);
+      const reattach = await ctx.popupDebuggerAttach(tabId);
+      const clickDetached = await ctx.kernelMouseClick(state);
+      await sleep(450);
       check(
-        "K2 session detach 后 click 被拒（新 debugger session 不能复用旧 grant）",
-        clickDetached.ok === false && kernelMsg.test(String(clickDetached.error)) && stateDetached.clicks === stateRefund.clicks,
-        JSON.stringify({ clickDetached, clicks: stateDetached.clicks }),
+        "K2 session detach/reattach 后 click 被拒（新 session 不能复用旧 grant）",
+        grantDetach?.result?.granted === true && detach1?.ok === true && reattach?.attached === true && clickDetached.rejected === true && readClicks() === 3,
+        JSON.stringify({ grantDetach, detach1, reattach, clickDetached, clicks: readClicks() }),
       );
       const grantRegrant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
-      const clickRegrant = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(400);
-      const stateRegrant = await ctx.probe(key);
-      check(
-        "K2 新 session 重新 grant 后 click 成功",
-        grantRegrant?.result?.granted === true && clickRegrant.ok === true && stateRegrant.clicks === stateDetached.clicks + 1,
-        JSON.stringify({ grantRegrant, clickRegrant, clicks: stateRegrant.clicks }),
-      );
+      const clickRegrant = await ctx.kernelMouseClick(state);
+      await sleep(450);
+      check("K2 新 session 重新 grant 后 click 成功", grantRegrant?.result?.granted === true && clickRegrant.press.ok === true && readClicks() === 4, JSON.stringify({ grantRegrant, clickRegrant, clicks: readClicks() }));
 
-      const finalSnap = await ctx.kernelSnapshot(key);
+      const finalSnap = await ctx.kernelSnapshotOnTab(tabId);
       check("K2 结束时内核配置仍为 assist（grant 不改变 mode）", finalSnap.snapshot?.mode === "assist", JSON.stringify(finalSnap));
-      ctx.record("K2", { noSession, attachedTargets, attachedEntry, assist, before, afterNoGrant, grant1, state1, click2, state2, grantTtl, clickTtl, grantScope, begin, clickScope, end, clickAfterScope, grantCancel, beginCancel, endCancel, clickRefund, stateRefund, grantDetach, detach, clickDetached, grantRegrant, clickRegrant, finalSnap });
-      await ctx.bumpMode(key, "ai").catch(() => undefined);
+      const detach2 = await ctx.popupDebuggerDetach(tabId);
+      const closed = await ctx.closeWindow(created.windowId);
+      ctx.record("K2", { created: { tabId, token: created.token }, attach, assist, noGrant, grant1, click1, click2, grantTtl, clickTtl, grantScope, begin, clickScope, end, clickAfterScope, grantCancel, beginCancel, endCancel, clickRefund, grantDetach, detach1, reattach, clickDetached, grantRegrant, clickRegrant, finalSnap, detach2, closed });
     },
   },
   {
     id: "K3",
-    title: "跨 CDP session：第二个会话不得复用扩展会话的 grant（并发 attach 优先，失败退回顺序切换）",
+    title: "跨 CDP session（未跟踪窗口）：第二个会话不得复用扩展会话的 grant",
     stage: "kernel",
     feature: "on",
     async run(ctx) {
@@ -1380,61 +1470,43 @@ const CASES = [
         ctx.markBlocked(ready.blocked);
         return;
       }
-      const key = "k3";
-      await ctx.openFresh(key);
-      const tabId = ctx.spaces[key].tabId;
-      await ctx.attachOn(key);
-      const attachedTargets = await ctx.extensionDebuggerTargets();
-      const attachedEntry = (attachedTargets?.targets || []).find((t) => Number(t.tabId) === Number(tabId));
-      check(
-        "K3 attach 证据：chrome.debugger.getTargets 中该 tab attached=true",
-        attachedTargets?.ok === true && attachedEntry?.attached === true,
-        JSON.stringify({ tabId, attachedTargets }),
-      );
-      const browserTargetsForTab = await (await ctx.cdp()).targets().catch((error) => ({ error: String(error) }));
-      const tabLevelTargets = Array.isArray(browserTargetsForTab)
-        ? browserTargetsForTab.filter((t) => t.type === "tab" && String(t.url || "").includes(ctx.spaces[key].token))
-        : [];
-      const assist = await ctx.bumpMode(key, "assist");
-      check("K3 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true, JSON.stringify(assist));
-      const grant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 10000 });
-      if (grant?.result?.granted !== true && (grant?.result?.reason === "NO_DEBUGGER_SESSION")) {
-        const detail = { tabId, attachedEntry, attachedTargets, tabLevelTargets, grant, assist };
-        report.p0Regressions.push({
-          id: "P0-input-ownership-session-mapping",
-          at: nowIso(),
-          detail,
-          note: "同 K2：扩展 debugger 已 attach（getTargets attached=true），grantInput 仍 NO_DEBUGGER_SESSION；" +
-            "ResolveDebuggerSession 的 GetForTab(WebContentsDevToolsAgentHost) 与 chrome.debugger.attach 的 " +
-            "GetOrCreateFor(RenderFrameDevToolsAgentHost) 不是同一个 host。",
-        });
-        ctx.record("K3", detail);
-        ctx.markBlocked({
-          code: "product-session-mapping-bug",
-          deps: ["M: 修正 ResolveDebuggerSession 的 DevToolsAgentHost 选择（GetForTab → client 的 host / GetOrCreateFor）"],
-          reason: "扩展 chrome.debugger 会话已 attach（getTargets attached=true），grantInput 仍返回 NO_DEBUGGER_SESSION。",
-        });
+      const created = await ctx.createUntrackedWindow("k3");
+      check("K3 创建未跟踪窗口且 beacon 就绪", created.ok === true, JSON.stringify(created).slice(0, 600));
+      if (!created.ok) {
+        ctx.markBlocked({ code: "untracked-window-failed", deps: ["popup 可创建未跟踪窗口"], reason: JSON.stringify(created) });
         return;
       }
+      const tabId = created.tabId;
+      const state = { ...created.state, tabId };
+      const attach = await ctx.popupDebuggerAttach(tabId);
+      check("K3 popup attach chrome.debugger（扩展会话）", attach?.attached === true, JSON.stringify(attach));
+      if (attach?.attached !== true) {
+        await ctx.closeWindow(created.windowId);
+        ctx.markBlocked({ code: "debugger-attach-unavailable", deps: ["popup 可 attach 未跟踪窗口"], reason: JSON.stringify(attach) });
+        return;
+      }
+      const assist = await ctx.bumpModeOnTab(tabId, "assist");
+      check("K3 setOwnership(assist) accepted", assist.accepted === true, JSON.stringify(assist));
+      const grant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 10000 });
       check("K3 扩展会话 grant granted（2 单位）", grant?.result?.granted === true && grant.result.actions === 2, JSON.stringify(grant));
-      const kernelMsg = /InputOwnership: debugger input rejected/i;
-
-      const before = await ctx.probe(key);
-      const dpr = Number(before.viewport.dpr) || 1;
-      const x = Math.round((before.rects.btn.x + before.rects.btn.w / 2) * dpr);
-      const y = Math.round((before.rects.btn.y + before.rects.btn.h / 2) * dpr);
 
       let second = null;
       let attachError = null;
       try {
-        second = await ctx.secondSession(ctx.spaces[key].url);
+        // 第二个 CDP 会话：浏览器级 attach 到同一个 page target（未跟踪窗口的 tab）
+        const cdp = await ctx.cdp();
+        const targets = await cdp.targets();
+        const page = targets.find((t) => t.type === "page" && String(t.url || "").includes(created.token));
+        if (!page) throw new Error("page target not found for " + created.token);
+        const sessionId = await cdp.attach(page.targetId);
+        second = { cdp, sessionId, targetId: page.targetId };
       } catch (error) {
         attachError = String(error?.message || error);
       }
-
       let secondResult = null;
-      let mode = null;
       if (second) {
+        const x = Math.round((state.rects.btn.x + state.rects.btn.w / 2) * (Number(state.viewport.dpr) || 1));
+        const y = Math.round((state.rects.btn.y + state.rects.btn.h / 2) * (Number(state.viewport.dpr) || 1));
         try {
           await second.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }, second.sessionId, 15000);
           await second.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 }, second.sessionId, 15000);
@@ -1442,58 +1514,90 @@ const CASES = [
         } catch (error) {
           secondResult = { ok: false, error: String(error?.message || error), code: error?.code ?? null };
         }
-        mode = "concurrent";
-      } else {
-        await ctx.detachOn(key);
-        try {
-          second = await ctx.secondSession(ctx.spaces[key].url);
-          await second.cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 }, second.sessionId, 15000);
-          await second.cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 }, second.sessionId, 15000);
-          secondResult = { ok: true, error: null };
-        } catch (error) {
-          secondResult = { ok: false, error: String(error?.message || error), code: error?.code ?? null };
-        }
-        mode = "sequential-after-detach";
       }
       await sleep(500);
-      const afterSecond = await ctx.probe(key);
+      const clicks = ((servers.stateFor(created.token) || {}).state || {}).clicks;
       check(
-        "K3 第二个 CDP 会话的输入被拒（不复用扩展会话的 grant）",
-        secondResult && secondResult.ok === false && (kernelMsg.test(String(secondResult.error)) || /not attached|Another debugger|cannot access/i.test(String(secondResult.error))),
-        JSON.stringify({ mode, attachError, secondResult }),
+        "K3 第二个 CDP 会话的输入被内核拒绝（-32000）且 DOM 不变",
+        !!second && secondResult && secondResult.ok === false && /InputOwnership: debugger input rejected/i.test(String(secondResult.error)) && clicks === 0,
+        JSON.stringify({ attachError, secondResult, clicks }),
       );
-      check("K3 第二个会话注入后 DOM 不变", afterSecond.clicks === before.clicks, JSON.stringify({ before: before.clicks, after: afterSecond.clicks, secondResult }));
-
-      const reattached = await ctx.attachOn(key).catch((error) => ({ ok: false, error: String(error) }));
-      const regrant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
-      const extClick = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      await sleep(450);
-      const afterExt = await ctx.probe(key);
+      const extClick = await ctx.kernelMouseClick(state);
+      await sleep(500);
       check(
-        "K3 扩展会话重新 grant 后可正常输入（grant 归属于会话，不是全局）",
-        regrant?.result?.granted === true && extClick.ok === true && afterExt.clicks === before.clicks + 1,
-        JSON.stringify({ reattached, regrant, extClick, before: before.clicks, after: afterExt.clicks }),
+        "K3 扩展会话的 grant 仍可用（第二个会话未消耗）",
+        extClick.press.ok === true && ((servers.stateFor(created.token) || {}).state || {}).clicks === 1,
+        JSON.stringify({ extClick, clicks: ((servers.stateFor(created.token) || {}).state || {}).clicks }),
       );
-
-      const snap = await ctx.kernelSnapshot(key);
+      const snap = await ctx.kernelSnapshotOnTab(tabId);
       check("K3 第二个会话不得改变 mode/version", snap.snapshot?.mode === "assist" && snap.snapshot?.version === assist.version, JSON.stringify(snap));
-      ctx.record("K3", { attachedTargets, attachedEntry, assist, grant, before, attachError, mode, secondResult, afterSecond, regrant, extClick, afterExt, snap });
-      await ctx.bumpMode(key, "ai").catch(() => undefined);
+      const detach = await ctx.popupDebuggerDetach(tabId);
+      const closed = await ctx.closeWindow(created.windowId);
+      ctx.record("K3", { created: { tabId, token: created.token }, attach, assist, grant, attachError, secondResult, extClick, snap, detach, closed });
     },
   },
   {
     id: "K4",
-    title: "内核 human_presence：事件桥 + 1s human pause（不改变 mode）",
+    title: "内核 human_presence：事件桥 + 1s human pause（managed-visible 窗口）",
     stage: "kernel",
-    feature: "on",
+    feature: "on-visible",
     async run(ctx) {
       const ready = await ctx.kernelApiReady();
       if (!ready.ok) {
         ctx.markBlocked(ready.blocked);
         return;
       }
-      const key = "main";
-      const tabId = ctx.spaces[key].tabId;
+      const key = "k4";
+      // 冷启动即带 --browser-cli-user-explicit-show：产品应创建并呈现恰好一个窗口。
+      const visibleWindow = await ctx.findColdStartVisibleWindow(20000);
+      const producerLog = await ctx.showProducerLog();
+      check(
+        "K4 冷启动 user-explicit-show 呈现了一个可见窗口（visible=true）",
+        !!visibleWindow.window,
+        JSON.stringify({ window: visibleWindow.window, allWindows: visibleWindow.allWindows, producerLog }).slice(0, 2000),
+      );
+      if (!visibleWindow.window) {
+        ctx.record("K4", { visibleWindow, producerLog });
+        ctx.markBlocked({
+          code: "managed-visible-show-failed",
+          deps: ["内核新增用户显式 show 入口，或修复冷启动 show 的可见性"],
+          reason:
+            "冷启动带 --browser-cli-user-explicit-show + --no-startup-window 后没有任何窗口 visible=true；" +
+            "原始窗口状态与 producer log 见 evidence。不再使用第二次 show 进程。",
+        });
+        return;
+      }
+      const tokenValue = token + "-k4";
+      const nav = await ctx.navigateInitialTab(ctx.mainOrigin + "/k4?token=" + tokenValue, tokenValue);
+      check("K4 可见窗口的 tab 已导航到 fixture（beacon 就绪）", nav.ok === true, JSON.stringify(nav).slice(0, 800));
+      if (!nav.ok) {
+        ctx.record("K4", { visibleWindow, producerLog, nav });
+        ctx.markBlocked({
+          code: "visible-window-navigation-failed",
+          deps: ["可用扩展 tabs API 把初始可见 tab 导航到 fixture"],
+          reason: "初始可见 tab 导航失败：" + JSON.stringify(nav),
+        });
+        return;
+      }
+      const tabId = nav.tabId;
+      ctx.registerWindow(key, visibleWindow.window.hwnd, visibleWindow.widget ? visibleWindow.widget.hwnd : null, visibleWindow.window.rect, visibleWindow.window.title);
+      ctx.spaces[key] = { spaceId: "cold-start-visible", tabId, windowId: nav.windowId, url: ctx.mainOrigin + "/k4?token=" + tokenValue, token: tokenValue, kind: "cold-start-visible" };
+      const foregroundBefore = (await win32.call("foreground")).hwnd;
+      // 冷启动 show 已经呈现窗口：不再调用第二次 show。
+      const show = { visible: true, coldStart: true, foregroundBefore, producerLog };
+      if (!visibleWindow.widget) {
+        ctx.record("K4", { visibleWindow, producerLog, nav });
+        ctx.markBlocked({ code: "visible-window-widget-missing", deps: ["可见窗口的 render widget HWND"], reason: "可见窗口没有可用的 Chrome_RenderWidgetHostHWND" });
+        return;
+      }
+      // popup 页面的 chrome.debugger 作为 AI 输入客户端（该 tab 不在任何 Task Space 里）。
+      const attach = await ctx.popupDebuggerAttach(tabId);
+      check("K4 popup attach chrome.debugger（冷启动可见 tab）", attach?.attached === true, JSON.stringify(attach));
+      if (attach?.attached !== true) {
+        ctx.record("K4", { visibleWindow, nav, attach });
+        ctx.markBlocked({ code: "debugger-attach-unavailable", deps: ["popup 可 attach 冷启动可见 tab"], reason: JSON.stringify(attach) });
+        return;
+      }
       const popup = await ctx.ensurePopup();
       const cdp = await ctx.cdp();
       const listenerSetup = await cdp.evaluate(
@@ -1511,7 +1615,7 @@ const CASES = [
       await sleep(800);
       const presence = await cdp.evaluate(popup.sessionId, "(window.__bpPresence || []).slice(-8)");
       const winState = await win32.call("state", { hwnd: ctx.windows[key].hwnd });
-      ctx.record("K4", { listenerSetup, assist, before, human, presence, window: winState.window });
+      ctx.record("K4", { show, listenerSetup, assist, before, human, presence, window: winState.window });
       if (!human.landed || !Array.isArray(presence) || presence.length === 0) {
         ctx.markBlocked({
           code: "managed-human-input-unavailable",
@@ -2121,6 +2225,10 @@ class BrowserCdp {
     this.seq = 0;
     this.pending = new Map();
     this.closed = false;
+    this.eventHandlers = [];
+  }
+  onEvent(handler) {
+    this.eventHandlers.push(handler);
   }
   async connect(timeoutMs = 25000) {
     const active = await readDevToolsPort(this.profileDir);
@@ -2156,7 +2264,12 @@ class BrowserCdp {
         } catch {
           return;
         }
-        if (message.id === undefined) return;
+        if (message.id === undefined) {
+          for (const handler of this.eventHandlers) {
+            try { handler(message); } catch {}
+          }
+          return;
+        }
         const item = this.pending.get(message.id);
         if (!item) return;
         this.pending.delete(message.id);
@@ -2477,11 +2590,11 @@ async function main() {
   mustCheck("注册后 HKCU 指向本次 host manifest", afterRegisterValue === registration.manifestPath, JSON.stringify({ afterRegisterValue, manifestPath: registration.manifestPath }));
   mustCheck("注册的扩展 ID 与仓库 manifest.json 推导一致", registration.extensionId === report.env.extensionId, JSON.stringify({ registered: registration.extensionId, derived: report.env.extensionId }));
 
-  for (const feature of ["off", "on"]) {
+  for (const feature of SESSION_FEATURES) {
     if (!FEATURE_FILTER.has(feature)) continue;
     const casesToRun = selected.filter((c) => c.feature === feature);
     if (!casesToRun.length) continue;
-    if (feature === "on" && !featureAvailable()) {
+    if (feature !== "off" && !featureAvailable()) {
       for (const c of casesToRun) {
         report.cases.push({
           id: c.id,
@@ -2532,8 +2645,11 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
   // Feature on 同时打开 managed presentation：生产 API 的可用性要求
   // `--browser-cli-background-presentation`（availability 检查 + 受信扩展身份检查都要它）。
   // 该模式下扩展创建的窗口默认 hidden（不上桌面），inputOwnership API 才存在。
-  const featureFlagArgs =
-    feature === "on" ? ["--enable-features=" + FEATURE, "--browser-cli-background-presentation"] : [];
+  const managed = feature !== "off";
+  const featureFlagArgs = managed
+    ? ["--enable-features=" + FEATURE, "--browser-cli-background-presentation",
+       ...(feature === "on-visible" ? ["--browser-cli-user-explicit-show", "--no-startup-window"] : [])]
+    : [];
   const token = runToken + "-" + feature;
   const args = [
     "--remote-debugging-port=0",
@@ -2555,9 +2671,13 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     "--enable-logging=stderr",
     "--v=0",
     ...featureFlagArgs,
-    servers.mainOrigin + "/boot?token=" + token,
+    // on-visible：冷启动就带 --browser-cli-user-explicit-show，不能带位置 URL
+    // （show producer 会把带 URL 的命令行判为 kBlockedByLaunchArguments）。
+    // 其他会话用启动 URL 让扩展 SW/native host 起来（窗口在 managed 模式下 hidden）。
+    ...(feature === "on-visible" ? [] : [servers.mainOrigin + "/boot?token=" + token]),
   ];
-  sessionReport.managed = feature === "on";
+  sessionReport.managed = managed;
+  sessionReport.explicitShow = feature === "on-visible";
   sessionReport.args = args;
   sessionReport.env = { LOCALAPPDATA: localAppData, BROWSERPILOT_HOST_BASE_PORT: String(48900 + Math.floor(Math.random() * 90)) };
 
@@ -2582,7 +2702,15 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       return c?.evidence?.[0] || null;
     },
     async ai(spaceKey, name, args = {}) {
-      return await ctx.client.request(name, args, { space: ctx.spaces[spaceKey].spaceId });
+      const request = () => ctx.client.request(name, args, { space: ctx.spaces[spaceKey].spaceId });
+      let result = await request();
+      if (!result.ok && /ECONNREFUSED|ECONNRESET|EPIPE|socket hang up/i.test(String(result.error))) {
+        // native host 可能因 SW 休眠而退出：先 poke SW，再刷新 host session 并重试一次。
+        await ctx.popupSend("input_status", ctx.spaces[spaceKey].spaceId).catch(() => null);
+        const refreshed = await ctx.refreshHostClient(30000).catch(() => ({ ok: false }));
+        if (refreshed.ok) result = await request();
+      }
+      return result;
     },
     lastProbeAt: {},
     /** 外观测：读 fixture 每 200ms POST 回来的状态（不经过任何扩展命令，HUMAN 模式也可用）。 */
@@ -2801,9 +2929,40 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       ctx.popup = info;
       return info;
     },
+    /**
+     * API 调用上下文：普通会话用 popup 页面（可见窗口，便于观察）；
+     * on-visible 会话用扩展 service worker（不额外创建窗口，避免干扰 show 的唯一候选）。
+     */
+    async ensureApiContext() {
+      if (ctx.apiContext) return ctx.apiContext;
+      if (feature === "off") {
+        const popup = await ctx.ensurePopup();
+        ctx.apiContext = { kind: "popup", ...popup };
+        return ctx.apiContext;
+      }
+      const cdp = await ctx.cdp();
+      const targets = await cdp.targets();
+      const sw = targets.find((t) => t.type === "service_worker" && String(t.url || "").includes(report.env.extensionId));
+      if (!sw) throw new Error("extension service worker target not found for on-visible session");
+      const sessionId = await cdp.attach(sw.targetId);
+      let probe = null;
+      const deadline = Date.now() + 15000;
+      while (Date.now() < deadline) {
+        probe = await cdp.evaluate(
+          sessionId,
+          "({api: !!(typeof chrome !== 'undefined' && chrome.browserCliInputOwnership), " +
+            "io: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? Object.keys(chrome.browserCliInputOwnership) : null, " +
+            "ns: (typeof chrome !== 'undefined' && chrome.browserCliInputOwnership) ? 'browserCliInputOwnership' : null})",
+        ).catch((error) => ({ error: String(error) }));
+        if (probe && probe.api === true && Array.isArray(probe.io)) break;
+        await sleep(200);
+      }
+      ctx.apiContext = { kind: "service_worker", targetId: sw.targetId, sessionId, probe };
+      return ctx.apiContext;
+    },
     /** 调用 browserCli.inputOwnership.<method>(request, cb)；返回 {result,lastError} 或错误标记。 */
     async apiCall(method, request = {}) {
-      const popup = await ctx.ensurePopup();
+      let apiCtx = await ctx.ensureApiContext();
       const cdp = await ctx.cdp();
       const expr =
         "new Promise((resolve) => {" +
@@ -2819,11 +2978,21 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
         "    }));" +
         "  } catch (e) { resolve({__bpThrown: String((e && e.message) || e)}); }" +
         "})";
-      try {
-        return await cdp.evaluate(popup.sessionId, expr);
-      } catch (error) {
-        return { __bpCdpError: String(error && error.message ? error.message : error) };
+      // hidden 扩展页面可能被冻结导致 Runtime.evaluate 超时：丢弃上下文并重试一次。
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const raw = await cdp.evaluate(apiCtx.sessionId, expr);
+          return raw;
+        } catch (error) {
+          if (attempt === 1) return { __bpCdpError: String(error && error.message ? error.message : error) };
+          ctx.apiContext = null;
+          if (apiCtx.kind === "popup") ctx.popup = null;
+          else ctx.swSessionId = null;
+          await sleep(400);
+          apiCtx = await ctx.ensureApiContext();
+        }
       }
+      return { __bpCdpError: "api context retry exhausted" };
     },
     /** 便捷：成功时返回 result，失败/受限时返回 null 并把原始响应写进 evidence。 */
     async apiOk(method, request = {}) {
@@ -2857,6 +3026,295 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       throw new Error("fresh tab beacon not ready: " + key);
     },
     /** 从受信扩展页面调用 chrome.debugger.getTargets()，证明扩展会话已 attach。 */
+
+    /** 冷启动 show 的可见窗口：枚举 Win32 窗口找 visible=true 的 top-level 浏览器窗口。 */
+    async findColdStartVisibleWindow(timeoutMs = 15000) {
+      const deadline = Date.now() + timeoutMs;
+      let last = [];
+      while (Date.now() < deadline) {
+        const listing = await win32.call("listWindows", { pid: chrome.record.pid });
+        last = Array.isArray(listing.windows) ? listing.windows : listing.windows ? [listing.windows] : [];
+        const hit = last.find((w) => w.className === "Chrome_WidgetWin_1" && w.visible === true);
+        if (hit) {
+          const kids = await win32.call("children", { hwnd: hit.hwnd });
+          const candidates = (Array.isArray(kids.children) ? kids.children : kids.children ? [kids.children] : [])
+            .filter((c) => c.className === "Chrome_RenderWidgetHostHWND")
+            .filter((c) => Number(c.clientWidth) * Number(c.clientHeight) > 20000)
+            .sort((a, b) => Number(b.clientWidth) * Number(b.clientHeight) - Number(a.clientWidth) * Number(a.clientHeight));
+          return { window: hit, widget: candidates[0] || null, allWindows: last };
+        }
+        await sleep(250);
+      }
+      return { window: null, allWindows: last };
+    },
+    /** 用 popup 的 chrome.tabs API 找到初始 tab 并导航到 fixture。 */
+    async navigateInitialTab(url, tokenValue, timeoutMs = 30000) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const found = await cdp.evaluate(
+        popup.sessionId,
+        "new Promise((resolve) => chrome.tabs.query({}, (tabs) => {" +
+          "  const list = tabs || [];" +
+          "  const t = list.find((x) => /^(chrome:\\/\\/newtab|about:blank|chrome:\\/\\/startpage)/.test(String(x.url || ''))) || list[0];" +
+          "  resolve(t ? {tabId: t.id, windowId: t.windowId, url: t.url} : {missing: true});" +
+          "}))",
+      );
+      if (!found || found.missing) return { ok: false, reason: "no initial tab", found };
+      await cdp.evaluate(
+        popup.sessionId,
+        "new Promise((resolve) => chrome.tabs.update(" + Number(found.tabId) + ", {url: " + JSON.stringify(url) + "}, () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})))",
+      );
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const entry = servers.stateFor(tokenValue);
+        if (entry?.state?.token === tokenValue) return { ok: true, tabId: found.tabId, windowId: found.windowId, state: entry.state };
+        await sleep(150);
+      }
+      return { ok: false, reason: "beacon-not-ready", tabId: found.tabId, windowId: found.windowId, token: tokenValue };
+    },
+
+
+    /** 读取本次会话的浏览器日志里 show producer / presentation policy 的关键行。 */
+    async showProducerLog() {
+      const file = path.join(artifactsDir, label + "-chrome.log");
+      try {
+        const lines = fs.readFileSync(file, "utf8").split(/\r?\n/).filter((l) => /BROWSER_CLI_USER_EXPLICIT_SHOW|human-ownership-granted|user-explicit|presentation-denied/.test(l));
+        return lines.slice(-20);
+      } catch (error) {
+        return ["<log unreadable: " + String(error) + ">"];
+      }
+    },
+    /** 确保 agent TCP 通道可用（host 可能因 SW 休眠退出）。 */
+    async ensureAgentChannel(spaceId) {
+      const ping = await ctx.client.request("ping", {}).catch(() => ({ ok: false }));
+      if (ping.ok === true) return { ok: true, refreshed: false };
+      if (spaceId) await ctx.popupSend("input_status", spaceId).catch(() => null);
+      const refreshed = await ctx.refreshHostClient(30000);
+      return { ok: refreshed.ok, refreshed: true, detail: refreshed };
+    },
+    /**
+     * 在 popup 窗口里新建一个**不属于任何 Task Space** 的 tab。
+     * 扩展的周期同步只覆盖 state.spaces，因此这个 tab 不会收到任何扩展心跳；
+     * 用来验证内核 30s stale 契约（无需停 SW，避免 SW 自动重启后立刻重放）。
+     */
+    async createUntrackedWindow(name) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const tokenValue = token + "-untracked-" + name;
+      const url = servers.mainOrigin + "/" + name + "?token=" + tokenValue;
+      // 独立窗口（不属于任何 Task Space）：扩展的周期同步按 space.windowId 覆盖，
+      // 不会给这个窗口/tab 发 heartbeat。
+      const expr =
+        "new Promise((resolve) => { try { chrome.windows.create({url: " + JSON.stringify(url) + ", focused: false, state: 'normal'}, (win) => resolve({ok: !chrome.runtime.lastError, windowId: win ? win.id : null, tabId: win && win.tabs && win.tabs[0] ? win.tabs[0].id : null, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
+      const created = await cdp.evaluate(popup.sessionId, expr, { timeoutMs: 30000 }).catch((error) => ({ ok: false, error: String(error) }));
+      if (created?.ok !== true) return { ok: false, created };
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        const entry = servers.stateFor(tokenValue);
+        if (entry?.state?.token === tokenValue) {
+          return { ok: true, tabId: created.tabId, windowId: created.windowId, state: entry.state, token: tokenValue, url };
+        }
+        await sleep(150);
+      }
+      return { ok: false, created, reason: "beacon-not-ready", token: tokenValue, url };
+    },
+    async closeWindow(windowId) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      return await cdp.evaluate(
+        popup.sessionId,
+        "new Promise((resolve) => { try { chrome.windows.remove(" + Number(windowId) + ", () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })",
+      ).catch((error) => ({ ok: false, error: String(error) }));
+    },
+    async closeTab(tabId) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      return await cdp.evaluate(
+        popup.sessionId,
+        "new Promise((resolve) => { try { chrome.tabs.remove(" + Number(tabId) + ", () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })",
+      ).catch((error) => ({ ok: false, error: String(error) }));
+    },
+    /** 从 popup 页面直接 attach chrome.debugger（SW 停掉后用于产生 AI 输入）。 */
+    async popupDebuggerAttach(tabId) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const expr =
+        "new Promise((resolve) => { try { chrome.debugger.attach({tabId: " + Number(tabId) + "}, '1.3', () => resolve({attached: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({attached: false, error: String((e && e.message) || e)}); } })";
+      return await cdp.evaluate(popup.sessionId, expr).catch((error) => ({ attached: false, error: String(error) }));
+    },
+    async popupDebuggerDetach(tabId) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      return await cdp.evaluate(
+        popup.sessionId,
+        "new Promise((resolve) => { try { chrome.debugger.detach({tabId: " + Number(tabId) + "}, () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })",
+      ).catch((error) => ({ ok: false, error: String(error) }));
+    },
+    async popupDebuggerSend(tabId, method, params) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const expr =
+        "new Promise((resolve) => { try { chrome.debugger.sendCommand({tabId: " + Number(tabId) + "}, " +
+        JSON.stringify(method) + ", " + JSON.stringify(params) + ", (result) => resolve({ok: !chrome.runtime.lastError, result: result === undefined ? null : result, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
+      return await cdp.evaluate(popup.sessionId, expr, { timeoutMs: 30000 }).catch((error) => ({ ok: false, error: String(error) }));
+    },
+    /** popup 页面上下文里发真实用户消息（SW 内 markInternalCommand）。 */
+    async popupSend(kind, spaceId, timeoutMs = 30000) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const expr =
+        "new Promise((resolve) => { try { chrome.runtime.sendMessage(" +
+        JSON.stringify({ kind, spaceId }) +
+        ", (response) => resolve({ ok: true, response: response === undefined ? null : response, " +
+        "lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null })); } catch (e) { " +
+        "resolve({ ok: false, error: String((e && e.message) || e) }); } })";
+      try {
+        return await cdp.evaluate(popup.sessionId, expr, { timeoutMs });
+      } catch (error) {
+        return { ok: false, error: String(error?.message || error) };
+      }
+    },
+    /** 在 popup 页面里点击真实 UI 控件（验证按钮接线）。 */
+    async popupClick(selector) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      return await cdp.evaluate(
+        popup.sessionId,
+        "(() => { const el = document.querySelector(" + JSON.stringify(selector) + "); if (!el) return { clicked: false, reason: 'missing' }; const disabled = !!el.disabled; el.click(); return { clicked: true, disabled, text: String(el.textContent || '').slice(0, 80) }; })()",
+      ).catch((error) => ({ clicked: false, error: String(error) }));
+    },
+    async popupSelectSpace(spaceId) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      return await cdp.evaluate(
+        popup.sessionId,
+        "(() => { const sel = document.getElementById('space-select'); if (!sel) return { ok: false, reason: 'missing' }; sel.value = " + JSON.stringify(spaceId) + "; sel.dispatchEvent(new Event('change', { bubbles: true })); return { ok: true, value: sel.value, options: Array.from(sel.options).map((o) => o.value).slice(0, 20) }; })()",
+      ).catch((error) => ({ ok: false, error: String(error) }));
+    },
+    async popupText(id) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      return await cdp.evaluate(popup.sessionId, "String((document.getElementById(" + JSON.stringify(id) + ") || {}).textContent || '')").catch(() => "");
+    },
+    /** 在扩展 service worker 上下文执行表达式（用于 SW 重启/事件桥验证）。 */
+    async swEval(expression, timeoutMs = 20000) {
+      const cdp = await ctx.cdp();
+      let sessionId = ctx.swSessionId;
+      if (!sessionId) {
+        const targets = await cdp.targets();
+        const sw = targets.find((t) => t.type === "service_worker" && String(t.url || "").includes(report.env.extensionId));
+        if (!sw) return { __swMissing: true };
+        sessionId = await cdp.attach(sw.targetId);
+        ctx.swSessionId = sessionId;
+        ctx.swTargetId = sw.targetId;
+      }
+      try {
+        return await cdp.evaluate(sessionId, expression, { timeoutMs });
+      } catch (error) {
+        // session 可能因 SW 重启失效：下次重新 attach
+        ctx.swSessionId = null;
+        return { __swError: String(error?.message || error) };
+      }
+    },
+    async stopExtensionWorkers() {
+      const cdp = await ctx.cdp();
+      const attempts = [];
+      // 我们自己的 SW DevTools attach 会让 SW 保持存活；先断开。
+      if (ctx.swSessionId) {
+        try {
+          await cdp.send("Target.detachFromTarget", { sessionId: ctx.swSessionId });
+        } catch (error) {
+          attempts.push({ method: "detachFromTarget(sw)", error: String(error?.message || error) });
+        }
+        ctx.swSessionId = null;
+      }
+      // ServiceWorker 域在 page 会话上可用（browser 会话的 stopAllWorkers 在本构建不存在）
+      try {
+        const popup = await ctx.ensurePopup();
+        await cdp.send("ServiceWorker.enable", {}, popup.sessionId).catch(() => undefined);
+        const r = await cdp.send("ServiceWorker.stopAllWorkers", {}, popup.sessionId);
+        return { ok: true, method: "ServiceWorker.stopAllWorkers(page-session)", result: r ?? null, attempts };
+      } catch (error) {
+        attempts.push({ method: "ServiceWorker.stopAllWorkers(page-session)", error: String(error?.message || error), code: error?.code ?? null });
+      }
+      // (a) ServiceWorker 域（部分构建要求先 enable）
+      try {
+        await cdp.send("ServiceWorker.enable").catch(() => undefined);
+        const r = await cdp.send("ServiceWorker.stopAllWorkers");
+        ctx.swSessionId = null;
+        return { ok: true, method: "ServiceWorker.stopAllWorkers", result: r ?? null, attempts };
+      } catch (error) {
+        attempts.push({ method: "ServiceWorker.stopAllWorkers", error: String(error?.message || error), code: error?.code ?? null });
+      }
+      // (b) stopWorker + versionId（从 workerVersionUpdated 事件收集）
+      try {
+        const versions = [];
+        cdp.onEvent((message) => {
+          if (message.method === "ServiceWorker.workerVersionUpdated") {
+            for (const v of message.params?.versions || []) {
+              if (String(v.scriptURL || "").includes(report.env.extensionId)) versions.push(v.versionId);
+            }
+          }
+        });
+        await cdp.send("ServiceWorker.enable");
+        await sleep(800);
+        if (versions.length) {
+          const r = await cdp.send("ServiceWorker.stopWorker", { versionId: versions[versions.length - 1] });
+          ctx.swSessionId = null;
+          return { ok: true, method: "ServiceWorker.stopWorker", versionId: versions[versions.length - 1], result: r ?? null, attempts };
+        }
+        attempts.push({ method: "ServiceWorker.stopWorker", error: "no versionId" });
+      } catch (error) {
+        attempts.push({ method: "ServiceWorker.stopWorker", error: String(error?.message || error), code: error?.code ?? null });
+      }
+      // (c) 关闭 SW target
+      try {
+        const targets = await cdp.targets();
+        const sw = targets.find((t) => t.type === "service_worker" && String(t.url || "").includes(report.env.extensionId));
+        if (!sw) throw new Error("service worker target not found");
+        await cdp.send("Target.closeTarget", { targetId: sw.targetId });
+        ctx.swSessionId = null;
+        return { ok: true, method: "Target.closeTarget", targetId: sw.targetId, attempts };
+      } catch (error) {
+        attempts.push({ method: "Target.closeTarget", error: String(error?.message || error), code: error?.code ?? null });
+      }
+      return { ok: false, error: "all stop methods failed", attempts };
+    },
+    async waitForServiceWorker(timeoutMs = 30000) {
+      const cdp = await ctx.cdp();
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const targets = await cdp.targets().catch(() => []);
+        const sw = targets.find((t) => t.type === "service_worker" && String(t.url || "").includes(report.env.extensionId));
+        if (sw) return sw;
+        await sleep(300);
+      }
+      return null;
+    },
+    /** SW 重启后 native host 会以新 PID/port 重连；刷新 host 客户端。 */
+    async refreshHostClient(timeoutMs = 45000) {
+      const oldPid = ctx.hostSession?.pid;
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        const sessions = readSessions(localAppData).filter((sn) => pidAlive(sn.pid) && sn.pid !== oldPid);
+        for (const sn of sessions) {
+          const r = await tcpRequest(sn.port, sn.authToken, "e2e-a", "ping", {}, { timeoutMs: 2000 }).catch(() => null);
+          if (r && r.ok === true && r.data && r.data.pong === true) {
+            ctx.client = new HostClient(sn, "e2e-a");
+            ctx.clientB = new HostClient(sn, "e2e-b");
+            ctx.hostSession = sn;
+            return { ok: true, session: { port: sn.port, pid: sn.pid } };
+          }
+        }
+        await sleep(300);
+      }
+      return { ok: false };
+    },
+    /** 重新绑定一个已存在窗口（用于冷启动 show 的可见窗口）。 */
+    registerWindow(key, hwnd, widgetHwnd, rect, title) {
+      ctx.windows[key] = { hwnd, widgetHwnd: widgetHwnd || null, rect: rect || null, title };
+      return ctx.windows[key];
+    },
     async extensionDebuggerTargets() {
       const popup = await ctx.ensurePopup();
       const cdp = await ctx.cdp();
@@ -2884,21 +3342,22 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     },
     /** 内核 API 是否真的能从扩展 JS 调用（binding 是否被安装）。 */
     async kernelApiReady() {
-      let popup;
+      let apiCtx;
       try {
-        popup = await ctx.ensurePopup();
+        apiCtx = await ctx.ensureApiContext();
       } catch (error) {
         return {
           ok: false,
           blocked: {
             code: "extension-page-unreachable",
-            deps: ["受信扩展页面（chrome-extension://<id>/popup/index.html）可打开"],
-            reason: "无法打开/附加受信扩展页面：" + String(error?.message || error),
+            deps: ["受信扩展上下文（popup 页面或 service worker）可附加"],
+            reason: "无法附加受信扩展上下文：" + String(error?.message || error),
           },
         };
       }
-      if (popup.probe?.api === true && Array.isArray(popup.probe?.io) && popup.probe.io.includes("setOwnership") && popup.probe.io.includes("grantInput")) {
-        return { ok: true, popup };
+      const io = apiCtx.probe?.io;
+      if (apiCtx.probe?.api === true && Array.isArray(io) && io.includes("setOwnership") && io.includes("grantInput")) {
+        return { ok: true, popup: apiCtx, apiContext: apiCtx };
       }
       return {
         ok: false,
@@ -2907,7 +3366,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
           deps: ["patch 029 修订：让 chrome.browserCli.inputOwnership 成为可安装的顶层 namespace（避免与父 feature browserCli 的层级冲突，或调整 feature_cache 的父子判定）"],
           reason:
             "chrome.browserCli 存在，但 chrome.browserCli.inputOwnership 在任何扩展 JS 上下文里都不存在" +
-            "（popup 页面 keys=" + JSON.stringify(popup.probe?.io) + "，service worker 同样缺失）。" +
+            "（上下文=" + String(apiCtx?.kind) + "，keys=" + JSON.stringify(io) + "）。" +
             "根因（旧命名空间 browserCli.inputOwnership）：feature 名有同名前缀的父 feature \"browserCli\"；" +
             "extensions/renderer/feature_cache.cc 跳过所有“父 feature 存在”的条目，因此该 namespace 从未被安装为 " +
             "BindingAccessor。已排除 switch 未转发/feature 未启用（renderer 命令行两者都在）。content 单测不覆盖 renderer 侧暴露。",
@@ -2916,6 +3375,25 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     },
     async rendererEvidence() {
       return childProcessCommandLineEvidence(chrome?.record?.pid);
+    },
+    /** 未跟踪窗口（无扩展心跳）中的一次鼠标 click（popup 直接 chrome.debugger）。 */
+    async kernelMouseClick(state) {
+      const x = Math.round((state.rects.btn.x + state.rects.btn.w / 2) * (Number(state.viewport.dpr) || 1));
+      const y = Math.round((state.rects.btn.y + state.rects.btn.h / 2) * (Number(state.viewport.dpr) || 1));
+      const press = await ctx.popupDebuggerSend(state.tabId, "Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", buttons: 1, clickCount: 1 });
+      const release = await ctx.popupDebuggerSend(state.tabId, "Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", buttons: 0, clickCount: 1 });
+      return { press, release, rejected: press.ok === false, error: press.lastError || press.error || null, x, y };
+    },
+    async bumpModeOnTab(tabId, mode) {
+      const before = await ctx.apiCall("getOwnership", { target: { tabId } });
+      const current = Number(before?.result?.version ?? 0);
+      const version = current + 1;
+      const raw = await ctx.apiCall("setOwnership", { target: { tabId }, mode, version });
+      return { version, previousVersion: current, before, bumped: raw, accepted: raw?.result?.accepted === true };
+    },
+    async kernelSnapshotOnTab(tabId) {
+      const raw = await ctx.apiCall("getOwnership", { target: { tabId } });
+      return { tabId, raw, snapshot: raw?.result || null, lastError: raw?.lastError || null };
     },
     async kernelSnapshot(spaceKey) {
       const tabId = ctx.spaces[spaceKey].tabId;
@@ -3026,15 +3504,18 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       matches: !!hostExeActual && path.resolve(hostExeActual).toLowerCase() === path.resolve(report.env.hostExe).toLowerCase(),
     };
     mustCheck("[" + label + "] connectNative 拉起本次构建的 host exe", sessionReport.host.matches, JSON.stringify(sessionReport.host));
+    ctx.hostSession = hostSession;
     ctx.client = new HostClient(hostSession, "e2e-a");
     ctx.clientB = new HostClient(hostSession, "e2e-b");
     const ping = await ctx.client.call("ping");
     mustCheck("[" + label + "] host ping=pong", ping?.pong === true, JSON.stringify(ping));
 
     sessionReport.boot = { args };
-    await openSpace("main", "main", servers.mainOrigin + "/main?token=" + token + "-main");
-    await openSpace("oopif", "oopif", servers.mainOrigin + "/oopif?token=" + token + "-oopif&frame=" + encodeURIComponent(servers.frameOrigin + "/frame.html"));
-    await openSpace("multi", "multi", servers.mainOrigin + "/multi?token=" + token + "-multi");
+    if (feature !== "on-visible") {
+      await openSpace("main", "main", servers.mainOrigin + "/main?token=" + token + "-main");
+      await openSpace("oopif", "oopif", servers.mainOrigin + "/oopif?token=" + token + "-oopif&frame=" + encodeURIComponent(servers.frameOrigin + "/frame.html"));
+      await openSpace("multi", "multi", servers.mainOrigin + "/multi?token=" + token + "-multi");
+    }
     sessionReport.spaceSummary = Object.fromEntries(
       Object.entries(ctx.spaces).map(([k, v]) => [k, { spaceId: v.spaceId, tabId: v.tabId, windowId: v.windowId, url: v.url }]),
     );

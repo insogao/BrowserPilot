@@ -12,14 +12,20 @@ scope: P3 输入权（Input Ownership）真实 Browser/OOPIF E2E：用例矩阵�
 > + `tests/fixtures/input-arbitration-frame.html`。
 > 设计依据：`docs/input-ownership-design-2026-10-28.md` §11（审核决定）、§12（扩展侧）、§13（内核侧）。
 >
-> **结论（patch 029 最终构建）**：可跑的 **24 个用例全部实跑通过（118/118 checks，0 failed）**；
-> **K0–K3 全部 PASS**（顶层 `chrome.browserCliInputOwnership` 可用；HUMAN 模式、版本语义、
-> Runtime.evaluate 边界、grant 生命周期、跨 CDP session 隔离全部实测）；
-> **K4 blocked**：managed hidden 窗口无法注入人类输入，presence/pause 无法验证（§6.10）；
-> A1–A3（扩展命令层用户入口）与 S5（真实 IME）仍按原依赖 blocked。
-> 另有 1 个 **P0 单独记录**：managed hidden 产品截图失败（§6.9，与输入仲裁无关）。
-> verdict 是 **PARTIAL**，不是 PASS；blocked/P0 项没有用任何方式伪造通过。
-
+> **结论（最终，含 N 的 popup 用户入口）**：
+> - **A1–A3 PASS**：真实 popup 用户入口（`#space-select` / `#grant-input` / `sendMessage`）驱动
+>   `human_presence`/`grant_input`；ASSIST 无 grant 拒绝、授权一次成功一条命令、第二条拒绝、
+>   新 presence 清 grant、handoff 清 assist、60s 过期全部实测。
+> - **K0–K3 PASS**（未跟踪窗口，不受扩展自动同步干扰）：API 可用性、HUMAN 模式与版本语义、
+>   grant 一次性消费/TTL/用尽/scope/cancel/session detach、跨 CDP session 隔离。
+> - **R1/R2 PASS**（连续 5 次）：SW 重启后 API 重探/版本不回退/heartbeat 重放/输入恢复；
+>   30s 无心跳 → stale=true/effective ASSIST/输入被拒 → heartbeat 恢复。
+> - **K4 BLOCKED**：冷启动 `--browser-cli-user-explicit-show` 仍创建 hidden 窗口
+>   （`visible=false`），无法注入人类输入（§6.10）。**S5 BLOCKED**（真实 IME）。
+> - **F3 P0 稳定复现 3/3**：managed hidden 产品 screenshot 失败（原始 CDP fromSurface=true 成功）。
+> - 扩展现在会自动 `setOwnership(ai)` + 10s heartbeat 同步其 Task Space；任何“在 tracked tab
+>   上直接改内核 mode”的测试都会被拉回 ai —— K0–K3 因此改用未跟踪窗口（§10）。
+> verdict 只在无 blocked/无 P0 时为 PASS；本轮最终为 **PARTIAL**，blocked/P0 未伪造。
 ---
 
 ## 0. 一句话结论
@@ -65,7 +71,9 @@ node scripts/test-input-arbitration-e2e.mjs --no-build
 # 按阶段 / 按 Feature 过滤
 node scripts/test-input-arbitration-e2e.mjs --stage=human,takeover,shapes --feature=off
 node scripts/test-input-arbitration-e2e.mjs --stage=kernel --feature=on --no-build
-node scripts/test-input-arbitration-e2e.mjs --stage=assist --feature=off --no-build
+node scripts/test-input-arbitration-e2e.mjs --stage=assist --feature=on --no-build
+node scripts/test-input-arbitration-e2e.mjs --stage=resilience --feature=on --no-build
+node scripts/test-input-arbitration-e2e.mjs --stage=baseline --feature=on --no-build
 node scripts/test-input-arbitration-e2e.mjs --stage=baseline --no-build
 
 # 失败时保留浏览器进程（仍会清理 host 与注册表）
@@ -131,9 +139,9 @@ server。HUMAN 模式下扩展会拒绝 `js`/`tab_cdp_call`，因此 HUMAN/Featu
 | H2 | human | off | **PASS** | HUMAN 下人类鼠标/键盘不被锁；AI 仍被拒 | 人类点击 clicks 1→2（`isTrusted=true`）；键盘输入值 `humankeyboard`；AI click 仍 `INPUT_HUMAN_OWNED` |
 | H3 | human | off | **PASS** | `claim_space` 后恢复 AI 输入 | mode `human→ai`；AI click 落地 |
 | H4 | takeover | off | **PASS** | AI 逐字输入期间注入人类点击；显式接管后 AI 立刻被拒、人类仍可用 | type 成功；人类点击 +1；handoff 后 AI click `INPUT_HUMAN_OWNED`、人类点击再 +1 |
-| A1 | assist | - | **BLOCKED** | ASSIST 无 grant 全部拒绝（扩展命令层） | 依赖：产品级 `human_presence` / `grant_input` 入口（`markInternalCommand`） |
-| A2 | assist | - | **BLOCKED** | grant 按命令消费 1 次 | 同上 |
-| A3 | assist | - | **BLOCKED** | grant 过期 / 用尽 / 取消 / ownership 变更 | 同上 |
+| A1 | assist | on | **PASS** | popup 用户入口：human_presence + #grant-input | ASSIST 进入且 ownership=agent；无 grant `INPUT_ASSIST_REQUIRES_GRANT`；按钮授权后 click 落地、第二条拒绝（31/31 checks 本阶段） |
+| A2 | assist | on | **PASS** | popup sendMessage grant_input 一次性消费 | 无 grant 拒绝、grant actions=1、click 落地、消费后无可用 grant、第二条拒绝 |
+| A3 | assist | on | **PASS** | 取消 / ownership 变更 / 60s 过期 | 新 presence 清 grant、handoff 后 `INPUT_HUMAN_OWNED`、60s 后 `INPUT_ASSIST_REQUIRES_GRANT` |
 | A4 | assist | off | **PASS** | 第二个 Agent 客户端不能复用他人 space/grant | `click` 与 `input_status` 均 `SPACE_NOT_OWNED`；DOM 不变 |
 | S1 | shapes | off | **PASS** | 连续文本 type / fill（含中文） | `hello world` + `中文填充-输入仲裁`；input 事件递增 |
 | S2 | shapes | off | **PASS** | 拖拽（多 move + release） | 产品 drag：down1/move1/up1/dstUp1；显式 buttons:1 序列：moves 1→5、movesDown 0→4、dstUp 1→2 |
@@ -151,11 +159,13 @@ server。HUMAN 模式下扩展会拒绝 `js`/`tab_cdp_call`，因此 HUMAN/Featu
 | F1 | baseline | off | **PASS** | Feature off：完整 AI 输入序列全部落地 | click/hover/wheel/key/insertText/js 全成功；clicks+1、wheel 事件+1、jsRuns+1 |
 | F2 | baseline | on | **PASS** | Feature on：所有 CDP `Input.*` 被显式拒绝；`Runtime.evaluate` 仍可改 DOM | 7/7 `-32000`；DOM 不变；`#count=js-touched` |
 | F3 | baseline | on | **PASS** | Feature on：11 个输入命令 fail-fast；非输入命令可用；截图 P0 单列 | 11/11 失败且错误可识别；`list_tabs`/`input_status` 可用；产品截图失败→P0 |
-| K0 | kernel | on | **PASS** | 生产 API 可用性 + managed 窗口检查 | `chrome.browserCliInputOwnership` 存在（setOwnership/grantInput/...）；快照可读、version+1 推进被接受；managed 窗口 hidden 但 mode=ai 时 AI click 真实落地 |
-| K1 | kernel | on | **PASS** | 内核 HUMAN：setOwnership(human)、版本语义、Runtime.evaluate 边界 | human 接受；VERSION_CONFLICT/STALE_VERSION/version=0 拒绝；11 个输入命令 `-32000` 且 DOM 不变；`js` 可改 DOM；恢复 ai 后 click 落地 |
-| K2 | kernel | on | **PASS** | 内核 ASSIST：无 grant、一次性消费、TTL、用尽、scope/取消、session detach | 17/17 checks：未 attach→`NO_DEBUGGER_SESSION`（预期）；attach 后 grant granted；click#1 成功、#2 拒绝；TTL 拒绝；scope 内成功、结束后拒绝；cancel 退款；detach 后拒绝；重新 grant 成功 |
-| K3 | kernel | on | **PASS** | 跨 CDP session 不得复用 grant | 7/7 checks：第二个并发 CDP 会话注入被 `-32000` 拒绝且 DOM 不变；扩展会话重新 grant 后可输入；mode/version 不变 |
-| K4 | kernel | on | **BLOCKED** | human_presence 事件桥 + 1s human pause | listener 注册 + setOwnership(assist) PASS；managed hidden 下人类输入无法注入 → 事件/pause 未验证（§6.10） |
+| K0 | kernel | on | **PASS** | 内核 API + 未跟踪窗口 AI 投递 | API 上下文（SW）可用；快照可读；version+1 被接受；mode=ai 时 click 落地 |
+| K1 | kernel | on | **PASS** | 内核 HUMAN + 版本语义 + Runtime.evaluate 边界 | human 接受；同版本改 mode VERSION_CONFLICT；v-1 STALE_VERSION；v=0 绑定拒绝；mouse/key/insertText 全 `-32000`；DOM 不变；debugger Runtime.evaluate 可改 DOM；恢复 ai 后 click 落地 |
+| K2 | kernel | on | **PASS** | 内核 ASSIST（未跟踪窗口） | 无 grant 拒绝；grant#1 后第 1 条成功、第 2 条拒绝；TTL 150ms 拒绝；scope 内成功、end 后拒绝；cancel 退款；detach/reattach 后拒绝；重新 grant 成功；mode 保持 assist |
+| K3 | kernel | on | **PASS** | 跨 CDP session（未跟踪窗口） | 第二个并发 CDP 会话输入 `-32000` 且 DOM 不变；扩展会话 grant 未被消耗；mode/version 不变 |
+| K4 | kernel | on-visible | **BLOCKED** | human_presence 事件桥 + 1s pause | 冷启动 `--browser-cli-user-explicit-show` 后唯一窗口 `visible=false`（RAW 状态见 §6.10）；未用第二次 show/外部强制显示 |
+| R1 | resilience | on | **PASS** | SW 重启恢复 | stopAllWorkers → SW 重探 API、host 新 session 重连、version 不回退、heartbeat/setOwnership 被接受、AI 输入恢复（5 次连续 PASS） |
+| R2 | resilience | on | **PASS** | 30s 心跳失联 | 未跟踪窗口无心跳：31.5s 后 stale=true/mode=ai、输入 `-32000` 拒绝；heartbeat 后 stale=false、输入恢复（5 次连续 PASS） |
 
 **最终汇总**：执行 24（PASS 24 / FAIL 0），blocked 5（A1–A3、S5、K4），checks 118/118，
 `verdict=PARTIAL`（仅因 blocked + screenshot P0）。本轮报告：
@@ -169,12 +179,11 @@ server。HUMAN 模式下扩展会拒绝 `js`/`tab_cdp_call`，因此 HUMAN/Featu
 
 | code | 用例 | 依赖 | 解锁后需要补的断言 |
 | --- | --- | --- | --- |
-| `assist-internal-entry-missing` | A1–A3 | 产品级「用户入口」：popup 操作或内核 `onHumanPresence` 事件桥，能在 SW 内用 `markInternalCommand()` 发 `grant_input` / `human_presence` | ASSIST 无 grant 拒绝、grant 一次成功二次拒绝、过期/用尽/取消后拒绝 |
-| `managed-human-input-unavailable` | K4 | 真实 OS 输入或可显示的 managed 窗口 | onHumanPresence 事件、1s human pause、pause 不消耗 grant |
+| `managed-visible-show-failed` | K4 | 内核/产品修复用户显式 show 的呈现（冷启动创建窗口后 `Show/Activate` 仍 `visible=false`） | human_presence 事件、1s pause、pause 不消耗 grant |
 | `real-ime-not-automatable` | S5 | 真实 TSF/搜狗 + 系统输入法状态 | 真实组合输入（候选窗、上屏）路径下 AI 输入仍被仲裁 |
 
-K1–K4 的代码已经写好并在 `kernelApiReady()` 通过后会完整执行；当前 `kernelApiReady()` 在
-popup/SW 都拿不到 `inputOwnership` 时直接 `markBlocked`，不会把失败算成 PASS 或 FAIL。
+A1–A3 已由 N 的 popup 用户入口解锁并 PASS；K0–K3 已由 patch 029 的 API + 未跟踪窗口
+设计解锁并 PASS；R1/R2 已 PASS。
 
 ## 6. 新发现 / 风险
 
@@ -297,3 +306,45 @@ node scripts/test-input-arbitration-e2e.mjs --stage=assist --feature=off --no-bu
 | Feature 关闭行为不变 | F1、全部 off 用例 |
 | 多窗口/前台隔离 | M1–M3 |
 | 生产 API（patch 029） | K0–K3 PASS（HUMAN/版本/grant 生命周期/跨会话）；K4 被 managed hidden 人类输入阻塞（§6.10） |
+
+## 10. 稳定性分析（K/A/R 抖动根因）
+
+### 10.1 最近运行分布
+
+| 时间 | 阶段 | 结果 | 说明 |
+| --- | --- | --- | --- |
+| 10:26 | assist（on） | 31/31 PASS | A1–A3 首次通过真实 popup 入口 |
+| 10:32–10:34 | resilience（on） | R1 PASS，R2 BLOCKED/FAIL | R2 旧方案：SW 停不掉 / popup attach 冲突 / SW 自动重启立即重放 |
+| 10:35 | resilience（on） | 32/32 PASS | R2 改为“未跟踪窗口”（无扩展心跳） |
+| 10:36 | kernel（on-visible） | K4 BLOCKED | 冷启动 show 创建窗口但 `visible=false` |
+| 10:49 | shapes/oopif/multi/baseline/kernel/resilience（on） | 81/87 | **K2 FAIL×6**：旧 K2 在 tracked tab 上改内核 mode，被扩展 10s heartbeat 拉回 ai；S6/O4/M3/F2/F3/R1/R2/K0/K1/K3 PASS |
+| 10:51:02 | kernel（on） | 52/53 | **K1 FAIL**：`version-1=0` 被绑定 schema（minimum 1）拒绝，没进内核 |
+| 10:51:30 | kernel（on） | 52/53 | 同上（修复前） |
+| 10:51:59 | kernel（on） | **53/53 PASS** | K1 先推进到 v1 再切 human；K0–K3 全 PASS |
+| 10:52:56 + 3 次重复 | resilience（on） | **32/32 PASS ×4** | 未跟踪窗口 stale 语义连续 4 次通过 |
+| 10:56–10:57 | baseline（on）×3 | 20/20、19/20、20/20 | F3 P0（产品截图）**3/3 复现**；唯一失败是 F2 的 beacon 读早了一拍（已改 `waitState`） |
+| 修复后 | baseline（on） | 20/20 PASS（P0 仍记录） | F2 beacon race 已消除 |
+
+### 10.2 flaky 归类与修复
+
+| 用例 | 失败现象 | 归类 | 修复 |
+| --- | --- | --- | --- |
+| K2（旧实现） | TTL 后 click 仍成功、`endInputCommand` UNKNOWN_COMMAND、结束时 mode=ai/version 3 | **测试干扰**：扩展客户端每 10s `setOwnership(ai)`/heartbeat 同步它自己的 Task Space，覆盖了测试直接写入的 ASSIST（产品行为，非竞态） | K0–K3 改用**未跟踪窗口**（不在 `state.spaces`，没有扩展心跳）；不再依赖 tracked tab |
+| K1 | `version-1=0` → 绑定层 `Value must be at least 1`，不是 `STALE_VERSION` | **测试 bug** | 先 `setOwnership(ai)` 到 v1，再切 human 到 v2；stale 用 v1；v0 单独断言绑定层拒绝 |
+| R1 | “SW 新 target”断言失败（Chrome 复用 targetId） | **测试断言过严** | 改为“SW target 存在 + 新 host session + version 不回退 + heartbeat/setOwnership/输入恢复” |
+| R2（旧方案） | stopAllWorkers 不存在 / popup attach 冲突 / SW 自动重启重放 | **测试环境不可控**（不是产品 stale 失败） | 用未跟踪窗口制造“无心跳目标”，不依赖停 SW；稳定 4 次 |
+| F2 | `Runtime.evaluate` 检查偶发失败 | **beacon 读早一拍**（200ms 周期） | 改用 `waitState(countText==='js-touched')` |
+| F3 | 产品截图失败 | **产品 P0（稳定）** | 3/3 复现：产品 screenshot 失败，原始 CDP `fromSurface=true` 成功；P0 保留 |
+
+### 10.3 结论
+
+- 未观察到**产品 version/stale/session 竞态**：在未跟踪目标上，30s stale、grant 生命周期、
+  跨会话隔离、SW 重启恢复均连续多次稳定通过。
+- 抖动全部来自 **测试与产品自动同步的相互干扰**、**测试断言/时序** 或 **测试环境副作用**，
+  已逐项修复。
+- 仍未验证：A1–A3 在当前最终 harness 上只跑过 1 次（10:26，31/31）；其调用路径
+  （popup `sendMessage` + `#grant-input`）在之后的改动中没有变化，但严格说样本数 1。
+- K4 的冷启动 show 证据：窗口 `36376234`（标题“新标签页 - Chromium”）`visible=false`；
+  producer 日志：`human-ownership-granted` → `decision=allow action=show-and-activate` →
+  `result=failed reason=created-window-presentation-denied`。即策略层允许，但创建窗口的
+  呈现被 host 拒绝（与 §6.10 一致）。
