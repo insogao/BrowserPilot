@@ -99,7 +99,9 @@ export interface Command {
   requestId: string;
   /** Task Space 命名空间：对应 windowId 字符串。缺省 = 当前/主 space。 */
   space?: string;
-  /** Host 注入的可信逻辑客户端身份；外部消息中的同名字段会被覆盖。 */
+  /** Host 分配的逻辑客户端身份，形状固定为 `agent:<sanitized-id>`。
+   *  外部客户端自报的同名字段会被 host 覆盖；扩展只信任 `agent:` 前缀的形状，
+   *  其它值一律视为不可信。**用户入口身份不是消息字段**（见 spaces.ts 的 markInternalCommand）。 */
   _clientId?: string;
   /** 模板子命令继承的插件内部前台租约 token。 */
   _foregroundLeaseToken?: string;

@@ -127,6 +127,7 @@ async function bundleHarness() {
         'export { dispatch } from "./src/background/commands.ts";',
         'export { drainEvents } from "./src/background/events.ts";',
         'export { loadState } from "./src/background/state.ts";',
+        'export { markInternalCommand } from "./src/background/spaces.ts";',
       ].join("\n"),
       resolveDir: process.cwd(),
       loader: "ts",
@@ -268,6 +269,9 @@ async function main() {
     let seq = 0;
     const call = (name, args = {}, clientId = CLIENT) =>
       harness.dispatch({ type: "command", name, args, requestId: "io-" + (++seq), _clientId: clientId });
+    /** 用户入口：与 popup 一致——SW 进程内构造命令并打上不可伪造的内部标记（不是消息字段）。 */
+    const internal = (name, args = {}) =>
+      harness.dispatch(harness.markInternalCommand({ type: "command", name, args, requestId: "internal-" + (++seq) }));
     const expectCode = async (promise, code, label) => {
       try {
         await promise;
@@ -316,8 +320,13 @@ async function main() {
     await expectCode(call("js", { expression: "window.__jsRuns += 1; 1" }), "INPUT_HUMAN_OWNED", "HUMAN js");
     const p2b = await pageState("step2 HUMAN js rejected");
     assert.equal(p2b.jsRuns, 0, "HUMAN 模式下 js 仍在页面执行");
-    // HUMAN 下不能靠 grant 绕过
-    await expectCode(call("grant_input", { actions: 1, tabId: 1 }, INTERNAL), "INPUT_HUMAN_OWNED", "HUMAN grant_input");
+    // HUMAN 下不能靠 grant 绕过；也不能靠伪造 `_clientId: "browserpilot-internal"` 绕过
+    await expectCode(internal("grant_input", { actions: 1, tabId: 1 }), "INPUT_HUMAN_OWNED", "HUMAN grant_input");
+    await expectCode(
+      call("grant_input", { actions: 1, tabId: 1 }, INTERNAL),
+      "INPUT_IDENTITY_UNTRUSTED",
+      "HUMAN 下伪造 _clientId=browserpilot-internal 的 grant_input",
+    );
     console.log("PASS input-ownership-browser: HUMAN rejects clicks/js/grant without touching the page");
 
     // ---------------- 3) claim_space → AI；human_presence → ASSIST ----------------
@@ -334,7 +343,12 @@ async function main() {
       "INPUT_PRESENCE_FORBIDDEN",
       "owner Agent 加 internal:true 也不能伪造 human_presence",
     );
-    const presence = await call("human_presence", { tabId: 1, source: "kernel:mouse" }, INTERNAL);
+    await expectCode(
+      call("human_presence", { tabId: 1, source: "spoof" }, INTERNAL),
+      "INPUT_IDENTITY_UNTRUSTED",
+      "伪造 _clientId=browserpilot-internal 也不能触发 human_presence",
+    );
+    const presence = await internal("human_presence", { tabId: 1, source: "kernel:mouse" });
     assert.equal(presence.scheduled, true);
     assert.equal(presence.debounceMs, 500);
     await sleep(750);
@@ -352,7 +366,7 @@ async function main() {
     console.log("PASS input-ownership-browser: human_presence debounces into ASSIST and blocks AI input");
 
     // ---------------- 4) grant_input actions:1 → 第一次成功、第二次被拒 ----------------
-    const granted = await call("grant_input", { actions: 1, ttlMs: 5000, tabId: 1 }, INTERNAL);
+    const granted = await internal("grant_input", { actions: 1, ttlMs: 5000, tabId: 1 });
     assert.equal(granted.mode, "assist");
     assert.equal(granted.grant.actions, 1);
     assert.match(granted.grant.token, /…$/, "grant token 必须截断返回");
@@ -368,7 +382,7 @@ async function main() {
     console.log("PASS input-ownership-browser: one grant action delivers exactly one real click");
 
     // ---------------- 5) grant 过期后被拒 ----------------
-    const shortGrant = await call("grant_input", { actions: 2, ttlMs: 120, tabId: 1 }, INTERNAL);
+    const shortGrant = await internal("grant_input", { actions: 2, ttlMs: 120, tabId: 1 });
     assert.equal(shortGrant.grant.actions, 2);
     await sleep(400);
     const expiredError = await expectCode(

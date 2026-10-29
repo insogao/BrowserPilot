@@ -34,6 +34,7 @@
     "test:cursor:browser": "node scripts/test-virtual-cursor-browser.mjs",
     "test:input-ownership": "node scripts/test-input-ownership.mjs",
     "test:input-ownership:browser": "node scripts/test-input-ownership-browser.mjs",
+    "test:trust-boundary": "node scripts/test-trust-boundary.mjs",
     "test:live": "node native-host/test-live.mjs",
     "smoke:template": "node scripts/smoke-template.mjs",
     "browser:lease": "node scripts/browser-lease.mjs",
