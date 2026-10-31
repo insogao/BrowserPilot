@@ -57,8 +57,11 @@ EgoLite 是 Electron 桌面浏览器：
 ## 落地
 
 - `D:\work\BrowserPilot\manual-browser.cmd` 已改为正常模式：
-  持久 profile `.manual-profile-normal`、`--load-extension`、`--in-process-gpu`、
-  `--disable-direct-composition`，**无** managed/user-explicit/remote-debugging 参数。
+  持久 profile `.manual-profile-normal`、`--load-extension`，**无**
+  `--in-process-gpu`、`--disable-direct-composition`、managed/user-explicit/remote-debugging 参数。
+- 前提是 browser-cli PR #1 的 `disable_fieldtrial_testing_config=true` 构建（commit
+  `fc5e294`）。该配置阻止非 branded 构建自动启用 ACG，避免 Sogou Xbyak 在 TSF 初始化时
+  被拒绝后 ExitProcess(3)。
 - 正常窗口实测：百度搜索 `Browser CLI Chromium` 有结果，`navigator.webdriver=false`；
   财经网站 tab 均加载。
 - 新增 `scripts/check-normal-launch.mjs` 静态门禁：正常启动器出现
@@ -71,5 +74,8 @@ EgoLite 是 Electron 桌面浏览器：
   的，不能用指纹伪造规避。
 - 生产安装器/快捷方式需要确认不携带 `--remote-debugging-port=0`；正常产品启动不应
   为了调试方便而牺牲用户体验。
-- `--in-process-gpu --disable-direct-composition` 是本 dev build 的渲染兼容组合；正式
-  发布应修复 GPU 进程/KILLED_BAD_MESSAGE 后再去掉这个临时组合。
+- 正常模式已使用默认 GPU 进程 + DirectComposition。WGC 彩色页验证（bcli-gpuproc）显示
+  9 色块/文字/动画正常；`--disable-direct-composition` 只会把 DComp 黑屏变成空白白屏，
+  不是修复，已从启动器移除。
+- 若使用旧构建（无 `disable_fieldtrial_testing_config`），普通模式仍会 ExitProcess(3)；
+  CI/安装器必须断言构建配置，而不是在启动器加回 `--in-process-gpu`。
