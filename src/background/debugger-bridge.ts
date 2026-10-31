@@ -9,10 +9,39 @@ const attached = new Set<number>();
 type EventHandler = (tabId: number, method: string, params: unknown) => void;
 let eventHandler: EventHandler | null = null;
 
+interface EventWaiter {
+  tabId: number;
+  method: string;
+  resolve: (params: unknown) => void;
+  reject: (error: Error) => void;
+  timer: number;
+}
+
+const eventWaiters = new Set<EventWaiter>();
+
+function settleEventWaiters(tabId: number, method: string, params: unknown): void {
+  for (const waiter of [...eventWaiters]) {
+    if (waiter.tabId !== tabId || waiter.method !== method) continue;
+    clearTimeout(waiter.timer);
+    eventWaiters.delete(waiter);
+    waiter.resolve(params);
+  }
+}
+
+function rejectEventWaiters(tabId: number, reason: string): void {
+  for (const waiter of [...eventWaiters]) {
+    if (waiter.tabId !== tabId) continue;
+    clearTimeout(waiter.timer);
+    eventWaiters.delete(waiter);
+    waiter.reject(new Error(reason));
+  }
+}
+
 chrome.debugger.onEvent.addListener((source, method, params) => {
   const tabId = source.tabId;
   if (tabId === undefined) return;
   recordEvent(method, { tabId, params });
+  settleEventWaiters(tabId, method, params);
   eventHandler?.(tabId, method, params);
 });
 
@@ -20,10 +49,36 @@ chrome.debugger.onDetach.addListener((source, reason) => {
   const tabId = source.tabId;
   if (tabId !== undefined) {
     attached.delete(tabId);
+    rejectEventWaiters(tabId, "debugger detached: " + reason);
     void syncAttachedState(tabId, false);
   }
   recordEvent("debugger.detach", { tabId, reason });
 });
+
+/**
+ * 等待某个 tab 的下一条 CDP 事件。用于单帧投屏：startScreencast 之后从事件流
+ * 取第一帧，而不是把事件混进全局游标。超时/断连都会 reject，调用方负责停止投屏。
+ */
+export function waitForDebuggerEvent(
+  tabId: number,
+  method: string,
+  timeoutMs: number
+): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const waiter: EventWaiter = {
+      tabId,
+      method,
+      resolve,
+      reject,
+      timer: 0,
+    };
+    waiter.timer = setTimeout(() => {
+      eventWaiters.delete(waiter);
+      reject(new Error(method + " 在 " + timeoutMs + "ms 内没有返回"));
+    }, timeoutMs) as unknown as number;
+    eventWaiters.add(waiter);
+  });
+}
 
 export function isAttached(tabId: number): boolean {
   return attached.has(tabId);

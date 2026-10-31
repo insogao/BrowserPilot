@@ -8,7 +8,7 @@ import { commandClientId } from "./spaces";
 import { acquireForegroundLease, deleteForegroundLeasesFor } from "./foreground-lease";
 import { resolveTargetTab } from "./tab-resolver";
 import { getL0Snapshot, readTextFromTab } from "./content-bridge";
-import { scrollCaptureScreenshot, ensureAttach, resetSurfaceCooldown } from "./cdp";
+import { scrollCaptureScreenshot, ensureAttach, resetSurfaceCooldown, surfaceCooldownStats, pendingScreenshotAttempts, screenshotCleanupStats } from "./cdp";
 import {
   captureScreenshotWithCursorPolicy,
   withCursorHiddenForCapture,
@@ -43,6 +43,24 @@ function getManifestVersion(): string {
   } catch {
     return "0.1.0";
   }
+}
+
+// 截图整次取帧预算。主路径 fromSurface 最多等 4s，超时后用单帧投屏兜底；
+// timeoutMs 只是放宽整次预算，主路径仍受 4s 上限保护（避免在已知会挂住的
+// copy request 上白等），上限防止调用方把请求无限挂住。
+const SCREENSHOT_TIMEOUT_MIN_MS = 1_000;
+const SCREENSHOT_TIMEOUT_MAX_MS = 120_000;
+
+function screenshotTimeoutArg(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const ms = Number(value);
+  if (!Number.isFinite(ms)) throw new Error("screenshot.timeoutMs 必须是数字");
+  if (ms < SCREENSHOT_TIMEOUT_MIN_MS || ms > SCREENSHOT_TIMEOUT_MAX_MS) {
+    throw new Error(
+      "screenshot.timeoutMs 必须在 " + SCREENSHOT_TIMEOUT_MIN_MS + ".." + SCREENSHOT_TIMEOUT_MAX_MS + "ms 之间",
+    );
+  }
+  return Math.round(ms);
 }
 
 const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
@@ -86,10 +104,12 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   // 默认先隐藏 AI 虚拟光标再截图（includeCursor=true 才显式包含）。
   screenshot: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
-    const args = (cmd.args ?? {}) as { format?: string; includeCursor?: boolean };
+    const args = (cmd.args ?? {}) as { format?: string; includeCursor?: boolean; timeoutMs?: number };
     const format = args.format ?? "png";
+    const timeoutMs = screenshotTimeoutArg(args.timeoutMs);
     const shot = await captureScreenshotWithCursorPolicy(tabId, format, {
       includeCursor: args.includeCursor === true,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
     return {
       tabId,
@@ -99,6 +119,22 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       possiblyStale: shot.meta.possiblyStale,
       ...(shot.meta.reason ? { reason: shot.meta.reason } : {}),
       cursorIncluded: shot.cursorIncluded,
+    };
+  },
+  // 截图管线只读诊断：冷却状态 / 仍在 pending 的底层请求 / 超时清理计数。
+  // 让外部测试与现场排障能区分「请求还挂着」和「产品已放弃」；resetCooldown
+  // 仅用于测试/显式恢复（等价于 ensure_visible 后的手动恢复）。
+  screenshot_diagnostics: async (cmd) => {
+    const args = (cmd.args ?? {}) as { tabId?: number; resetCooldown?: boolean };
+    let tabId: number | undefined;
+    if (args.tabId !== undefined) tabId = await resolveTargetTab(cmd);
+    if (tabId !== undefined && args.resetCooldown === true) resetSurfaceCooldown(tabId);
+    return {
+      tabId: tabId ?? null,
+      attachedTabs: listAttachedTabs(),
+      cooldowns: surfaceCooldownStats(),
+      pending: pendingScreenshotAttempts(tabId),
+      cleanup: screenshotCleanupStats(),
     };
   },
   scroll_screenshot: async (cmd) => {
@@ -494,7 +530,8 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `waitForURL` / `waitForSelector` / `waitForTimeout` | `{...}` | 等 URL/元素/时间 |",
     "| `wait_dom_idle` | `{idleMs?,timeoutMs?,selector?}` | 等 DOM 静默（MutationObserver）：AI 聊天流式输出结束后内容才停止变化；超时返回 idle:false |",
     "| `drainEvents` | `{after_sequence?, methods?, limit?}` | 拉取事件游标 `{events,cursor,hasMore}` |",
-    "| `screenshot` | `{format?, includeCursor?}` | 视口截图(返回 base64)；默认隐藏 AI 虚拟光标，`includeCursor:true` 才把光标画进图里 |",
+    "| `screenshot` | `{format?, includeCursor?, timeoutMs?}` | 视口截图(返回 base64 + screenshot.path/fromSurface/possiblyStale/reason)；默认隐藏 AI 虚拟光标，`includeCursor:true` 才把光标画进图里；fromSurface 主路径最多 4s，超时后单帧投屏兜底；`timeoutMs` 只放宽整次预算(1000..120000) |",
+    "| `screenshot_diagnostics` | `{tabId?, resetCooldown?}` | 截图管线诊断：合成器冷却状态 / pending 请求数 / 超时清理计数（只读；`resetCooldown:true` 仅测试/显式恢复用） |",
     "| `scroll_screenshot` | `{pages?, gap?, format?, includeCursor?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量；默认隐藏虚拟光标 |",
     "| `tab_cdp_call` | `{tabId?, method, params?}` | 任意底层 CDP 透传(如 Network.enable/Network.getResponseBody/Runtime.evaluate), 全权交给 AI/CLI |",
     "| `detach` | `{tabId?}` | 释放 chrome.debugger（不关标签）；下一次动作会自动重新 attach |",

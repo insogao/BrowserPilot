@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>shot-probe</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #101010; color: #e8e8e8;
+               font: 14px/1.5 Consolas, monospace; }
+  #wrap { padding: 10px; }
+  /* 24x24 纯色块把帧号编码成颜色：R=低字节, G=高字节, B=255。
+     截图后直接读这个像素即可得到 PNG 里的帧号，与 DOM __probe().rafCount 对比。 */
+  #marker { width: 24px; height: 24px; display: block; }
+  #c2d { border: 1px solid #444; display: block; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="idline">id=?</div>
+  <div id="raf">raf=0</div>
+  <div id="timer">timer=0</div>
+  <div id="vis">vis=?</div>
+  <div id="marker"></div>
+  <canvas id="c2d" width="320" height="120"></canvas>
+</div>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const probeId = q.get('id') || 'x';
+
+  const el = {
+    id: document.getElementById('idline'),
+    raf: document.getElementById('raf'),
+    timer: document.getElementById('timer'),
+    vis: document.getElementById('vis'),
+    marker: document.getElementById('marker'),
+    c2d: document.getElementById('c2d'),
+  };
+  const ctx2d = el.c2d.getContext('2d');
+
+  let rafCount = 0;
+  let timerCount = 0;
+  let lastRafTs = 0;
+
+  function markerColour(n) {
+    return [n & 0xff, (n >> 8) & 0xff, 255];
+  }
+
+  function paint() {
+    const [r, g, b] = markerColour(rafCount);
+    el.marker.style.background = `rgb(${r},${g},${b})`;
+    el.raf.textContent = `raf=${rafCount} at=${Math.round(lastRafTs)}`;
+    el.timer.textContent = `timer=${timerCount}`;
+    el.vis.textContent = `vis=${document.visibilityState} focus=${document.hasFocus()}`;
+    ctx2d.fillStyle = '#101010';
+    ctx2d.fillRect(0, 0, 320, 120);
+    ctx2d.fillStyle = `rgb(${r},${g},${b})`;
+    ctx2d.fillRect(0, 0, 320, 24);
+    ctx2d.fillStyle = '#2fa8ff';
+    ctx2d.fillRect(0, 40, ((rafCount * 7) % 320), 40);
+    ctx2d.fillStyle = '#e8e8e8';
+    ctx2d.font = '20px monospace';
+    ctx2d.fillText(String(rafCount), 8, 105);
+  }
+
+  function tick(ts) {
+    rafCount += 1;
+    lastRafTs = ts || performance.now();
+    paint();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+
+  setInterval(() => { timerCount += 1; paint(); }, 100);
+
+  document.addEventListener('visibilitychange', paint);
+
+  window.__probe = () => {
+    const px = ctx2d.getImageData(2, 3, 1, 1).data;
+    const mr = el.marker.getBoundingClientRect();
+    return {
+      id: probeId,
+      markerRect: { x: mr.x, y: mr.y, w: mr.width, h: mr.height },
+      dpr: window.devicePixelRatio || 1,
+      rafCount,
+      timerCount,
+      lastRafTs: Math.round(lastRafTs),
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
+      canvasMarker: Array.from(px),
+      title: document.title,
+    };
+  };
+
+  // 不依赖 rAF 的显式重绘：验证「DOM 刚改过」时下一张截图是否包含新内容。
+  window.__bump = (n = 1) => {
+    rafCount += n;
+    paint();
+    return rafCount;
+  };
+
+  document.title = 'shot-probe-' + probeId;
+  el.id.textContent = 'id=' + probeId;
+  paint();
+})();
+</script>
+</body>
+</html>
