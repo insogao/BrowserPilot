@@ -3,7 +3,6 @@
 // The tool never checks a website itself and never infers a login from cookie
 // counts. Only an explicit user action may mark a domain as verified; the CLI
 // requires both --confirm-user-action and --status user_confirmed.
-import fs from "node:fs";
 import path from "node:path";
 import { readJsonIfExists, writeJsonFile } from "./fs-safe.mjs";
 
@@ -16,7 +15,9 @@ export function readResult(bundleDir) {
   return { ok: true, result, resultPath };
 }
 
-export function recordLoginCheck({ bundleDir, domain, status, note = "", confirmUserAction = false }) {
+// Pure-ish helper shared by bundle results and cookie-import reports. Returns a
+// new result object; the caller decides where/whether to persist it.
+export function applyLoginCheck(result, { domain, status, note = "", confirmUserAction = false }) {
   if (!LOGIN_STATES.includes(status)) return { ok: false, error: "invalid-status" };
   if (!domain || typeof domain !== "string" || domain.length > 255) return { ok: false, error: "invalid-domain" };
   if (status === "user_confirmed" && !confirmUserAction) {
@@ -28,20 +29,18 @@ export function recordLoginCheck({ bundleDir, domain, status, note = "", confirm
         "opened the site in the target browser and confirmed the session.",
     };
   }
-  const read = readResult(bundleDir);
-  if (!read.ok) return read;
-  const result = read.result;
-  result.loginChecks = Array.isArray(result.loginChecks) ? result.loginChecks : [];
-  result.loginChecks.push({
+  const updated = JSON.parse(JSON.stringify(result));
+  updated.loginChecks = Array.isArray(updated.loginChecks) ? updated.loginChecks : [];
+  updated.loginChecks.push({
     domain,
     status,
     note: note ? String(note).slice(0, 500) : undefined,
     at: new Date().toISOString(),
     by: "user",
   });
-  const confirmed = result.loginChecks.filter((c) => c.status === "user_confirmed").length;
-  const failed = result.loginChecks.filter((c) => c.status === "failed").length;
-  result.loginVerified = {
+  const confirmed = updated.loginChecks.filter((c) => c.status === "user_confirmed").length;
+  const failed = updated.loginChecks.filter((c) => c.status === "failed").length;
+  updated.loginVerified = {
     status: confirmed > 0 ? (failed > 0 ? "partially_verified" : "user_confirmed") : failed > 0 ? "failed" : "not_verified",
     confirmedDomains: confirmed,
     failedDomains: failed,
@@ -49,8 +48,16 @@ export function recordLoginCheck({ bundleDir, domain, status, note = "", confirm
       "Only domains explicitly confirmed by the user are counted. 'Cookie imported' and 'data copied' are never " +
       "treated as proof of a working login.",
   };
-  writeJsonFile(read.resultPath, result);
-  return { ok: true, result, resultPath: read.resultPath };
+  return { ok: true, result: updated };
+}
+
+export function recordLoginCheck({ bundleDir, domain, status, note = "", confirmUserAction = false }) {
+  const read = readResult(bundleDir);
+  if (!read.ok) return read;
+  const applied = applyLoginCheck(read.result, { domain, status, note, confirmUserAction });
+  if (!applied.ok) return applied;
+  writeJsonFile(read.resultPath, applied.result);
+  return { ok: true, result: applied.result, resultPath: read.resultPath };
 }
 
 export function formatResult(result) {

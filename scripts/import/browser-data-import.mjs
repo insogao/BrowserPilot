@@ -5,16 +5,54 @@
 // Safety: read-only source access, no browser launching, no process killing,
 // no secret decryption, no cookie/password values in logs or bundles.
 import path from "node:path";
+import readline from "node:readline/promises";
 import { discoverProfiles, profileFromPath, browserById } from "./lib/browsers.mjs";
 import { inspectProfile } from "./lib/inventory.mjs";
 import { buildPlan, normalizeItems } from "./lib/plan.mjs";
 import { createBundle } from "./lib/export.mjs";
 import { applyBundle } from "./lib/apply.mjs";
 import { readResult, recordLoginCheck, formatResult } from "./lib/verify.mjs";
+import { listSources, findSource, formatSourceLine, cookieFlowReadiness } from "./lib/sources.mjs";
+import { TargetClient } from "./lib/target-client.mjs";
+import { createMemoryBackend, startLocalTarget } from "./target/local-target.mjs";
+import { createCdpBackend } from "./target/cdp-backend.mjs";
+import {
+  formatCapabilities,
+  formatInstructions,
+  formatProgressLine,
+  formatThreeState,
+  reloginGuidance,
+  waitForJob,
+  DEFAULT_WAIT_TIMEOUT_MS,
+} from "./lib/wizard.mjs";
+import {
+  createCookieImportReport,
+  writeCookieImportReport,
+  readReport,
+  confirmReportLogin,
+  formatCookieImportReport,
+} from "./lib/report.mjs";
 
-const HELP = `browser-data-import ${new Date().getFullYear()} MVP
+const HELP = `browser-data-import ${new Date().getFullYear()} MVP + cookie-import product flow
 
 Usage:
+  node scripts/import/browser-data-import.mjs sources [--json] [--root <browserId>=<path> ...]
+      List Chrome/Edge/Brave/Chromium/Firefox profiles and Cookie-import support.
+
+  node scripts/import/browser-data-import.mjs connect [--source <browserId:profileDir>]
+      [--endpoint http://127.0.0.1:<port> --pair <6 digits>]
+      [--port <port>] [--cdp-port <port> --allow-test-cdp]
+      [--report-dir <dir>] [--timeout-ms N] [--yes] [--json] [--root ...]
+      Start (or attach to) a loopback cookie-import target, guide the user
+      through the source extension, show progress, and write a count-only
+      report. Without --endpoint it starts the local contract target (test
+      only; memory backend unless --cdp-port is given).
+
+  node scripts/import/browser-data-import.mjs report --file <report.json> [--json]
+  node scripts/import/browser-data-import.mjs confirm-login --file <report.json>
+      --domain <domain> --status user_confirmed|failed [--note <text>]
+      [--confirm-user-action] [--json]
+
   node scripts/import/browser-data-import.mjs discover [--inspect] [--json]
       [--root <browserId>=<path> ...]
   node scripts/import/browser-data-import.mjs plan --source <browserId:profileDir>
@@ -42,11 +80,15 @@ Notes:
   - --root overrides the standard user-data root for a browser (repeatable).
     It is intended for tests and non-standard installs; fixtures live outside
     real browser profiles.
-  - This tool never launches, focuses, or kills a browser. It never reads or
-    decrypts cookie/password values. Cookie import is BLOCKED in this MVP and
-    requires the user-authorized extension bridge.
+  - Cookie values are never read or decrypted by this tool. The source
+    extension (extensions/import-source) reads them with chrome.cookies only
+    after explicit user consent; the local target is a test implementation of
+    the native Browser CLI contract.
+  - Three states are always separate: data copied, cookie imported, actual
+    login verified. The last one is only ever user-confirmed.
   - Exit codes: 0 ok, 2 usage/validation error, 3 blocked/precondition failure.
 `;
+
 
 function parseArgs(argv) {
   const args = { _: [], roots: {} };
@@ -84,6 +126,42 @@ function parseArgs(argv) {
         break;
       case "confirm-user-action":
         args.confirmUserAction = true;
+        break;
+      case "allow-test-cdp":
+        args.allowTestCdp = true;
+        break;
+      case "yes":
+        args.yes = true;
+        break;
+      case "endpoint":
+        args.endpoint = takeValue();
+        break;
+      case "pair":
+        args.pair = takeValue();
+        break;
+      case "port": {
+        const v = takeValue();
+        if (v === undefined || !/^\d+$/.test(v)) usageError("--port requires a non-negative integer");
+        args.port = Number(v);
+        break;
+      }
+      case "cdp-port": {
+        const v = takeValue();
+        if (v === undefined || !/^\d+$/.test(v)) usageError("--cdp-port requires a port number");
+        args.cdpPort = Number(v);
+        break;
+      }
+      case "report-dir":
+        args.reportDir = takeValue();
+        break;
+      case "timeout-ms": {
+        const v = takeValue();
+        if (v === undefined || !/^\d+$/.test(v)) usageError("--timeout-ms requires a number");
+        args.timeoutMs = Number(v);
+        break;
+      }
+      case "file":
+        args.file = takeValue();
         break;
       case "root": {
         const v = takeValue();
@@ -379,6 +457,288 @@ function cmdVerify(args) {
   return 0;
 }
 
+function cmdSources(args) {
+  const listing = listSources({ rootOverrides: args.roots });
+  if (args.json) {
+    printJson(listing);
+    return 0;
+  }
+  console.log(`Browser profiles on ${listing.platform}:`);
+  if (listing.sources.length === 0) console.log("  (no profiles found)");
+  listing.sources.forEach((source, index) => console.log(`  ${formatSourceLine(source, index + 1)}`));
+  for (const warning of listing.warnings) console.log(`warning: ${warning}`);
+  console.log("");
+  console.log("Cookie import support: Chrome/Edge = supported, Brave/Chromium = experimental, Firefox = unsupported.");
+  console.log("Picking a profile in `connect` is onboarding/guidance only: the source extension scans the profile it runs in.");
+  return 0;
+}
+
+function isInteractive(args) {
+  return !!(process.stdin.isTTY && process.stdout.isTTY) && !args.json;
+}
+
+async function chooseSourceInteractive(prompter, sources) {
+  if (sources.length === 0) throw usageError("no source profiles found (run sources)");
+  console.log("");
+  sources.forEach((source, index) => console.log(`  ${formatSourceLine(source, index + 1)}`));
+  const answer = (await prompter.question("选择来源 Profile 编号（q 取消）：")).trim();
+  if (!answer || answer.toLowerCase() === "q") return null;
+  const index = Number(answer);
+  if (Number.isInteger(index) && index >= 1 && index <= sources.length) return sources[index - 1];
+  const found = findSource(sources, answer);
+  if (!found) throw usageError(`source profile not found: ${answer} (run sources)`);
+  return found;
+}
+
+async function cmdConnect(args) {
+  const interactive = isInteractive(args);
+  const timeoutMs = Number.isFinite(args.timeoutMs) && args.timeoutMs > 0 ? args.timeoutMs : DEFAULT_WAIT_TIMEOUT_MS;
+  const startedAt = new Date().toISOString();
+  const listing = listSources({ rootOverrides: args.roots });
+  const prompter = interactive ? readline.createInterface({ input: process.stdin, output: process.stdout }) : null;
+  let localTarget = null;
+  try {
+    let source = null;
+    if (args.source) {
+      source = findSource(listing.sources, args.source);
+      if (!source) throw usageError(`source profile not found: ${args.source} (run sources)`);
+    } else if (interactive) {
+      source = await chooseSourceInteractive(prompter, listing.sources);
+    }
+    if (!source) {
+      if (interactive) {
+        console.log("已取消。");
+        return 0;
+      }
+      throw usageError("--source <browserId:profileDir> is required when stdin is not a TTY (run sources)");
+    }
+    const readiness = cookieFlowReadiness(source);
+    if (!readiness.ok) {
+      if (args.json) printJson({ ok: false, error: readiness.code, message: readiness.message });
+      else {
+        console.error(`source not usable: ${readiness.code}`);
+        if (readiness.message) console.error(readiness.message);
+      }
+      return 3;
+    }
+    if (!args.json) {
+      for (const warning of readiness.warnings) console.log(`warning: ${warning}`);
+    }
+    if (interactive && !args.yes) {
+      const answer = (
+        await prompter.question(`确认使用 ${source.browserName} / ${source.label} 作为来源 Profile? [y/N] `)
+      )
+        .trim()
+        .toLowerCase();
+      if (answer !== "y" && answer !== "yes") {
+        console.log("已取消。");
+        return 0;
+      }
+    }
+    const consentAt = new Date().toISOString();
+    let endpoint;
+    let pair;
+    let capabilities;
+
+    if (args.endpoint) {
+      if (!args.pair) throw usageError("--pair <6 digits> is required with --endpoint");
+      if (!/^\d{6}$/.test(String(args.pair))) throw usageError("--pair must be exactly 6 digits");
+      let client;
+      try {
+        client = new TargetClient({ endpoint: args.endpoint, pair: args.pair });
+      } catch (err) {
+        throw usageError(`invalid target: ${err.message}`);
+      }
+      capabilities = await client.capabilities();
+      if (!capabilities.ok) {
+        if (args.json) printJson({ ok: false, error: capabilities.error });
+        else console.error(`target unavailable: ${capabilities.error}`);
+        return 3;
+      }
+      endpoint = client.endpoint;
+      pair = args.pair;
+      return await runConnectLoop({
+        args,
+        source,
+        client,
+        capabilities,
+        endpoint,
+        pair,
+        startedAt,
+        consentAt,
+        timeoutMs,
+        interactive,
+        prompter,
+      });
+    }
+
+    if (args.cdpPort !== undefined && !args.allowTestCdp) {
+      throw usageError("--cdp-port requires --allow-test-cdp (test-only backend; use an isolated profile)");
+    }
+    if (args.cdpPort !== undefined && (!Number.isInteger(args.cdpPort) || args.cdpPort < 1 || args.cdpPort > 65535)) {
+      throw usageError("--cdp-port must be an integer between 1 and 65535");
+    }
+    if (args.port !== undefined && (!Number.isInteger(args.port) || args.port < 0 || args.port > 65535)) {
+      throw usageError("--port must be an integer between 0 and 65535");
+    }
+    const backend = args.cdpPort !== undefined ? createCdpBackend({ port: args.cdpPort }) : createMemoryBackend();
+    localTarget = startLocalTarget({
+      port: args.port !== undefined ? args.port : 0,
+      backend,
+      log: () => {},
+    });
+    await localTarget.listening;
+    const client = new TargetClient({ endpoint: localTarget.endpoint, pair: localTarget.pair });
+    capabilities = await client.capabilities();
+    if (!capabilities.ok) {
+      if (args.json) printJson({ ok: false, error: capabilities.error });
+      else console.error(`local target unavailable: ${capabilities.error}`);
+      return 3;
+    }
+    endpoint = client.endpoint;
+    pair = localTarget.pair;
+    return await runConnectLoop({
+      args,
+      source,
+      client,
+      capabilities,
+      endpoint,
+      pair,
+      startedAt,
+      consentAt,
+      timeoutMs,
+      interactive,
+      prompter,
+    });
+  } finally {
+    if (prompter) prompter.close();
+    if (localTarget) await localTarget.close();
+  }
+}
+
+async function runConnectLoop({
+  args,
+  source,
+  client,
+  capabilities,
+  endpoint,
+  pair,
+  startedAt,
+  consentAt,
+  timeoutMs,
+  interactive,
+  prompter,
+}) {
+  if (!args.json) {
+    console.log("");
+    console.log(formatCapabilities(capabilities));
+    console.log("");
+    console.log(formatInstructions({ source, endpoint, pair, native: capabilities.native }));
+  }
+  const controller = new AbortController();
+  const onSigint = () => controller.abort();
+  process.once("SIGINT", onSigint);
+  let currentJobId = null;
+  let afterJobId = null;
+  try {
+    for (;;) {
+      const wait = await waitForJob({
+        client,
+        afterJobId,
+        timeoutMs,
+        signal: controller.signal,
+        onProgress: (view) => {
+          currentJobId = view.jobId;
+          if (!args.json) console.log(formatProgressLine(view));
+        },
+      });
+      if (!wait.ok) {
+        if (wait.error === "cancelled-by-user") {
+          if (currentJobId) await client.cancel(currentJobId).catch(() => {});
+          if (args.json) printJson({ ok: false, error: "cancelled-by-user" });
+          else console.log("已取消当前导入任务；已写入的 Cookie 不会回滚。");
+          return 130;
+        }
+        if (wait.error === "timeout") {
+          const report = createCookieImportReport({
+            source,
+            target: capabilities,
+            view: null,
+            outcome: "timeout",
+            startedAt,
+            consentAt,
+          });
+          const written = writeCookieImportReport({ reportDir: args.reportDir, report });
+          if (args.json) printJson({ ok: false, error: "timeout", report, reportPath: written.path });
+          else {
+            console.log(`等待超时（${Math.round(timeoutMs / 1000)}s）。请确认扩展中的地址/配对码。`);
+            console.log(`report: ${written.path}`);
+          }
+          return 3;
+        }
+        if (args.json) printJson({ ok: false, error: wait.error });
+        else console.error(`import failed: ${wait.error}`);
+        return 3;
+      }
+      const view = wait.view;
+      currentJobId = view.jobId;
+      const report = createCookieImportReport({ source, target: capabilities, view, startedAt, consentAt });
+      const written = writeCookieImportReport({ reportDir: args.reportDir, report });
+      if (args.json) {
+        printJson({ ok: true, report, reportPath: written.path });
+      } else {
+        console.log("");
+        console.log(formatThreeState(view));
+        console.log("");
+        console.log(reloginGuidance(view));
+        console.log(`report: ${written.path}`);
+      }
+      if (!interactive) return 0;
+      const answer = (await prompter.question("按 r 等待扩展重试并重新发送，按 q 退出 [q]: ")).trim().toLowerCase();
+      if (answer !== "r") return 0;
+      afterJobId = view.jobId;
+      if (!args.json) console.log("等待来源扩展重新发送…");
+    }
+  } finally {
+    process.removeListener("SIGINT", onSigint);
+  }
+}
+
+function cmdReport(args) {
+  if (!args.file) throw usageError("--file <report.json> is required");
+  const read = readReport(args.file);
+  if (!read.ok) {
+    if (args.json) printJson(read);
+    else console.error(`report failed: ${read.error}`);
+    return 2;
+  }
+  if (args.json) printJson(read.report);
+  else if (read.report.kind === "cookie-import") console.log(formatCookieImportReport(read.report));
+  else console.log(formatResult(read.report));
+  return 0;
+}
+
+function cmdConfirmLogin(args) {
+  if (!args.file) throw usageError("--file <report.json> is required");
+  if (!args.domain) throw usageError("--domain <domain> is required");
+  if (!args.status) throw usageError("--status is required");
+  const res = confirmReportLogin({
+    reportPath: args.file,
+    domain: args.domain,
+    status: args.status,
+    note: args.note || "",
+    confirmUserAction: !!args.confirmUserAction,
+  });
+  if (!res.ok) {
+    if (args.json) printJson(res);
+    else console.error(`confirm-login failed: ${res.error}${res.message ? `: ${res.message}` : ""}`);
+    return res.error === "explicit-user-action-required" ? 3 : 2;
+  }
+  if (args.json) printJson({ ok: true, report: res.report, path: res.path });
+  else console.log(formatCookieImportReport(res.report));
+  return 0;
+}
+
 function cmdMigrate(args) {
   const rcPlan = cmdPlan({ ...args, json: false, silent: true });
   if (rcPlan !== 0) return rcPlan;
@@ -387,7 +747,7 @@ function cmdMigrate(args) {
   return cmdApply({ ...args, bundle: args.out });
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help || args._.length === 0) {
     console.log(HELP);
@@ -396,6 +756,14 @@ function main() {
   const command = args._[0];
   try {
     switch (command) {
+      case "sources":
+        return cmdSources(args);
+      case "connect":
+        return await cmdConnect(args);
+      case "report":
+        return cmdReport(args);
+      case "confirm-login":
+        return cmdConfirmLogin(args);
       case "discover":
         return cmdDiscover(args);
       case "plan":
@@ -422,4 +790,12 @@ function main() {
   }
 }
 
-process.exitCode = main();
+main().then(
+  (code) => {
+    process.exitCode = code;
+  },
+  (err) => {
+    console.error(`error: ${err && err.message ? err.message : err}`);
+    process.exitCode = 2;
+  },
+);
