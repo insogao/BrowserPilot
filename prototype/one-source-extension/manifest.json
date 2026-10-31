@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Browser CLI Import Source (prototype)",
+  "version": "0.1.0",
+  "description": "Reads user-selected cookies with chrome.cookies and hands them to a local Browser CLI native importer. Prototype only.",
+  "permissions": [
+    "cookies",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "https://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Import current site to Browser CLI",
+    "default_popup": "popup.html"
+  }
+}
