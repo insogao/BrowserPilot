@@ -1,17 +1,17 @@
 {
   "manifest_version": 3,
   "name": "Browser CLI Import (source)",
-  "version": "0.2.0",
-  "description": "User-authorized, local-only cookie transfer from Chrome/Edge to Browser CLI. Reads only selected domains through the official cookies API; never uploads; never logs cookie values.",
+  "version": "0.3.0",
+  "description": "User-authorized, local-only cookie transfer from Chrome/Edge to Browser CLI through the BrowserPilot native messaging host. Reads only selected domains through the official cookies API; never uploads; never logs cookie values.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA0RZ/XJqogrRJqeVtpdws/SciKwzLS7OEW05TsCpvr/1mrpjCduPcKVuLiuRUgIQQoHsMWRPMTVJsB1akEtOQNI03KuUFoZFCkxHmTbVOaZiDKbhy31CjlB9aKzPhrC021sITr5ajOLmiVZKbHtya/1VM4QRp3adR/q499NhD4i0rwRHchf967Hb/IhMELbehvyY5mOojSRrm0pyh5Lphs+6H4gxblvd9XYvwlVYGh+LABVaHYBAeqkFvl+7hY6yRe5KAfmhDbPZSEoud0JhWcWIpBvzHeeeKb5Iny54X1bLrvXRXgrRESM3eAyQLzwmV8WZ14bwBBTd+DbB/rexrFwIDAQAB",
   "minimum_chrome_version": "116",
   "permissions": [
     "cookies",
-    "storage"
+    "storage",
+    "nativeMessaging"
   ],
   "host_permissions": [
-    "<all_urls>",
-    "http://127.0.0.1/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "service-worker.js",

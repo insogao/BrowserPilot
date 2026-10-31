@@ -2,17 +2,20 @@
 //
 // Runs in Chrome/Edge. Reads cookies only through the official chrome.cookies
 // API, only after the user explicitly acknowledges what cookies are and clicks
-// Send for explicitly selected domains. The only destination is a literal
-// 127.0.0.1 endpoint (Browser CLI native target or the local test target).
+// Send for explicitly selected domains. The job is sent through the existing
+// BrowserPilot native messaging host in import-only relay mode; no HTTP server
+// or loopback HTTP endpoint is used by this extension.
 //
 // Hard rules:
-// - no upload to any remote host, no telemetry;
+// - no upload to any remote host, no telemetry, no HTTP destination;
 // - cookie values stay in this service worker's memory and are sent once;
-// - chrome.storage.session (memory-only) holds the endpoint, pairing code and
-//   last job id; no cookie values, names or domains of unselected cookies are
-//   ever persisted;
+// - the one-time import ticket is held in memory for the duration of the send
+//   and is never written to storage;
+// - chrome.storage.session (memory-only) holds only the last job metadata and
+//   the selected domains; no cookie values, names or ticket;
 // - no console logging of cookie data (this file has no console calls);
-// - the target can report "cookie imported", never "login verified".
+// - the target can report "cookie imported" and its own user authorization,
+//   never a verified login.
 import * as contract from "./lib/contract.mjs";
 import {
   detectBrowserId,
@@ -21,12 +24,16 @@ import {
   selectionTotals,
   sanitizeJobView,
 } from "./lib/selection.mjs";
+import { createNativeTransport } from "./lib/native-transport.mjs";
 
 const EXTENSION_VERSION = chrome.runtime.getManifest().version;
-const SESSION_KEYS = ["bp_endpoint", "bp_pair", "bp_last_job", "bp_selected_domains"];
+const SESSION_KEYS = ["bp_last_job", "bp_selected_domains"];
 
-let scanCache = null; // {storeId, scannedAt, domains:Set<string>} — metadata only
+let scanCache = null; // {storeId, scannedAt, domains:Set<string>, } — metadata only
 let sendInFlight = false;
+let activeTransport = null;
+let activeJobNonce = null;
+let lastView = null;
 
 async function defaultStoreId() {
   try {
@@ -36,6 +43,12 @@ async function defaultStoreId() {
   } catch {
     return "0";
   }
+}
+
+function randomHex(bytes) {
+  const data = new Uint8Array(bytes);
+  crypto.getRandomValues(data);
+  return [...data].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 async function scan({ acknowledged }) {
@@ -60,12 +73,38 @@ async function scan({ acknowledged }) {
   };
 }
 
-async function send({ endpoint, pair, domains, consent, profileLabel }) {
+function closeActiveTransport() {
+  if (activeTransport) {
+    try {
+      activeTransport.close();
+    } catch {
+      // ignored
+    }
+  }
+  activeTransport = null;
+  activeJobNonce = null;
+}
+
+async function persistLastJob(view) {
+  if (!view) return;
+  lastView = view;
+  const stored = (await chrome.storage.session.get("bp_last_job")).bp_last_job || {};
+  await chrome.storage.session.set({
+    bp_last_job: {
+      ...stored,
+      jobId: view.jobId,
+      state: view.state,
+      totals: view.totals,
+      lastView: view,
+      updatedAt: new Date().toISOString(),
+    },
+  });
+}
+
+async function send({ ticket, domains, consent, profileLabel }) {
   if (consent !== true) return { ok: false, error: "consent-required" };
   if (!scanCache) return { ok: false, error: "scan-required" };
-  const endpointCheck = contract.validateLoopbackEndpoint(endpoint);
-  if (!endpointCheck.ok) return { ok: false, error: endpointCheck.error };
-  if (!contract.validatePairCode(pair)) return { ok: false, error: "pair-code-invalid" };
+  if (!contract.isValidTicket(ticket)) return { ok: false, error: "ticket-invalid" };
   const selectedDomains = [...new Set((domains || []).map(contract.normalizeDomain).filter(Boolean))];
   if (selectedDomains.length === 0) return { ok: false, error: "no-domains-selected" };
   if (!selectedDomains.every((domain) => scanCache.domains.has(domain))) {
@@ -89,51 +128,46 @@ async function send({ endpoint, pair, domains, consent, profileLabel }) {
   }
   const selected = selectCookies(unique, selectedDomains);
   if (selected.cookies.length === 0) return { ok: false, error: "no-cookies-selected" };
+  if (selected.cookies.length > contract.MAX_COOKIES_PER_JOB) {
+    return { ok: false, error: "too-many-cookies" };
+  }
 
-  const request = {
+  const jobNonce = randomHex(16);
+  const payload = {
     contract: contract.CONTRACT_ID,
-    requestId: crypto.randomUUID(),
+    protocolVersion: contract.PROTOCOL_VERSION,
+    jobNonce,
     source: {
       browser: detectBrowserId(navigator.userAgent),
-      profileLabel: profileLabel ? String(profileLabel).slice(0, 200) : undefined,
+      profileLabel: profileLabel ? String(profileLabel).slice(0, contract.MAX_PROFILE_LABEL_BYTES) : undefined,
       extensionVersion: EXTENSION_VERSION,
     },
-    consent: {
-      kind: "explicit-user-action",
-      at: new Date().toISOString(),
-      extensionVersion: EXTENSION_VERSION,
-    },
+    consent: await contract.buildConsent({ extensionVersion: EXTENSION_VERSION, domains: selectedDomains }),
     domains: selectedDomains,
     cookies: selected.cookies,
   };
+  const payloadText = JSON.stringify(payload);
+  const digest = await contract.jobDigest(payloadText);
 
-  let response;
+  closeActiveTransport();
+  const transport = createNativeTransport();
+  activeTransport = transport;
+  activeJobNonce = jobNonce;
+  lastView = null;
+  let result;
   try {
-    response = await fetch(`${endpointCheck.base}/v1/import/cookies`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-bp-pair": String(pair) },
-      body: JSON.stringify(request),
+    result = await transport.submit({
+      ticket,
+      payloadText,
+      jobNonce,
+      digest,
+      onStatus: (view) => {
+        void persistLastJob(view);
+      },
     });
-  } catch {
-    return { ok: false, error: "network-error", skipped: selected.skipped };
-  }
-
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
-  if (!response.ok) {
-    const code = body && typeof body.error === "string" && contract.FAILURE_CODES.has(body.error)
-      ? body.error
-      : /^[a-z0-9-]{1,64}$/.test(body?.error || "")
-        ? body.error
-        : `http-${response.status}`;
-    return { ok: false, error: code, skipped: selected.skipped };
-  }
-  if (!body || body.contract !== contract.CONTRACT_ID || typeof body.jobId !== "string") {
-    return { ok: false, error: "target-response-invalid", skipped: selected.skipped };
+  } catch (err) {
+    closeActiveTransport();
+    return { ok: false, error: err && err.code ? err.code : "internal-error", skipped: selected.skipped };
   }
 
   // Values have been handed to the local target; drop the scan cache so a
@@ -141,82 +175,68 @@ async function send({ endpoint, pair, domains, consent, profileLabel }) {
   scanCache = null;
 
   const lastJob = {
-    jobId: body.jobId,
-    endpoint: endpointCheck.base,
-    pair: String(pair),
+    jobId: result.jobId,
+    jobNonce,
+    transport: "native",
+    state: result.state,
     totals: {
-      cookies: Number(body.totals?.cookies) || 0,
-      domains: Number(body.totals?.domains) || 0,
+      cookies: Number(result.totals?.cookies) || 0,
+      domains: Number(result.totals?.domains) || 0,
+      sessionCookies: Number(result.totals?.sessionCookies) || 0,
     },
+    targetNative: result.targetNative === true,
     sentAt: new Date().toISOString(),
   };
   await chrome.storage.session.set({
     bp_last_job: lastJob,
-    bp_endpoint: endpointCheck.base,
-    bp_pair: String(pair),
     bp_selected_domains: selectedDomains,
   });
-  return { ok: true, jobId: body.jobId, totals: lastJob.totals, skipped: selected.skipped };
-}
-
-async function status({ jobId, endpoint, pair } = {}) {
-  const job = jobId
-    ? { jobId, endpoint, pair }
-    : (await chrome.storage.session.get("bp_last_job")).bp_last_job;
-  if (!job || !job.jobId) return { ok: false, error: "no-job" };
-  const endpointCheck = contract.validateLoopbackEndpoint(job.endpoint);
-  if (!endpointCheck.ok) return { ok: false, error: endpointCheck.error };
-  if (!contract.validatePairCode(job.pair)) return { ok: false, error: "pair-code-invalid" };
-
-  let response;
-  try {
-    response = await fetch(`${endpointCheck.base}/v1/import/jobs/${encodeURIComponent(job.jobId)}`, {
-      headers: { "x-bp-pair": String(job.pair) },
-    });
-  } catch {
-    return { ok: false, error: "network-error" };
-  }
-  if (response.status === 404) return { ok: false, error: "job-not-found" };
-  if (!response.ok) return { ok: false, error: `http-${response.status}` };
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
-  const sanitized = sanitizeJobView(body, contract);
-  if (!sanitized.ok) return sanitized;
-  return { ok: true, view: sanitized.view };
-}
-
-async function cancel({ jobId, endpoint, pair } = {}) {
-  const job = jobId
-    ? { jobId, endpoint, pair }
-    : (await chrome.storage.session.get("bp_last_job")).bp_last_job;
-  if (!job || !job.jobId) return { ok: false, error: "no-job" };
-  const endpointCheck = contract.validateLoopbackEndpoint(job.endpoint);
-  if (!endpointCheck.ok) return { ok: false, error: endpointCheck.error };
-  if (!contract.validatePairCode(job.pair)) return { ok: false, error: "pair-code-invalid" };
-  let response;
-  try {
-    response = await fetch(`${endpointCheck.base}/v1/import/jobs/${encodeURIComponent(job.jobId)}/cancel`, {
-      method: "POST",
-      headers: { "x-bp-pair": String(job.pair) },
-    });
-  } catch {
-    return { ok: false, error: "network-error" };
-  }
-  let body = null;
-  try {
-    body = await response.json();
-  } catch {
-    body = null;
-  }
-  if (!response.ok) return { ok: false, error: `http-${response.status}` };
   return {
     ok: true,
-    state: body && body.state ? String(body.state) : "cancelled",
-    note: "Already-written cookies are not rolled back. Sign out in the target browser if needed.",
+    jobId: result.jobId,
+    state: result.state,
+    totals: lastJob.totals,
+    targetNative: result.targetNative === true,
+    targetAuthorization: result.targetAuthorization,
+    skipped: selected.skipped,
+  };
+}
+
+async function status({ jobId } = {}) {
+  if (lastView && (!jobId || lastView.jobId === jobId)) return { ok: true, view: lastView };
+  const job = (await chrome.storage.session.get("bp_last_job")).bp_last_job;
+  if (!job) return { ok: false, error: "no-job" };
+  if (jobId && job.jobId !== jobId) return { ok: false, error: "job-not-found" };
+  if (job.lastView) {
+    const sanitized = sanitizeJobView(job.lastView, contract);
+    if (sanitized.ok) return { ok: true, view: sanitized.view };
+  }
+  return {
+    ok: false,
+    error: "job-not-observable",
+    note: "浏览器的后台页面可能已休眠；请查看 Browser CLI 的导入窗口获取最终结果。",
+  };
+}
+
+async function cancel({ jobId } = {}) {
+  if (!activeTransport || !activeJobNonce) {
+    return {
+      ok: false,
+      error: "job-not-observable",
+      note: "无法连接当前导入任务；请在 Browser CLI 导入窗口中取消。",
+    };
+  }
+  const job = (await chrome.storage.session.get("bp_last_job")).bp_last_job;
+  if (jobId && job && job.jobId !== jobId) return { ok: false, error: "job-not-found" };
+  try {
+    await activeTransport.cancel(activeJobNonce);
+  } catch (err) {
+    return { ok: false, error: err && err.code ? err.code : "internal-error" };
+  }
+  return {
+    ok: true,
+    state: "cancelling",
+    note: "已请求取消。已写入的 Cookie 不会回滚；可在目标浏览器中退出登录。",
   };
 }
 
@@ -224,8 +244,6 @@ async function settings() {
   const stored = await chrome.storage.session.get(SESSION_KEYS);
   return {
     ok: true,
-    endpoint: stored.bp_endpoint || "",
-    pair: stored.bp_pair || "",
     lastJob: stored.bp_last_job || null,
     selectedDomains: stored.bp_selected_domains || [],
   };

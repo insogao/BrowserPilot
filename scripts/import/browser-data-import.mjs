@@ -14,6 +14,7 @@ import { applyBundle } from "./lib/apply.mjs";
 import { readResult, recordLoginCheck, formatResult } from "./lib/verify.mjs";
 import { listSources, findSource, formatSourceLine, cookieFlowReadiness } from "./lib/sources.mjs";
 import { TargetClient } from "./lib/target-client.mjs";
+import * as contract from "./contract.mjs";
 import { createMemoryBackend, startLocalTarget } from "./target/local-target.mjs";
 import { createCdpBackend } from "./target/cdp-backend.mjs";
 import {
@@ -40,13 +41,14 @@ Usage:
       List Chrome/Edge/Brave/Chromium/Firefox profiles and Cookie-import support.
 
   node scripts/import/browser-data-import.mjs connect [--source <browserId:profileDir>]
-      [--endpoint http://127.0.0.1:<port> --pair <6 digits>]
+      [--endpoint http://127.0.0.1:<port> --ticket BCLI-...]
       [--port <port>] [--cdp-port <port> --allow-test-cdp]
       [--report-dir <dir>] [--timeout-ms N] [--yes] [--json] [--root ...]
-      Start (or attach to) a loopback cookie-import target, guide the user
-      through the source extension, show progress, and write a count-only
-      report. Without --endpoint it starts the local contract target (test
-      only; memory backend unless --cdp-port is given).
+      Attach to a local v2 cookie-import test target, guide the user through
+      the source extension, show progress, and write a count-only report.
+      Without --endpoint it starts the local HTTP test target (test only;
+      memory backend unless --cdp-port is given). The product path uses the
+      Browser CLI native target and the BrowserPilot native host, not this CLI.
 
   node scripts/import/browser-data-import.mjs report --file <report.json> [--json]
   node scripts/import/browser-data-import.mjs confirm-login --file <report.json>
@@ -82,8 +84,9 @@ Notes:
     real browser profiles.
   - Cookie values are never read or decrypted by this tool. The source
     extension (extensions/import-source) reads them with chrome.cookies only
-    after explicit user consent; the local target is a test implementation of
-    the native Browser CLI contract.
+    after explicit user consent and sends them through the BrowserPilot native
+    messaging host. This CLI's HTTP target is a test double, not the product
+    Browser CLI target.
   - Three states are always separate: data copied, cookie imported, actual
     login verified. The last one is only ever user-confirmed.
   - Exit codes: 0 ok, 2 usage/validation error, 3 blocked/precondition failure.
@@ -136,8 +139,8 @@ function parseArgs(argv) {
       case "endpoint":
         args.endpoint = takeValue();
         break;
-      case "pair":
-        args.pair = takeValue();
+      case "ticket":
+        args.ticket = takeValue();
         break;
       case "port": {
         const v = takeValue();
@@ -537,15 +540,16 @@ async function cmdConnect(args) {
     }
     const consentAt = new Date().toISOString();
     let endpoint;
-    let pair;
     let capabilities;
 
     if (args.endpoint) {
-      if (!args.pair) throw usageError("--pair <6 digits> is required with --endpoint");
-      if (!/^\d{6}$/.test(String(args.pair))) throw usageError("--pair must be exactly 6 digits");
+      if (!args.ticket) throw usageError("--ticket BCLI-... is required with --endpoint");
+      if (!contract.isValidTicket(args.ticket)) {
+        throw usageError("--ticket must be a BCLI-... one-time import ticket");
+      }
       let client;
       try {
-        client = new TargetClient({ endpoint: args.endpoint, pair: args.pair });
+        client = new TargetClient({ endpoint: args.endpoint, ticket: args.ticket });
       } catch (err) {
         throw usageError(`invalid target: ${err.message}`);
       }
@@ -555,21 +559,20 @@ async function cmdConnect(args) {
         else console.error(`target unavailable: ${capabilities.error}`);
         return 3;
       }
-      const pairingProbe = await client.status();
-      if (!pairingProbe.ok) {
-        if (args.json) printJson({ ok: false, error: pairingProbe.error });
-        else console.error(`target pairing failed: ${pairingProbe.error}`);
+      const ticketProbe = await client.status();
+      if (!ticketProbe.ok) {
+        if (args.json) printJson({ ok: false, error: ticketProbe.error });
+        else console.error(`target ticket rejected: ${ticketProbe.error}`);
         return 3;
       }
       endpoint = client.endpoint;
-      pair = args.pair;
       return await runConnectLoop({
         args,
         source,
         client,
         capabilities,
         endpoint,
-        pair,
+        ticket: contract.formatTicket(args.ticket),
         startedAt,
         consentAt,
         timeoutMs,
@@ -594,28 +597,27 @@ async function cmdConnect(args) {
       log: () => {},
     });
     await localTarget.listening;
-    const client = new TargetClient({ endpoint: localTarget.endpoint, pair: localTarget.pair });
+    const client = new TargetClient({ endpoint: localTarget.endpoint, ticket: localTarget.ticket });
     capabilities = await client.capabilities();
     if (!capabilities.ok) {
       if (args.json) printJson({ ok: false, error: capabilities.error });
       else console.error(`local target unavailable: ${capabilities.error}`);
       return 3;
     }
-    const pairingProbe = await client.status();
-    if (!pairingProbe.ok) {
-      if (args.json) printJson({ ok: false, error: pairingProbe.error });
-      else console.error(`local target pairing failed: ${pairingProbe.error}`);
+    const ticketProbe = await client.status();
+    if (!ticketProbe.ok) {
+      if (args.json) printJson({ ok: false, error: ticketProbe.error });
+      else console.error(`local target ticket rejected: ${ticketProbe.error}`);
       return 3;
     }
     endpoint = client.endpoint;
-    pair = localTarget.pair;
     return await runConnectLoop({
       args,
       source,
       client,
       capabilities,
       endpoint,
-      pair,
+      ticket: localTarget.ticketFormatted,
       startedAt,
       consentAt,
       timeoutMs,
@@ -634,7 +636,7 @@ async function runConnectLoop({
   client,
   capabilities,
   endpoint,
-  pair,
+  ticket,
   startedAt,
   consentAt,
   timeoutMs,
@@ -645,7 +647,7 @@ async function runConnectLoop({
     console.log("");
     console.log(formatCapabilities(capabilities));
     console.log("");
-    console.log(formatInstructions({ source, endpoint, pair, native: capabilities.native }));
+    console.log(formatInstructions({ source, ticket, endpoint, native: capabilities.native }));
   }
   const controller = new AbortController();
   const onSigint = () => controller.abort();
@@ -683,7 +685,7 @@ async function runConnectLoop({
           const written = writeCookieImportReport({ reportDir: args.reportDir, report });
           if (args.json) printJson({ ok: false, error: "timeout", report, reportPath: written.path });
           else {
-            console.log(`等待超时（${Math.round(timeoutMs / 1000)}s）。请确认扩展中的地址/配对码。`);
+            console.log(`等待超时（${Math.round(timeoutMs / 1000)}s）。请确认扩展中的导入票据和目标会话。`);
             console.log(`report: ${written.path}`);
           }
           return 3;

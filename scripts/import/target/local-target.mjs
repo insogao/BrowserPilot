@@ -1,18 +1,21 @@
 #!/usr/bin/env node
-// Local implementation of the Browser CLI cookie-import contract.
+// Local HTTP implementation of the Browser CLI cookie-import contract v2.
 //
-// This is the development/test target for the source extension. It implements
-// the exact loopback contract that the Browser CLI native target must provide
-// (docs/browser-cli-native-cookie-import-interface.md). Two backends exist:
+// This is the development/test double for the source extension, host relay and
+// CLI wire format. It is NOT the product target and it never claims otherwise:
+// it reports native:false, transport:"http-test" and
+// authorization.simulated:true. The product target is the proposed Chromium
+// patch in the browser-cli repository.
 //
-// - memory (default): stores cookies in process memory only; reports
-//   persistAcrossRestart=false and native=false. Used by tests.
+// Two backends exist:
+// - memory (default): stores cookies in process memory only.
 // - cdp (--cdp-port, test only): writes into a disposable local Chromium via
-//   CDP Storage.setCookies; reports persistAcrossRestart=true but native=false.
-//   It never launches a browser and must be pointed at an isolated test profile.
+//   CDP Storage.setCookies. It never launches a browser and must be pointed at
+//   an isolated test profile.
 //
 // The target never writes cookie values to disk, never logs names/values/
-// domains, and never accepts a login verification claim.
+// domains, and never accepts a login verification claim or a client-side
+// authorization approval.
 import http from "node:http";
 import crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
@@ -20,10 +23,11 @@ import * as contract from "../contract.mjs";
 import { createCdpBackend } from "./cdp-backend.mjs";
 
 export const DEFAULT_PORT = 47832;
-export const DEFAULT_TTL_MS = 10 * 60 * 1000;
 export const DEFAULT_MAX_BYTES = 16 * 1024 * 1024;
-export const PRODUCT_SOURCE_ORIGIN = "chrome-extension://ljoekiddijnohefaghljlcodgljienoj";
+export const PRODUCT_SOURCE_ORIGIN = `chrome-extension://${contract.SOURCE_EXTENSION_ID}`;
 export const DEFAULT_ALLOWED_ORIGINS = [PRODUCT_SOURCE_ORIGIN];
+
+export const TEST_PUBLIC_SUFFIXES = new Set(["com", "net", "org", "test", "co.uk", "github.io"]);
 
 export function createMemoryBackend({ failWith = null, delayMs = 0 } = {}) {
   const store = new Map();
@@ -51,14 +55,25 @@ export function createMemoryBackend({ failWith = null, delayMs = 0 } = {}) {
   };
 }
 
+function randomHex(bytes) {
+  return crypto.randomBytes(bytes).toString("hex");
+}
+
 export function startLocalTarget(options = {}) {
-  const pair = String(options.pair ?? randomPairCode());
+  const ticket = options.ticket ? String(options.ticket) : contract.generateTicket();
+  const normalizedTicket = contract.normalizeTicket(ticket);
+  if (!contract.isValidTicket(normalizedTicket)) throw new Error("ticket-invalid");
   const allowedOrigins = new Set(options.allowedOrigins ?? DEFAULT_ALLOWED_ORIGINS);
-  const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
+  const ttlMs = options.ttlMs ?? contract.TICKET_TTL_MS;
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+  const now = options.now || (() => Date.now());
   const logger = options.log || ((line) => console.log(line));
   const backend = options.backend || createMemoryBackend();
+  const approve = options.approve !== undefined ? options.approve : true;
+  const isPublicSuffix = options.isPublicSuffix || ((domain) => TEST_PUBLIC_SUFFIXES.has(domain));
   const logs = [];
+  const createdAt = now();
+  const expiresAt = createdAt + ttlMs;
 
   const log = (line) => {
     const safe = String(line).replace(/[\r\n]+/g, " ");
@@ -67,22 +82,45 @@ export function startLocalTarget(options = {}) {
   };
 
   const jobs = new Map();
-  const requestIds = new Map();
   let currentJobId = null;
   let activeJobId = null;
+  let consumedAt = null;
+  let consumedJobId = null;
+  const failures = [];
+  let rateLimitedUntil = 0;
 
   const cleanup = setInterval(() => {
-    const now = Date.now();
+    const current = now();
     for (const [id, job] of jobs) {
       if (id === activeJobId) continue;
-      if (now - job.updatedAt > ttlMs) {
+      if (current - job.updatedAtMs > contract.JOB_TTL_MS) {
         jobs.delete(id);
-        requestIds.delete(job.requestId);
         if (currentJobId === id) currentJobId = null;
       }
     }
   }, 30_000);
   cleanup.unref?.();
+
+  function recordFailure() {
+    const current = now();
+    failures.push(current);
+    while (failures.length && current - failures[0] > contract.TICKET_FAILURE_WINDOW_MS) failures.shift();
+    if (failures.length >= contract.MAX_TICKET_FAILURES) {
+      rateLimitedUntil = current + contract.RATE_LIMIT_BLOCK_MS;
+    }
+  }
+
+  function ticketAuthorized(req) {
+    const current = now();
+    if (current < rateLimitedUntil) return { ok: false, status: 429, error: "rate-limited" };
+    if (current > expiresAt) return { ok: false, status: 410, error: "ticket-expired" };
+    const supplied = contract.normalizeTicket(req.headers["x-bp-ticket"]);
+    if (!contract.isValidTicket(supplied) || !contract.safeEqualString(supplied, normalizedTicket)) {
+      recordFailure();
+      return { ok: false, status: 401, error: "ticket-invalid" };
+    }
+    return { ok: true };
+  }
 
   const server = http.createServer(async (req, res) => {
     const origin = req.headers.origin;
@@ -104,85 +142,81 @@ export function startLocalTarget(options = {}) {
     const url = new URL(req.url, `http://127.0.0.1:${actualPort}`);
 
     try {
-      if (url.pathname === "/v1/import/capabilities" && req.method === "GET") {
-        sendJson(
-          res,
-          200,
-          {
-            contract: contract.CONTRACT_ID,
-            protocolVersion: contract.CONTRACT_VERSION,
-            product: backend.product,
-            mode: backend.mode,
-            native: backend.native === true,
-            pairingRequired: true,
-            capabilities: {
-              cookieStoreWrite: backend.cookieStoreWrite === true,
-              persistAcrossRestart: backend.persistAcrossRestart === true,
-              partitionedCookies: true,
-              sessionCookies: true,
-              maxCookiesPerJob: contract.MAX_COOKIES_PER_JOB,
-              maxValueBytes: contract.MAX_VALUE_BYTES,
-            },
-          },
-          cors,
-        );
+      if (url.pathname === "/v2/import/capabilities" && req.method === "GET") {
+        sendJson(res, 200, capabilitiesPayload(), cors);
         return;
       }
-
-      if (!url.pathname.startsWith("/v1/import/")) {
+      if (!url.pathname.startsWith("/v2/import/")) {
         sendJson(res, 404, { error: "not-found" }, cors);
         return;
       }
-      if (!safeEqual(req.headers["x-bp-pair"], pair)) {
-        sendJson(res, 401, { error: "pairing-required" }, cors);
+      const auth = ticketAuthorized(req);
+      if (!auth.ok) {
+        sendJson(res, auth.status, { error: auth.error }, cors);
         return;
       }
 
-      if (url.pathname === "/v1/import/cookies" && req.method === "POST") {
+      if (url.pathname === "/v2/import/cookies" && req.method === "POST") {
+        if (now() < rateLimitedUntil) {
+          sendJson(res, 429, { error: "rate-limited" }, cors);
+          return;
+        }
         if (!/^application\/json\b/i.test(String(req.headers["content-type"] || ""))) {
           sendJson(res, 415, { error: "content-type-required" }, cors);
           return;
         }
-        const body = await readJsonBody(req, maxBytes);
-        const checked = contract.validateImportRequest(body);
-        if (!checked.ok) {
-          log(`job rejected: ${checked.errors.length} validation error(s)`);
-          sendJson(res, 400, { error: "invalid-job", errors: checked.errors.slice(0, 20) }, cors);
+        const digestHeader = String(req.headers["x-bp-job-digest"] || "").toLowerCase();
+        if (!/^[a-f0-9]{64}$/.test(digestHeader)) {
+          sendJson(res, 400, { error: "job-digest-required" }, cors);
           return;
         }
-        const normalized = checked.normalized;
-        const existingId = requestIds.get(normalized.requestId);
-        if (existingId && jobs.has(existingId)) {
-          const existing = contract.createPublicJobView(jobs.get(existingId));
-          sendJson(res, 200, { ok: true, duplicate: true, ...existing }, cors);
+        if (consumedAt !== null) {
+          sendJson(res, 409, { error: "ticket-consumed" }, cors);
           return;
         }
         if (activeJobId && jobs.has(activeJobId)) {
           sendJson(res, 409, { error: "target-busy" }, cors);
           return;
         }
-        const id = crypto.randomBytes(12).toString("hex");
-        const now = new Date().toISOString();
+        const body = await readJsonBody(req, maxBytes);
+        if (!contract.safeEqualString(await contract.sha256Hex(body.text), digestHeader)) {
+          recordFailure();
+          sendJson(res, 400, { error: "job-digest-mismatch" }, cors);
+          return;
+        }
+        const checked = await contract.validateImportRequest(body.json, { now: now() });
+        if (!checked.ok) {
+          log(`job rejected: ${checked.errors.length} validation error(s)`);
+          sendJson(res, 400, { error: "invalid-job", errors: checked.errors.slice(0, 20) }, cors);
+          return;
+        }
+        const normalized = checked.normalized;
+        const id = randomHex(12);
+        consumedAt = now();
+        consumedJobId = id;
         const job = {
           id,
-          requestId: normalized.requestId,
+          jobNonce: normalized.jobNonce,
           state: "pending",
+          transport: "http-test",
+          native: false,
           payload: normalized,
           totals: normalized.totals,
           progress: { applied: 0, failed: 0 },
           failures: {},
+          authorization: { targetUserConfirmed: false, simulated: false, source: "none" },
           error: null,
           cancelRequested: false,
-          createdAt: now,
-          updatedAt: now,
+          createdAt: new Date(now()).toISOString(),
+          updatedAt: new Date(now()).toISOString(),
+          updatedAtMs: now(),
         };
         jobs.set(id, job);
-        requestIds.set(normalized.requestId, id);
         currentJobId = id;
         activeJobId = id;
         log(
           `job ${id}: accepted ${normalized.totals.cookies} cookies / ${normalized.totals.domains} domains ` +
-            `(${normalized.totals.selectedDomains} selected)`,
+            `(${normalized.totals.selectedDomains} selected, ${normalized.totals.sessionCookies} session)`,
         );
         sendJson(
           res,
@@ -190,8 +224,11 @@ export function startLocalTarget(options = {}) {
           {
             ok: true,
             contract: contract.CONTRACT_ID,
+            protocolVersion: contract.PROTOCOL_VERSION,
             jobId: id,
-            state: "pending",
+            state: job.state,
+            transport: "http-test",
+            native: false,
             totals: normalized.totals,
           },
           cors,
@@ -200,7 +237,7 @@ export function startLocalTarget(options = {}) {
         return;
       }
 
-      if (url.pathname === "/v1/import/status" && req.method === "GET") {
+      if (url.pathname === "/v2/import/status" && req.method === "GET") {
         if (!currentJobId || !jobs.has(currentJobId)) {
           sendJson(res, 200, { ok: true, contract: contract.CONTRACT_ID, state: "idle", jobId: null }, cors);
           return;
@@ -209,22 +246,31 @@ export function startLocalTarget(options = {}) {
         return;
       }
 
-      const jobMatch = url.pathname.match(/^\/v1\/import\/jobs\/([a-f0-9]{24})$/);
+      const jobMatch = url.pathname.match(/^\/v2\/import\/jobs\/([a-f0-9]{24})$/);
       if (jobMatch && req.method === "GET") {
         const job = jobs.get(jobMatch[1]);
         if (!job) {
           sendJson(res, 404, { error: "job-not-found" }, cors);
           return;
         }
+        // The ticket can read only the job it authorized.
+        if (consumedJobId && consumedJobId !== job.id) {
+          sendJson(res, 409, { error: "job-binding-mismatch" }, cors);
+          return;
+        }
         sendJson(res, 200, contract.createPublicJobView(job), cors);
         return;
       }
 
-      const cancelMatch = url.pathname.match(/^\/v1\/import\/jobs\/([a-f0-9]{24})\/cancel$/);
+      const cancelMatch = url.pathname.match(/^\/v2\/import\/jobs\/([a-f0-9]{24})\/cancel$/);
       if (cancelMatch && req.method === "POST") {
         const job = jobs.get(cancelMatch[1]);
         if (!job) {
           sendJson(res, 404, { error: "job-not-found" }, cors);
+          return;
+        }
+        if (consumedJobId && consumedJobId !== job.id) {
+          sendJson(res, 409, { error: "job-binding-mismatch" }, cors);
           return;
         }
         if (contract.TERMINAL_JOB_STATES.has(job.state)) {
@@ -232,8 +278,9 @@ export function startLocalTarget(options = {}) {
           return;
         }
         job.cancelRequested = true;
-        job.updatedAt = new Date().toISOString();
-        if (job.state === "pending") {
+        job.updatedAt = new Date(now()).toISOString();
+        job.updatedAtMs = now();
+        if (job.state === "pending" || job.state === "awaiting_authorization") {
           job.state = "cancelled";
           activeJobId = null;
           log(`job ${job.id}: cancelled before writing`);
@@ -251,7 +298,7 @@ export function startLocalTarget(options = {}) {
         res.once("finish", () => req.destroy());
         return;
       }
-      log(`request error: ${err && err.message ? err.message : "unknown"}`);
+      log(`request error: ${err && err.code ? err.code : "bad-request"}`);
       if (!res.headersSent) sendJson(res, 400, { error: "bad-request" }, cors);
     }
   });
@@ -259,16 +306,64 @@ export function startLocalTarget(options = {}) {
   async function runJob(job) {
     if (job.cancelRequested || job.state === "cancelled") {
       job.state = "cancelled";
-      job.updatedAt = new Date().toISOString();
+      job.updatedAt = new Date(now()).toISOString();
+      job.updatedAtMs = now();
       activeJobId = null;
       return;
     }
+    job.state = "awaiting_authorization";
+    job.updatedAt = new Date(now()).toISOString();
+    job.updatedAtMs = now();
+    let approved;
+    try {
+      approved = typeof approve === "function" ? await approve(job) : approve;
+    } catch {
+      approved = false;
+    }
+    if (job.cancelRequested) {
+      job.state = "cancelled";
+      job.updatedAt = new Date(now()).toISOString();
+      job.updatedAtMs = now();
+      activeJobId = null;
+      return;
+    }
+    if (!approved) {
+      job.state = "denied";
+      job.error = { code: "authorization-denied" };
+      job.authorization = {
+        targetUserConfirmed: false,
+        simulated: true,
+        source: "test-auto-deny",
+      };
+      job.updatedAt = new Date(now()).toISOString();
+      job.updatedAtMs = now();
+      activeJobId = null;
+      log(`job ${job.id}: denied by test authorization`);
+      return;
+    }
+    job.authorization = {
+      targetUserConfirmed: true,
+      simulated: true,
+      source: "test-auto-approve",
+      scopeDigest: job.payload.consent.domainsDigest,
+      confirmedAt: new Date(now()).toISOString(),
+    };
     job.state = "applying";
-    job.updatedAt = new Date().toISOString();
+    job.updatedAt = new Date(now()).toISOString();
+    job.updatedAtMs = now();
     log(`job ${job.id}: applying`);
     try {
       for (const cookie of job.payload.cookies) {
         if (job.cancelRequested) break;
+        const policyFailure = contract.cookiePolicyFailure(cookie, job.payload.domains, {
+          now: now(),
+          isPublicSuffix,
+        });
+        if (policyFailure) {
+          job.failures[policyFailure] = (job.failures[policyFailure] || 0) + 1;
+          job.progress.failed += 1;
+          continue;
+        }
         try {
           await backend.applyCookie(cookie);
           job.progress.applied += 1;
@@ -277,11 +372,9 @@ export function startLocalTarget(options = {}) {
           job.failures[code] = (job.failures[code] || 0) + 1;
           job.progress.failed += 1;
         }
-        job.updatedAt = new Date().toISOString();
       }
     } catch (err) {
       job.error = { code: "internal" };
-      job.updatedAt = new Date().toISOString();
     } finally {
       if (job.cancelRequested) {
         job.state = "cancelled";
@@ -291,12 +384,39 @@ export function startLocalTarget(options = {}) {
       } else {
         job.state = "done";
       }
-      job.updatedAt = new Date().toISOString();
+      job.updatedAt = new Date(now()).toISOString();
+      job.updatedAtMs = now();
       activeJobId = null;
       log(
         `job ${job.id}: ${job.state} applied=${job.progress.applied} failed=${job.progress.failed}`,
       );
     }
+  }
+
+  function capabilitiesPayload() {
+    return {
+      contract: contract.CONTRACT_ID,
+      protocolVersion: contract.PROTOCOL_VERSION,
+      product: backend.product,
+      mode: "test",
+      transport: "http-test",
+      native: false,
+      authorization: {
+        mode: "test-simulated",
+        independentTargetConfirmation: false,
+        note: "测试目标自动批准；真实目标必须在 Browser CLI 内由用户本人确认。",
+      },
+      capabilities: {
+        cookieStoreWrite: backend.cookieStoreWrite === true,
+        persistAcrossRestart: backend.persistAcrossRestart === true,
+        partitionedCookies: true,
+        sessionCookies: true,
+        sessionCookiePersistence: "not_guaranteed",
+        maxCookiesPerJob: contract.MAX_COOKIES_PER_JOB,
+        maxValueBytes: contract.MAX_VALUE_BYTES,
+        ticketTtlSeconds: Math.floor(ttlMs / 1000),
+      },
+    };
   }
 
   let actualPort = 0;
@@ -312,7 +432,8 @@ export function startLocalTarget(options = {}) {
     server,
     logs,
     backend,
-    pair,
+    ticket: normalizedTicket,
+    ticketFormatted: contract.formatTicket(normalizedTicket),
     listening,
     get port() {
       return actualPort;
@@ -320,22 +441,14 @@ export function startLocalTarget(options = {}) {
     get endpoint() {
       return `http://127.0.0.1:${actualPort}`;
     },
+    get expiresAt() {
+      return expiresAt;
+    },
+    get view() {
+      return currentJobId && jobs.has(currentJobId) ? contract.createPublicJobView(jobs.get(currentJobId)) : null;
+    },
     capabilities() {
-      return {
-        contract: contract.CONTRACT_ID,
-        protocolVersion: contract.CONTRACT_VERSION,
-        product: backend.product,
-        mode: backend.mode,
-        native: backend.native === true,
-        capabilities: {
-          cookieStoreWrite: backend.cookieStoreWrite === true,
-          persistAcrossRestart: backend.persistAcrossRestart === true,
-          partitionedCookies: true,
-          sessionCookies: true,
-          maxCookiesPerJob: contract.MAX_COOKIES_PER_JOB,
-          maxValueBytes: contract.MAX_VALUE_BYTES,
-        },
-      };
+      return capabilitiesPayload();
     },
     async close() {
       clearInterval(cleanup);
@@ -355,7 +468,7 @@ export function startLocalTarget(options = {}) {
 function corsHeaders(origin) {
   const headers = {
     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "content-type, x-bp-pair",
+    "Access-Control-Allow-Headers": "content-type, x-bp-ticket, x-bp-job-digest",
     "Access-Control-Max-Age": "600",
     "Cache-Control": "no-store",
   };
@@ -393,24 +506,15 @@ function readJsonBody(req, maxBytes) {
     });
     req.on("end", () => {
       if (aborted) return;
+      const text = Buffer.concat(chunks).toString("utf8");
       try {
-        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+        resolve({ text, json: JSON.parse(text) });
       } catch (err) {
         reject(err);
       }
     });
     req.on("error", reject);
   });
-}
-
-function randomPairCode() {
-  return String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
-}
-
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a ?? ""));
-  const right = Buffer.from(String(b ?? ""));
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
 }
 
 async function main() {
@@ -434,19 +538,17 @@ async function main() {
     : DEFAULT_ALLOWED_ORIGINS;
   const target = startLocalTarget({
     port: Number(get("port", DEFAULT_PORT)),
-    pair: get("pair", null),
+    ticket: get("ticket", null),
     allowedOrigins,
     backend,
   });
   await target.listening;
-  console.log("Browser CLI cookie-import local target");
+  console.log("Browser CLI cookie-import local target (v2 test double)");
   console.log(`  endpoint: ${target.endpoint}`);
-  console.log(`  pair:     ${target.pair}`);
-  console.log(`  mode:     ${target.backend.mode} (native=${target.backend.native === true})`);
+  console.log(`  ticket:   ${target.ticketFormatted}  (one-time, 5 min)`);
+  console.log(`  mode:     test (native=false, transport=http-test)`);
   console.log(`  persist across restart: ${target.backend.persistAcrossRestart === true}`);
-  if (target.backend.native !== true) {
-    console.log("  note: this is a test target, not the Browser CLI native contract.");
-  }
+  console.log("  note: this is a test target, not the Browser CLI native contract.");
   console.log("  memory only for cookie values; logs contain counts only. Press Ctrl+C to stop.");
   const shutdown = async () => {
     await target.close();

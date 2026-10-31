@@ -10,7 +10,7 @@ let totals = null;
 let currentView = null;
 let pollTimer = null;
 let pollFailures = 0;
-let settingsCache = { endpoint: "", pair: "", lastJob: null, selectedDomains: [] };
+let settingsCache = { lastJob: null, selectedDomains: [] };
 let sendInFlight = false;
 
 function sendMessage(message) {
@@ -41,28 +41,27 @@ function errorText(code) {
     "no-domains-selected": "请至少勾选一个域名。",
     "domain-not-scanned": "所选域名不在本次扫描结果中，请重新扫描。",
     "no-cookies-selected": "所选域名没有可发送的 Cookie。",
-    "endpoint-invalid": "地址格式不正确。",
-    "endpoint-must-be-http": "地址必须以 http:// 开头。",
-    "endpoint-must-be-loopback": "地址必须是 127.0.0.1（不允许局域网或域名）。",
-    "endpoint-needs-port": "地址必须包含端口。",
-    "endpoint-has-path": "地址不能带路径。",
-    "endpoint-has-query-or-hash": "地址不能带查询参数。",
-    "endpoint-has-credentials": "地址不能带用户名/密码。",
-    "pair-code-invalid": "配对码必须是 6 位数字。",
-    "network-error": "无法连接本机 Browser CLI；请确认导入命令仍在运行。",
+    "ticket-invalid": "导入票据格式不正确；请从 Browser CLI 导入窗口重新复制。",
+    "ticket-expired": "导入票据已过期；请在 Browser CLI 中获取新票据。",
+    "ticket-consumed": "这张导入票据已经被使用；一张票据只能授权一次导入。",
+    "rate-limited": "失败次数过多，Browser CLI 已暂时锁定导入会话；请重新启动导入。",
+    "target-not-running": "没有找到运行中的 Browser CLI 导入会话；请先在 Browser CLI 中启动导入。",
+    "target-disconnected": "与 Browser CLI 的连接已中断；请查看目标浏览器窗口中的结果。",
+    "protocol-mismatch": "来源扩展与目标协议版本不一致，请同时更新两端。",
+    "native-messaging-unavailable": "BrowserPilot 本机中转进程不可用；请确认 native host 已注册。",
+    "transport-closed": "本机中转进程连接已关闭。",
+    "import-mode-conflict": "本机中转进程已进入普通模式；请重新发送以启动新的导入会话。",
+    "job-not-observable": "后台页面可能已休眠；请查看 Browser CLI 导入窗口中的最终结果。",
     "target-busy": "目标正在处理另一个导入任务，请稍后重试。",
     "target-response-invalid": "目标返回了不符合契约的响应，已停止显示。",
     "target-contract-mismatch": "目标接口版本不匹配。",
     "job-not-found": "任务不存在或已过期，请重新发送。",
-    "http-401": "配对码错误或已失效。",
-    "http-403": "来源扩展未被目标允许。",
-    "http-404": "目标接口不存在。",
-    "http-409": "目标正忙，请稍后重试。",
-    "http-413": "发送内容超过目标大小限制。",
+    "too-many-cookies": "Cookie 数量超过目标上限。",
+    "too-large": "导入数据超过大小上限。",
     "internal-error": "扩展内部错误。",
     "extension-message-failed": "扩展消息失败。",
     "no-response": "扩展没有响应。",
-    "busy": "上一次发送仍在进行。",
+    busy: "上一次发送仍在进行。",
   };
   if (code in map) return map[code];
   if (code && String(code).startsWith("http-")) return `目标返回错误 ${code}。`;
@@ -85,8 +84,7 @@ function updateSelectionUi() {
   const ready =
     domains.length > 0 &&
     $("sendConsent").checked &&
-    $("endpoint").value.trim() !== "" &&
-    $("pair").value.trim() !== "" &&
+    $("ticket").value.trim() !== "" &&
     !sendInFlight;
   $("sendBtn").disabled = !ready;
 }
@@ -157,16 +155,19 @@ async function doScan({ preserveSelection = false } = {}) {
   return true;
 }
 
-async function persistConnection() {
-  const endpoint = $("endpoint").value.trim();
-  const pair = $("pair").value.trim();
-  settingsCache = { ...settingsCache, endpoint, pair };
-  await chrome.storage.session.set({ bp_endpoint: endpoint, bp_pair: pair });
+function clearTicket() {
+  $("ticket").value = "";
+  updateSelectionUi();
 }
 
 async function doSend({ isRetry = false } = {}) {
   if (!$("sendConsent").checked) {
     setSummary("sendSummary", "请重新勾选“发送授权”后再发送。", "error");
+    return;
+  }
+  if ($("ticket").value.trim() === "") {
+    setSummary("sendSummary", "请粘贴 Browser CLI 导入窗口显示的一次性导入票据。", "error");
+    $("ticket").focus();
     return;
   }
   if (isRetry) {
@@ -181,12 +182,11 @@ async function doSend({ isRetry = false } = {}) {
   sendInFlight = true;
   updateSelectionUi();
   $("sendBtn").disabled = true;
-  setSummary("sendSummary", "正在发送到本机 Browser CLI…", null);
+  setSummary("sendSummary", "正在通过 BrowserPilot 本机中转进程连接 Browser CLI…", null);
   const res = await sendMessage({
     type: "send",
     payload: {
-      endpoint: $("endpoint").value.trim(),
-      pair: $("pair").value.trim(),
+      ticket: $("ticket").value.trim(),
       domains,
       consent: true,
       profileLabel: $("profileLabel").value.trim(),
@@ -196,19 +196,25 @@ async function doSend({ isRetry = false } = {}) {
   updateSelectionUi();
   if (!res.ok) {
     setSummary("sendSummary", `发送失败：${errorText(res.error)}`, "error");
+    if (["ticket-consumed", "ticket-expired", "rate-limited"].includes(res.error)) clearTicket();
     return;
   }
   settingsCache.selectedDomains = domains;
   settingsCache.lastJob = { jobId: res.jobId };
+  // The ticket is one-time; never keep it after a successful handoff.
+  clearTicket();
   $("sendConsent").checked = false;
   $("sendBtn").disabled = true;
   const skipped = res.skipped && Object.keys(res.skipped).length
     ? `\n已跳过 ${Object.entries(res.skipped).map(([code, n]) => `${failureText(code)}（${n}）`).join("；")}。`
     : "";
+  const targetNote = res.targetNative === true
+    ? ""
+    : "\n注意：当前目标不是原生 Browser CLI（测试目标），不能据此宣称产品链路完成。";
   setSummary(
     "sendSummary",
-    `已交给本机目标：${fmt(res.totals?.cookies)} 条 Cookie / ${fmt(res.totals?.domains)} 个域名。` +
-      `\n任务号 ${res.jobId}。等待写入结果…${skipped}`,
+    `已交给本机中转进程：${fmt(res.totals?.cookies)} 条 Cookie / ${fmt(res.totals?.domains)} 个域名。` +
+      `\n任务号 ${res.jobId}。等待目标浏览器中的用户确认…${skipped}${targetNote}`,
     "ok",
   );
   $("resultCard").hidden = false;
@@ -224,11 +230,37 @@ function statusClass(status) {
   return "pending";
 }
 
+function renderAuthorization(view) {
+  const auth = view?.authorization || {};
+  if (auth.targetUserConfirmed === true) {
+    const simulated = auth.simulated === true
+      ? "（测试目标模拟，非真实用户确认）"
+      : "（目标浏览器内用户确认）";
+    $("stateAuth").textContent = `已确认${simulated}`;
+    $("stateAuth").className = auth.simulated === true ? "v warn" : "v ok";
+    return;
+  }
+  if (view?.state === "denied") {
+    $("stateAuth").textContent = "用户已拒绝";
+    $("stateAuth").className = "v bad";
+    return;
+  }
+  if (view?.state === "awaiting_authorization") {
+    $("stateAuth").textContent = "等待你在 Browser CLI 中确认";
+    $("stateAuth").className = "v warn";
+    return;
+  }
+  $("stateAuth").textContent = "等待目标浏览器确认";
+  $("stateAuth").className = "v pending";
+}
+
 function renderPending() {
-  $("stateLabel").textContent = "等待目标写入…";
+  $("stateLabel").textContent = "等待目标浏览器确认导入范围…";
   $("progressBar").style.width = "0%";
   $("stateData").textContent = "不适用（Cookie 不写入文件包）";
   $("stateData").className = "v pending";
+  $("stateAuth").textContent = "等待目标浏览器确认";
+  $("stateAuth").className = "v pending";
   $("stateCookie").textContent = "未开始";
   $("stateCookie").className = "v pending";
   $("stateLogin").textContent = "未验证（不做推断）";
@@ -248,15 +280,18 @@ function renderView(view) {
   const pct = total > 0 ? Math.min(100, Math.round((doneCount / total) * 100)) : 0;
   $("progressBar").style.width = `${pct}%`;
   const stateText = {
-    pending: "已接收，等待目标写入…",
+    pending: "已接收，等待目标处理…",
+    awaiting_authorization: "等待你在 Browser CLI 中确认导入范围…",
     applying: "正在写入 Cookie…",
     done: "目标已完成。",
     failed: "目标报告失败。",
     cancelled: "导入已取消。",
+    denied: "你在目标浏览器中拒绝了本次导入。",
   }[view.state] || view.state;
   $("stateLabel").textContent = stateText;
   $("stateData").textContent = "不适用（Cookie 不写入文件包）";
   $("stateData").className = "v pending";
+  renderAuthorization(view);
 
   const status = view.cookieImported.status;
   const cookieText = {
@@ -276,6 +311,9 @@ function renderView(view) {
     `共 ${fmt(total)} 条，已写入 ${fmt(view.progress.applied)} 条，失败 ${fmt(view.progress.failed)} 条`,
   ];
   if (view.totals.selectedDomains) bits.push(`勾选域名 ${fmt(view.totals.selectedDomains)} 个`);
+  if (view.sessionCookies?.count > 0) {
+    bits.push(`其中会话 Cookie ${fmt(view.sessionCookies.count)} 条（浏览器重启后不保证保留）`);
+  }
   if (view.error) bits.push(`错误：${view.error.message}`);
   $("resultDetail").textContent = bits.join("；");
 
@@ -289,16 +327,18 @@ function renderView(view) {
     list.appendChild(li);
   }
 
-  const terminal = ["done", "failed", "cancelled"].includes(view.state);
+  const terminal = ["done", "failed", "cancelled", "denied"].includes(view.state);
   $("cancelBtn").hidden = terminal;
   $("retryBtn").hidden = !terminal;
-  $("relogin").hidden = !terminal;
-  if (terminal && view.progress.applied === 0 && view.progress.failed === 0) {
-    $("relogin").textContent = "目标没有写入任何 Cookie。请检查失败原因、配对码和目标状态后重试。";
+  if (terminal && view.state === "denied") {
+    $("relogin").textContent = "目标浏览器的用户拒绝了本次导入。请检查勾选域名，或重新启动 Browser CLI 导入会话。";
+  } else if (terminal && view.state === "failed" && view.progress.applied === 0 && view.progress.failed === 0) {
+    $("relogin").textContent = "目标没有写入任何 Cookie。请检查失败原因，并在 Browser CLI 中重新启动导入会话。";
   } else if (terminal) {
     $("relogin").textContent =
       "请在 Browser CLI 中打开上面勾选的网站，确认是否仍处于登录状态。若未登录，请重新登录；" +
-      "设备绑定/风控会话可能无法迁移。Cookie 写入成功不等于登录成功。";
+      "设备绑定/风控会话可能无法迁移。Cookie 写入成功不等于登录成功。" +
+      (view.sessionCookies?.count > 0 ? " 会话 Cookie 在浏览器重启后可能丢失。" : "");
   }
   if (terminal) {
     $("sendBtn").disabled = true;
@@ -308,7 +348,9 @@ function renderView(view) {
         ? "目标写入结束。请按下方提示在 Browser CLI 中确认登录。"
         : view.state === "cancelled"
           ? "已取消；已经写入的 Cookie 不会回滚。"
-          : "目标未能完成导入。可重新扫描并重试。",
+          : view.state === "denied"
+            ? "目标浏览器中的用户拒绝了导入。"
+            : "目标未能完成导入。请重新启动导入会话并获取新票据。",
       view.state === "done" ? "ok" : "error",
     );
   }
@@ -334,7 +376,7 @@ function startPolling() {
     } else {
       pollFailures = 0;
       renderView(res.view);
-      if (["done", "failed", "cancelled"].includes(res.view.state)) {
+      if (["done", "failed", "cancelled", "denied"].includes(res.view.state)) {
         stopPolling();
         return;
       }
@@ -364,14 +406,7 @@ $("noneBtn").addEventListener("click", () => {
   updateSelectionUi();
 });
 $("sendConsent").addEventListener("change", updateSelectionUi);
-$("endpoint").addEventListener("input", () => {
-  void persistConnection();
-  updateSelectionUi();
-});
-$("pair").addEventListener("input", () => {
-  void persistConnection();
-  updateSelectionUi();
-});
+$("ticket").addEventListener("input", updateSelectionUi);
 $("sendBtn").addEventListener("click", () => {
   void doSend();
 });
@@ -389,6 +424,11 @@ $("retryBtn").addEventListener("click", () => {
     $("sendConsent").focus();
     return;
   }
+  if ($("ticket").value.trim() === "") {
+    setSummary("sendSummary", "一张票据只能授权一次导入。请从 Browser CLI 导入窗口获取新的票据后再重试。", "error");
+    $("ticket").focus();
+    return;
+  }
   void doSend({ isRetry: true });
 });
 
@@ -396,18 +436,18 @@ async function init() {
   const res = await sendMessage({ type: "settings" });
   if (res.ok) {
     settingsCache = {
-      endpoint: res.endpoint || "",
-      pair: res.pair || "",
       lastJob: res.lastJob || null,
       selectedDomains: res.selectedDomains || [],
     };
-    $("endpoint").value = settingsCache.endpoint;
-    $("pair").value = settingsCache.pair;
     updateSelectionUi();
     if (settingsCache.lastJob && settingsCache.lastJob.jobId) {
       $("resultCard").hidden = false;
-      renderPending();
-      startPolling();
+      if (settingsCache.lastJob.lastView) {
+        renderView(settingsCache.lastJob.lastView);
+      } else {
+        renderPending();
+        startPolling();
+      }
     }
   }
 }

@@ -83,7 +83,7 @@
     <h1>Browser CLI Import（来源浏览器）</h1>
     <p class="hint">
       通过官方 <code>chrome.cookies</code> API 读取本 Profile 的 Cookie，只发送你勾选的域名，
-      且只发送到本机 <code>127.0.0.1</code> 的 Browser CLI。不会上传，不写日志，不保存 Cookie 值。
+      且只经 BrowserPilot 本机中转进程发送给同一台机器上的 Browser CLI。不会上传，不写日志，不保存 Cookie 值。
     </p>
 
     <div class="card">
@@ -102,22 +102,19 @@
     </div>
 
     <div class="card">
-      <h2>2. 连接本机 Browser CLI</h2>
+      <h2>2. 连接本机 Browser CLI 导入会话</h2>
       <p class="hint">
-        Browser CLI 启动导入时会打印地址和 6 位配对码。这里只接受 <code>http://127.0.0.1:端口</code>。
+        Browser CLI 启动导入时会显示一张一次性导入票据（<code>BCLI-</code> 开头，5 分钟内有效，只能使用一次）。
+        本扩展通过 BrowserPilot 本机中转进程连接目标，不使用 HTTP 端口。
       </p>
-      <div class="row">
-        <div>
-          <label for="endpoint">地址</label>
-          <input id="endpoint" type="text" placeholder="http://127.0.0.1:47832" autocomplete="off" />
-        </div>
-        <div>
-          <label for="pair">配对码</label>
-          <input id="pair" type="password" inputmode="numeric" maxlength="6" placeholder="6 位数字" autocomplete="off" />
-        </div>
-      </div>
+      <label for="ticket">导入票据</label>
+      <input id="ticket" type="password" maxlength="64" placeholder="BCLI-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" />
       <label for="profileLabel">Profile 标签（可选，只用于结果说明）</label>
       <input id="profileLabel" type="text" maxlength="80" placeholder="例如：工作 / 个人" autocomplete="off" />
+      <div class="notice">
+        目标 Browser CLI 会单独弹出确认窗口，列出本次勾选的域名范围；只有你在目标浏览器中点击“允许”后才会写入。
+        本扩展无法代替你确认。
+      </div>
     </div>
 
     <div class="card" id="listWrapCard" hidden>
@@ -152,6 +149,7 @@
       <div class="bar"><div id="progressBar"></div></div>
       <div class="states">
         <span class="k">数据复制</span><span id="stateData" class="v pending">不适用（Cookie 不写入文件包）</span>
+        <span class="k">目标授权</span><span id="stateAuth" class="v pending">等待目标浏览器确认</span>
         <span class="k">Cookie 写入</span><span id="stateCookie" class="v pending">未开始</span>
         <span class="k">实际登录</span><span id="stateLogin" class="v warn">未验证（不做推断）</span>
       </div>
@@ -175,8 +173,9 @@
           安装（需要用户开启开发者模式；正式分发应走 Web Store 或企业策略）。
         </p>
         <p>
-          权限只有 <code>cookies</code> 与 <code>storage</code>；<code>storage.session</code> 仅内存保存地址、
-          配对码和任务号，浏览器重启即清空。扩展不会读取密码、书签、历史或 Cookie 值以外的页面数据。
+          权限只有 <code>cookies</code>、<code>storage</code> 与 <code>nativeMessaging</code>；
+          <code>storage.session</code> 仅内存保存任务号与勾选域名，浏览器重启即清空。导入票据只在本次发送期间
+          保存在内存中，不写入存储。扩展不会读取密码、书签、历史或 Cookie 值以外的页面数据。
         </p>
         <p>
           目标端接口见 <code>docs/browser-cli-native-cookie-import-interface.md</code>。本扩展不依赖任何第三方

@@ -4,6 +4,7 @@
 param(
     [string]$HostPath = "",
     [string]$ExtensionId = "nnollghpaggbcdkkgoieneffnlijinio",
+    [string]$ImportExtensionId = "ljoekiddijnohefaghljlcodgljienoj",
     [string]$ManifestPath = ""
 )
 
@@ -28,7 +29,7 @@ $manifest = @{
     description      = "BrowserPilot native messaging host"
     path             = $HostPath
     type             = "stdio"
-    allowed_origins  = @("chrome-extension://$ExtensionId/")
+    allowed_origins  = @("chrome-extension://$ExtensionId/", "chrome-extension://$ImportExtensionId/")
 } | ConvertTo-Json -Depth 4
 # UTF-8 without BOM (Chrome native host manifest should be BOM-free)
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

@@ -21,3 +21,5 @@ jobs:
       - run: npm run test:core
       - run: npm run test:profile
       - run: npm run test:host
+      - run: npm run test:import:product
+      - run: npm run test:import:native

@@ -1,389 +1,302 @@
-# Browser CLI native cookie-import interface (v1)
+# Browser CLI native cookie-import interface (v2)
 
-Status: **contract implemented and tested on the BrowserPilot side; the Browser
-CLI native endpoint is NOT implemented.** This document is the handoff
-specification for the minimal in-browser patch. No Chromium source was modified
-in this worktree.
+Status: **BrowserPilot source extension + native host relay implemented and
+tested; the Browser CLI native CookieStore endpoint is PROPOSED, not built and
+not integrated.** This document is the handoff contract for the target-side
+patch. No product closure is claimed.
 
-Canonical implementation of the contract:
-`scripts/import/contract.mjs` (also copied into
-`extensions/import-source/lib/contract.mjs`). Local test target:
-`scripts/import/target/local-target.mjs`.
+Canonical implementation: `scripts/import/contract.mjs` (also copied into
+`extensions/import-source/lib/contract.mjs`). Native host relay:
+`native-host/import-relay.mjs`. Local HTTP test target:
+`scripts/import/target/local-target.mjs` (test double only).
 
----
-
-## 1. Scope and invariants
-
-The source browser (Chrome/Edge) runs the BrowserPilot-owned extension
-`extensions/import-source`. It reads cookies through the official
-`chrome.cookies` API after explicit per-send user consent, and sends only
-user-selected domains to a loopback endpoint.
-
-The target is Browser CLI. It writes cookies into **its own** CookieStore, in
-its own process, under its own Profile lock.
-
-Hard invariants:
-
-1. Source Profile is never written, deleted, renamed, locked or closed by the
-   import flow.
-2. No source cookie decryption, no key extraction, no `Local State` key use, no
-   elevation service, no path spoofing.
-3. The target never writes the Cookies SQLite file directly; it uses the
-   browser's CookieStore (which owns schema, encryption and locking).
-4. Values exist only in source extension memory, the loopback request, target
-   memory and the target CookieStore. They are never logged, uploaded, or
-   written to a report.
-5. `cookieImported` and `loginVerified` are independent. The target can report
-   the former; only an explicit user action can record the latter.
-6. One active import job at a time; one session pairing code; loopback only.
+Target-side proposed patch:
+`D:\work\wt\bc-rc-p1\chromium\patches\proposed\034-browser-cli-cookie-import.patch`.
+Target-side contract doc:
+`D:\work\wt\bc-rc-p1\docs\p1-cookie-import-native-v2-2026-11-01.md`.
 
 ---
 
-## 2. Transport
+## 1. Scope and hard invariants
 
-- HTTP/1.1 JSON over `http://127.0.0.1:<port>` only. No TLS, no DNS names, no
-  LAN address, no path prefixes.
-- Port: chosen by Browser CLI at startup (ephemeral recommended) and printed to
-  the terminal. The CLI flow prints the exact endpoint and a per-session
-  6-digit pairing code.
-- Pairing: every `/v1/import/*` request except `capabilities` must carry
-  `x-bp-pair: <6 digits>`. Compare in constant time. Do not persist the code.
-- Origin: the source extension sends
-  `Origin: chrome-extension://ljoekiddijnohefaghljlcodgljienoj` (the manifest
-  key is fixed in `extensions/import-source/manifest.json`). The target must
-  allowlist this ID and reject any other `Origin` with 403. Missing `Origin`
-  is allowed only for local CLI/test clients.
-- `POST` requires `Content-Type: application/json`; otherwise 415.
-- Body limit: 16 MiB. Cookie count limit: 20,000. Value limit: 8 KiB per value.
-- Job TTL: 10 minutes, then `job-not-found`. One active job; a second different
-  request gets 409 `target-busy`.
-- No cookie name/value/domain may appear in logs, errors or any response.
+The source browser (Chrome/Edge) runs `extensions/import-source`. It reads
+cookies only through `chrome.cookies`, only after explicit user consent, and
+sends only user-selected domains.
 
-CORS preflight is required because the extension sends JSON with a custom
-header. Answer `OPTIONS` with the allowlisted origin and
-`Access-Control-Allow-Headers: content-type, x-bp-pair`.
+The target is Browser CLI. It writes cookies into **its own** CookieStore, in its
+own process, under its own Profile lock.
+
+1. Source Profile is never written, deleted, renamed, locked or closed.
+2. No source cookie decryption, key extraction, `Local State` use, elevation
+   service or path spoofing.
+3. The target never writes `Network/Cookies` SQLite. It uses
+   `CookieManager::SetCanonicalCookie` (the browser-process mojo front end of
+   `net::CookieStore::SetCanonicalCookieAsync` in the network service).
+4. Values exist only in source extension memory, native messaging frames, the
+   host/pipe buffers, target memory and the target CookieStore. They are never
+   logged, uploaded, or written to reports/long-lived files.
+5. `cookieImported` and `loginVerified` are independent. The target may report
+   the former; only an explicit user action records the latter.
+6. One active job at a time; one one-time ticket; no reuse.
 
 ---
 
-## 3. Endpoints
+## 2. Transport: native messaging + named pipe (no product HTTP)
 
-### 3.1 `GET /v1/import/capabilities`
-
-No pairing. Returns metadata only:
-
-```json
-{
-  "contract": "browser-cli.cookie-import/v1",
-  "protocolVersion": 1,
-  "product": "Browser CLI",
-  "mode": "native",
-  "native": true,
-  "pairingRequired": true,
-  "capabilities": {
-    "cookieStoreWrite": true,
-    "persistAcrossRestart": true,
-    "partitionedCookies": true,
-    "sessionCookies": true,
-    "maxCookiesPerJob": 20000,
-    "maxValueBytes": 8192
-  }
-}
+```
+source extension
+  chrome.runtime.connectNative("com.browserpilot.browseragent")
+    -> BrowserPilot native host, import-only relay mode
+       (no TCP listener, no auth.json/session file, no generic commands)
+    -> Windows named pipe \\\\.\\pipe\\browser-cli-import-<128-bit>
+       (DACL owner+SYSTEM, PIPE_REJECT_REMOTE_CLIENTS, first instance)
+    -> Browser CLI CookieImportService
+       (target-browser approval dialog + CookieManager writes)
 ```
 
-The product target must report `native: true` and
-`persistAcrossRestart: true`. The local test target reports `native: false`
-and (for its memory backend) `persistAcrossRestart: false` — the CLI prints a
-warning rather than claiming the product loop.
+- The **product path has no localhost HTTP API**. The source extension has no
+  HTTP destination at all.
+- `scripts/import/target/local-target.mjs` is a test double. It reports
+  `native:false`, `transport:"http-test"`, `authorization.simulated:true`, and
+  must never be described as the product target.
+- The native host is selected by the first message:
+  - import extension sends `hello` with `mode:"cookie-import"`; the host enters
+    import-only relay mode and does not start the normal loopback command
+    listener;
+  - the normal BrowserPilot extension sends `get_ready_state`; the host starts
+    the existing normal mode (unchanged).
 
-### 3.2 `POST /v1/import/cookies`
+### Frame limits
 
-Headers: `x-bp-pair`, `Origin`, `Content-Type: application/json`.
-
-```json
-{
-  "contract": "browser-cli.cookie-import/v1",
-  "requestId": "8f2c... (8-128 chars, [A-Za-z0-9._:-])",
-  "source": {
-    "browser": "chrome",
-    "profileLabel": "Work",
-    "extensionVersion": "0.2.0"
-  },
-  "consent": {
-    "kind": "explicit-user-action",
-    "at": "2026-10-31T12:00:00.000Z",
-    "extensionVersion": "0.2.0"
-  },
-  "domains": ["example.com", "app.example.com"],
-  "cookies": [
-    {
-      "domain": ".example.com",
-      "hostOnly": false,
-      "path": "/",
-      "name": "sid",
-      "value": "<redacted in docs>",
-      "secure": true,
-      "httpOnly": true,
-      "sameSite": "lax",
-      "session": false,
-      "expirationDate": 2000000000,
-      "partitionKey": {
-        "topLevelSite": "https://top.example",
-        "hasCrossSiteAncestor": true
-      }
-    }
-  ]
-}
-```
-
-Validation rules:
-
-- `contract` exactly `browser-cli.cookie-import/v1`.
-- `requestId` required; retries use a new id. A repeated `requestId` returns the
-  existing job with `duplicate: true` (idempotent).
-- `consent.kind` must be `explicit-user-action`; `consent.at` must be a parseable
-  timestamp; `consent.extensionVersion` required. A request without consent is
-  rejected with 400.
-- `domains` is the user's explicit selection (1..1000, normalized, unique).
-- Every cookie's domain must equal a selected domain or be a subdomain of one
-  (`cookieDomain === selected || cookieDomain.endsWith("." + selected)`).
-- Cookie fields: domain, name, value, path, hostOnly, secure, httpOnly, session,
-  sameSite (`no_restriction|lax|strict|unspecified`), `expirationDate` for
-  non-session cookies, optional `partitionKey`.
-- Invalid records cause the whole request to be rejected with 400 and a list of
-  field paths/reason codes. Never echo a value.
-
-Response `202 Accepted`:
-
-```json
-{
-  "ok": true,
-  "contract": "browser-cli.cookie-import/v1",
-  "jobId": "24 lowercase hex chars",
-  "state": "pending",
-  "totals": { "cookies": 9, "domains": 2, "selectedDomains": 2 }
-}
-```
-
-The target applies asynchronously and updates the job. `202` means accepted,
-not written.
-
-### 3.3 `GET /v1/import/jobs/<jobId>`
-
-Pairing required. Returns the public job view:
-
-```json
-{
-  "contract": "browser-cli.cookie-import/v1",
-  "jobId": "...",
-  "state": "applying",
-  "totals": { "cookies": 9, "domains": 2, "selectedDomains": 2 },
-  "progress": { "applied": 5, "failed": 1, "remaining": 3 },
-  "dataCopied": { "cookies": false },
-  "cookieImported": {
-    "status": "not_started|imported|partially_imported|failed",
-    "applied": 5,
-    "failed": 1,
-    "failures": { "partitioned-cookie-rejected": 1 }
-  },
-  "loginVerified": {
-    "status": "not_verified",
-    "note": "Cookie 写入不等于网站登录成功；必须在目标浏览器中由用户本人确认。"
-  },
-  "error": { "code": "target-busy", "message": "..." },
-  "createdAt": "...",
-  "updatedAt": "..."
-}
-```
-
-Rules:
-
-- `state` ∈ `pending|applying|done|failed|cancelled`.
-- `failure` keys must be from the failure-code set (see §6). No other detail.
-- `dataCopied.cookies` is always `false`: cookies are not a file-copy artifact.
-- `loginVerified.status` is always `not_verified`. There is no endpoint that
-  accepts a login verification from the source/target; the user confirms via
-  `browser-data-import.mjs confirm-login --confirm-user-action`.
-- A partial result keeps `state: "done"` with
-  `cookieImported.status: "partially_imported"`. If zero writes succeeded,
-  `state: "failed"` and `cookieImported.status: "failed"`.
-
-### 3.4 `GET /v1/import/status`
-
-Pairing required. Returns the current/last job view, or:
-
-```json
-{ "ok": true, "contract": "browser-cli.cookie-import/v1", "state": "idle", "jobId": null }
-```
-
-Used by the CLI to wait for the extension to submit. It never contains values.
-
-### 3.5 `POST /v1/import/jobs/<jobId>/cancel`
-
-Pairing required. Sets a cancel flag; the writer stops before the next cookie.
-Already-written cookies are **not** rolled back (CookieStore has no transaction
-across cookies). Returns `202 {ok:true,state:"applying"|"cancelled",cancelRequested:true}`
-or `{ok:true,state:"done",alreadyTerminal:true}`. The public job view ends in
-`state: "cancelled"` and `cookieImported.status` reflects what was written
-(partial or not started).
-
-Retry is a new `POST /v1/import/cookies` with a new `requestId` from the source
-extension. Setting an identical cookie again is idempotent at the CookieStore
-level. The target must accept a new job after the previous one is terminal.
+- Native messaging: 4-byte LE length + UTF-8 JSON.
+- Job payload: ≤16 MiB, ≤64 chunks, ≤256 KiB decoded per chunk, ≤512 KiB per
+  pipe frame.
+- `jobDigest = SHA-256(exact UTF-8 payload bytes)`. The host and target verify it
+  before parsing.
 
 ---
 
-## 4. Three-state result (authoritative)
+## 3. One-time ticket and binding
+
+| Property | Value |
+| --- | --- |
+| Entropy | 160 bits (20 random bytes) |
+| Encoding | Crockford base32, 32 chars; display `BCLI-XXXX-…` |
+| TTL | 5 minutes |
+| Use | first `hello` consumes it; second `hello` → `ticket-consumed` |
+| Failure limit | 5 failures / 60 s → 60 s `rate-limited` |
+| Session limit | 10 hello attempts / hour |
+| Storage | target memory; session descriptor contains only `ticketHash` |
+| Hash | `SHA-256("browser-cli-ticket-v2:" + normalized ticket)` |
+
+Bindings:
+
+- **Target process**: target writes PID/start time and pipe name; the target
+  compares the pipe client PID (`GetNamedPipeClientProcessId`) with the relay's
+  `hostPid` (`host-identity-mismatch` on mismatch).
+- **Target Profile**: session descriptor contains a per-process-salted
+  `profileHash`; the target only runs in that Profile.
+- **Import job**: the ticket's first submit binds `jobNonce`, `jobDigest` and the
+  user-selected domain digest; a second job with the same ticket is rejected.
+- **User-confirmed domain scope**: `consent.domainsDigest =
+  SHA-256("browser-cli-domains-v2:" + sorted normalized selected domains joined
+  by "\n")`; the target's own approval dialog covers the same list; the target
+  writes only cookies matching it.
+
+A 6-digit code or the extension Origin alone is never sufficient. The native
+messaging manifest `allowed_origins` (main BrowserPilot ID + import-source ID)
+is an additional control enforced by Chrome, not the authorization.
+
+---
+
+## 4. Independent authorization inside the target browser
+
+After a complete, digest-verified job:
+
+1. target state = `awaiting_authorization`; it returns `accepted` + a count-only
+   status to the extension;
+2. target shows `CookieImportApprovalDialog` in the target browser process:
+   source browser/profile label, cookie count, session-cookie warning, and the
+   selected domain list;
+3. only **Allow** sets `authorization.targetUserConfirmed=true` and starts
+   writes; **Deny**/close sets `state:"denied"`, `error:"authorization-denied"`,
+   and writes nothing;
+4. there is no pipe/HTTP/CLI approval message. The source extension, host and
+   CLI cannot approve.
+5. `authorization.simulated` is `false` for the product target. Test doubles set
+   it to `true`; the popup/CLI warn.
+
+Target authorization is **not** login verification.
+
+---
+
+## 5. Cookie rules enforced by the target
+
+1. HostOnly/Domain:
+   - `hostOnly=true`: domain has no leading dot; URL host = domain; pass empty
+     domain to `CreateSanitizedCookie` → host-only cookie.
+   - `hostOnly=false`: domain starts with "."; pass the dotted domain → Domain
+     cookie.
+   - mismatch → `invalid-domain`.
+2. Public Suffix List: Domain cookie whose registrable domain is empty (`com`,
+   `co.uk`, `github.io`, …) → `public-suffix-rejected`. Host-only cookies are not
+   rejected solely for being on a public suffix host.
+3. Prefixes (longest first): `__Host-Http-` (Secure+HttpOnly+Path=/+host-only),
+   `__Host-` (Secure+Path=/+host-only), `__Secure-` (Secure), `__Http-`
+   (Secure+HttpOnly); violation → `cookie-prefix-rejected`.
+4. SameSite/Secure: `no_restriction` requires Secure → else `samesite-rejected`;
+   `lax`/`strict`/`unspecified` map directly.
+5. Partitioned: `topLevelSite` must be `http(s)://host` schemeful site with no
+   port/path/query/credentials; bool ancestor bit; must be Secure;
+   `CookiePartitionKey::FromStorage` failure → `partitioned-cookie-rejected`.
+6. Expiry: persistent cookies need a finite future `expirationDate`; session
+   cookies must not have one → `expiry-rejected`.
+7. Name/value/path size and control characters → `invalid-cookie`.
+8. Cookie domain must equal or be a subdomain of a selected domain.
+
+Failures are counted per cookie with fixed codes only; no raw exception text,
+cookie name, value or domain is returned.
+
+---
+
+## 6. Three-state result (authoritative)
 
 | State | Source of truth | Never inferred from |
 | --- | --- | --- |
-| `dataCopied` | bundle/apply of bookmarks/history (separate flow) | cookie counts |
-| `cookieImported` | target CookieStore callbacks (`applied`/`failed`) | page login |
-| `loginVerified` | user action with `--confirm-user-action` | cookie counts, target result |
+| `dataCopied` | bundle/apply of bookmarks/history | cookie counts |
+| `cookieImported` | target CookieManager callbacks applied/failed | page login |
+| `loginVerified` | user action with `--confirm-user-action` | cookie counts, target authorization, target result |
 
-The local report written by the CLI
-(`cookie-import-<timestamp>-<job>.json`) stores counts/codes only. Domains
-appear only after the user explicitly confirms a login check.
+Public job view includes:
+
+- `authorization` (target user confirmation + `simulated` + `scopeDigest`);
+- `sessionCookies: {count, mayNotSurviveRestart: true}`;
+- `loginVerified.status` always `not_verified`;
+- no cookie values/names/domains.
 
 ---
 
-## 5. Native implementation plan (minimal Chromium patch)
+## 7. Wire protocol
 
-This is a proposal; nothing below was applied to shared Chromium source.
+### 7.1 Extension ↔ native host
 
-### 5.1 Option A (preferred): in-process Browser CLI import service
+- `hello` `{type,protocol:2,mode:"cookie-import",extensionVersion}` → `hello-ok`
+- `begin` `{ticket,jobNonce,jobDigest,totalBytes,chunkCount}` → `ready`
+- `chunk` `{jobNonce,index,data:<base64>}` (no response)
+- `commit` `{jobNonce}` → `accepted`
+- host → extension: `status` (sanitized public view), `cancel-ok`, `error`
+- `cancel` `{jobNonce}`, `close`
 
-Files (new):
+### 7.2 Host ↔ Browser CLI named pipe
 
-- `chrome/browser/browser_cli/cookie_import_service.h`
-- `chrome/browser/browser_cli/cookie_import_service.cc`
-- `chrome/browser/browser_cli/cookie_import_service_unittest.cc`
-- `chrome/browser/browser_cli/BUILD.gn`
+Same frames, plus:
 
-Files (modified):
+- relay `hello` includes `hostPid`; target → `ready` includes `sessionId`,
+  `targetPid`, `targetProduct`, `targetVersion`, `native`, `capabilities`;
+- relay `job-begin` / `job-chunk` / `job-commit`;
+- target → `accepted`, `status`, `error`, `cancel-ok`.
 
-- `chrome/browser/BUILD.gn` — depend on the new target.
-- `chrome/browser/chrome_browser_main.cc` — start the service after the Profile
-  and its CookieStore exist; stop it during shutdown.
-- `chrome/common/chrome_switches.h/.cc` — add
-  `--browser-cli-cookie-import` (off by default) and optional
-  `--browser-cli-cookie-import-port=<port>`.
+### 7.3 Session descriptor
 
-Behavior:
+Path (default): `%LOCALAPPDATA%\BrowserCLI\import\sessions\session-<id>.json`
+(or `BROWSER_CLI_IMPORT_SESSION_DIR` for tests).
 
-1. Only start when the switch is present. Bind `127.0.0.1` (never `0.0.0.0`).
-2. Generate a 6-digit pairing code; print it once to the terminal (user is
-   present). Do not persist it.
-3. Validate the request against this contract (size, JSON depth, fields,
-   domain selection, consent).
-4. For each cookie, build a `net::CanonicalCookie` and call
-   `CookieStore::SetCanonicalCookieAsync` on the Profile's CookieStore. Use the
-   callback result, not a SQLite write, for `applied`/`failed`.
-   - Host-only: pass `url` and no `domain`.
-   - Domain cookie: pass `domain` (leading dot preserved).
-   - Session cookie: no expiration.
-   - Partitioned: build `net::CookiePartitionKey` from `topLevelSite` /
-     `hasCrossSiteAncestor`; reject malformed keys.
-5. Count successes/failures; map failures to the fixed code set. Log counts
-   only, never names/values/domains.
-6. The target CookieStore encrypts and persists values with the target's own
-   OSCrypt keys. No source key or source profile is touched. Restart
-   persistence follows from the CookieStore; ensure a flush on shutdown.
-7. One active job, 10-minute TTL, cancel flag checked between cookies.
-8. Stop the server and flush the CookieStore on shutdown.
-
-Sketch:
-
-```cc
-auto cookie = net::CanonicalCookie::CreateSanitizedCookie(
-    url, name, value, domain, path, creation_time, expiration_time,
-    last_access_time, secure, http_only, same_site, priority, partition_key,
-    &status);
-if (!cookie) {
-  // count a failure by a fixed code; never log the value
-  return;
+```json
+{
+  "schema": "browser-cli.cookie-import.session/v2",
+  "protocolVersion": 2,
+  "targetProduct": "Browser CLI",
+  "targetVersion": "156.0.8067.0",
+  "targetPid": 1234,
+  "targetStartTimeMs": 1790000000000,
+  "targetInstanceId": "32 hex",
+  "profileHash": "64 hex",
+  "ticketHash": "64 hex",
+  "transport": "named-pipe",
+  "pipeName": "\\\\.\\pipe\\browser-cli-import-<32 hex>",
+  "createdAt": "ISO8601",
+  "expiresAt": "ISO8601"
 }
-cookie_store->SetCanonicalCookieAsync(
-    std::move(cookie), url, options,
-    base::BindOnce([](net::CookieAccessResult result) {
-      // applied++ or failed++ by result.status
-    }));
 ```
 
-Notes:
-
-- Do not write `Network/Cookies` / `Cookies` SQLite directly.
-- Do not use `OSCrypt`/DPAPI on the source profile.
-- Do not call the elevation service or relax App-Bound Encryption.
-- Do not start the endpoint unless the user launched Browser CLI with the
-  explicit switch.
-- Keep the service out of the extension API surface unless a future target UI
-  needs it; the loopback contract is sufficient.
-
-Estimated size: ~400-600 LOC service, ~200 LOC tests, switch/BUILD changes.
-No third-party dependency.
-
-### 5.2 Option B (test/stopgap only): local CDP helper
-
-`scripts/import/target/cdp-backend.mjs` implements `Storage.setCookies` against
-an already-running local Chromium. It is useful for isolated end-to-end tests,
-but it is **not** the product target:
-
-- requires the target to be started with a DevTools endpoint;
-- Chrome 156 may require per-connection user approval for remote debugging;
-- exposes a debugging surface that a product should not depend on;
-- still does not launch a browser or use `--no-sandbox`.
-
-Use it only with a disposable test profile and `--allow-test-cdp`. It reports
-`native: false` and the CLI warns.
-
-### 5.3 Rejected approaches
-
-- Decrypting v10/v20 source cookies (DPAPI, App-Bound, elevation service).
-- Copying source `Local State`/Cookies into the target.
-- Writing the target Cookies SQLite file from an external process.
-- Repointing Windows Known Folders or the default user-data directory.
-- Killing/closing the source browser automatically.
+No plaintext ticket, cookie value or domain. Short TTL; deleted on consume,
+terminal state or exit.
 
 ---
 
-## 6. Failure codes
+## 8. Proposed target implementation (not built)
 
-| Code | Meaning |
-| --- | --- |
-| `invalid-cookie` | A record failed validation. |
-| `invalid-domain` | Domain syntax/selection failure. |
-| `invalid-url` | Could not build a valid URL for the CookieStore. |
-| `partitioned-cookie-rejected` | Target rejected the partition key. |
-| `samesite-rejected` | Target rejected SameSite. |
-| `expiry-rejected` | Target rejected the expiration. |
-| `permission-or-host` | Target refused the host. |
-| `cookie-store-unavailable` | Profile/CookieStore not ready or locked. |
-| `target-busy` | Another job is active. |
-| `profile-locked` | Target profile is in use. |
-| `cancelled` | The user cancelled; no rollback. |
-| `timeout` | No job arrived in time (CLI-side). |
-| `internal` | Any other target failure. |
+The target-side patch adds:
 
-Unknown details must be collapsed to a code; never return raw exception text
-that could contain a value.
+- `chrome/browser/browser_cli/cookie_import/cookie_import_policy.{h,cc}`:
+  ticket/digest/field policy, PSL/prefix/partition, `CreateSanitizedCookie`.
+- `.../cookie_import_service.{h,cc}`: singleton, ticket/TTL/failure limits, job
+  state machine, target dialog callback, sequential CookieManager writes,
+  flush, public view.
+- `.../cookie_import_pipe_server_win.{h,cc}`: Win32 named pipe, DACL, first
+  instance, remote-client rejection, client PID.
+- `.../cookie_import_dialog.{h,cc}`: ticket window + target approval dialog.
+- `.../cookie_import_policy_unittest.cc`: unit tests.
+- `chrome_browser_main.cc`: start only with
+  `--browser-cli-cookie-import` for the initial profile; stop on shutdown.
+- `chrome/browser/BUILD.gn`: Windows dependency.
+
+Status: **proposed, not in `chromium/patch-manifest.json`, not compiled, not
+integrated.** A read-only `git apply --check` against the post-033 checkout
+passes; this is not build/runtime evidence.
 
 ---
 
-## 7. Native acceptance tests
+## 9. Failure codes
 
-1. Start Browser CLI with the import switch and a **disposable** target profile.
-2. Submit a synthetic request containing one session cookie, one persistent
-   host-only cookie, one partition-key cookie, and one deliberately invalid
-   cookie.
-3. Assert `applied=2/3`, the invalid one fails with a code, and
-   `loginVerified=not_verified`.
-4. Read the target CookieStore; assert values/metadata match. Restart Browser
-   CLI with the same profile; assert the cookies still exist.
-5. Assert the source profile tree is byte-identical before/after.
-6. Assert no log line or report contains a cookie value, name or domain.
-7. Cancel during a multi-cookie job; assert no further writes and an honest
-   `partially_imported`/`not_started` status.
-8. Test pairing/origin/body-limit/`target-busy`/idempotent-requestId behavior.
+Cookie failures: `invalid-cookie`, `invalid-domain`, `invalid-url`,
+`public-suffix-rejected`, `cookie-prefix-rejected`,
+`partitioned-cookie-rejected`, `samesite-rejected`, `expiry-rejected`,
+`permission-or-host`, `cookie-store-unavailable`, `target-busy`,
+`profile-locked`, `authorization-denied`, `cancelled`, `timeout`, `internal`.
 
-The Node contract tests in `scripts/test-import-product.mjs` cover the same
-semantics at the HTTP/contract level and can be reused as the reference.
+Session/transport errors: `protocol-mismatch`, `ticket-invalid`,
+`ticket-expired`, `ticket-consumed`, `rate-limited`, `target-not-running`,
+`target-disconnected`, `target-busy`, `host-identity-mismatch`,
+`profile-mismatch`, `job-binding-mismatch`, `job-digest-mismatch`,
+`chunk-missing`, `too-many-cookies`, `too-large`, `import-mode-conflict`.
+
+Unknown details collapse to a code; never return raw exception text.
+
+---
+
+## 10. Tests
+
+BrowserPilot side:
+
+- `node scripts/import/sync-extension-contract.mjs --check`
+- `node scripts/test-import-product.mjs` — 42 v2 contract/target/CLI/report tests
+- `node scripts/test-native-import.mjs` — 11 native host relay/extension
+  transport/pipe-target tests
+- `node scripts/test-browser-data-import.mjs` — 15 file-import tests
+- `node native-host/test-host.mjs` — normal host mode regression
+
+All use synthetic profiles/cookies, no browser launch, no real tokens.
+
+Browser CLI side (test-only, no browser):
+
+- `node tests/tools/cookie-import/test_reference_target.mjs`
+- `python tests/tools/test_cookie_import_native.py`
+
+These prove the protocol/security semantics and the proposed patch's static
+contents; they do **not** prove the Chromium patch compiles or writes cookies.
+
+---
+
+## 11. Remaining work
+
+1. Build 034 on Windows, fix compile/unit tests, add to manifest/CI.
+2. Isolated Windows test machine + disposable Profile + synthetic cookies:
+   source extension → native host → target pipe → target CookieManager;
+   approve/deny; attribute mapping; restart persistence; source profile
+   byte-identical.
+3. Register/verify the native host for both extension IDs; Web Store/enterprise
+   distribution; Chrome 156 unpacked-extension limitation.
+4. Runtime tests for cancel/disconnect/long approval/rate limit; target dialog
+   behavior; pipe ACL.
+5. Real login verification remains a user-only action; never inferred.

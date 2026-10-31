@@ -3,7 +3,8 @@
   "description": "BrowserPilot native messaging host",
   "name": "com.browserpilot.browseragent",
   "allowed_origins": [
-    "chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/"
+    "chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/",
+    "chrome-extension://ljoekiddijnohefaghljlcodgljienoj/"
   ],
   "type": "stdio"
 }

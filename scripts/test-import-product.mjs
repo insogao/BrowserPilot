@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Product-level tests for the Browser CLI cookie-import flow.
+// Product-level tests for the Browser CLI cookie-import flow (contract v2).
 //
 // Everything is synthetic: temp profile roots, synthetic cookies with canary
 // values, no browser launch, no real Chrome/Edge/Firefox profile, no real
-// session tokens. The tests assert the three-state model, consent gating,
-// loopback-only transport, no cookie values in logs/reports/views, and the
-// contract between the source extension and the local native target.
+// session tokens. The tests assert the three-state model, explicit consent,
+// one-time ticket semantics, target-side authorization, loopback test-target
+// behavior, no cookie values in logs/reports/views, and the contract between
+// the source extension and the native host/target.
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -23,21 +24,23 @@ import {
 import { startLocalTarget, createMemoryBackend } from "./import/target/local-target.mjs";
 import { TargetClient } from "./import/lib/target-client.mjs";
 import { listSources, findSource, cookieFlowReadiness, formatSourceLine } from "./import/lib/sources.mjs";
-import { waitForJob, formatThreeState, reloginGuidance } from "./import/lib/wizard.mjs";
+import { waitForJob, formatThreeState, reloginGuidance, formatCapabilities } from "./import/lib/wizard.mjs";
 import {
   createCookieImportReport,
   writeCookieImportReport,
   readReport,
+  formatCookieImportReport,
 } from "./import/lib/report.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(HERE, "..");
 const CLI = path.join(REPO, "scripts", "import", "browser-data-import.mjs");
 const EXT = path.join(REPO, "extensions", "import-source");
+const SOURCE_EXTENSION_ID = "ljoekiddijnohefaghljlcodgljienoj";
+const TEST_TICKET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
 const CANARY = "COOKIE-PRODUCT-CANARY-4f9d2a";
 const CANARY2 = "COOKIE-PRODUCT-CANARY-8b71ce";
-const SOURCE_EXTENSION_ID = "ljoekiddijnohefaghljlcodgljienoj";
 
 let passed = 0;
 const failures = [];
@@ -91,7 +94,7 @@ function extensionIdFromManifestKey(base64Key) {
 }
 
 function cookie(overrides = {}) {
-  return {
+  const value = {
     domain: ".example.test",
     hostOnly: false,
     path: "/",
@@ -104,17 +107,28 @@ function cookie(overrides = {}) {
     expirationDate: 2000000000,
     ...overrides,
   };
+  // Chrome omits expirationDate for session cookies. Tests that deliberately
+  // send an inconsistent record pass an explicit expirationDate.
+  if (value.session && overrides.expirationDate === undefined) delete value.expirationDate;
+  return value;
 }
 
-function importRequest(overrides = {}) {
+async function importRequest(overrides = {}) {
+  const domains = overrides.domains || ["example.test"];
+  const consent = overrides.consent !== undefined
+    ? overrides.consent
+    : await contract.buildConsent({ extensionVersion: "0.3.0", domains });
   return {
     contract: contract.CONTRACT_ID,
-    requestId: "req-12345678",
-    source: { browser: "chrome", profileLabel: "Synthetic", extensionVersion: "0.2.0" },
-    consent: { kind: "explicit-user-action", at: new Date().toISOString(), extensionVersion: "0.2.0" },
-    domains: ["example.test"],
+    protocolVersion: contract.PROTOCOL_VERSION,
+    jobNonce: "a".repeat(32),
+    source: { browser: "chrome", profileLabel: "Synthetic", extensionVersion: "0.3.0" },
+    consent,
+    domains,
     cookies: [cookie()],
     ...overrides,
+    consent,
+    domains,
   };
 }
 
@@ -196,8 +210,6 @@ function runCli(args, { expect = 0, env = {} } = {}) {
   return { ...res, combined: `${res.stdout || ""}\n${res.stderr || ""}` };
 }
 
-// Async variant for tests that run a target server in this process: spawnSync
-// would block the event loop and the in-process target could not answer.
 function runCliAsync(args, { env = {} } = {}) {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, [CLI, ...args], {
@@ -213,21 +225,30 @@ function runCliAsync(args, { env = {} } = {}) {
   });
 }
 
-async function request(base, pathname, { method = "GET", pair, origin, body, contentType } = {}) {
+async function request(base, pathname, { method = "GET", ticket, origin, body, rawBody, digest, contentType } = {}) {
   const headers = {};
-  if (pair) headers["x-bp-pair"] = pair;
+  if (ticket) headers["x-bp-ticket"] = ticket;
   if (origin) headers.origin = origin;
-  if (body !== undefined) headers["content-type"] = contentType || "application/json";
-  const res = await fetch(`${base}${pathname}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  if (digest) headers["x-bp-job-digest"] = digest;
+  if (body !== undefined || rawBody !== undefined) headers["content-type"] = contentType || "application/json";
+  const payload = rawBody !== undefined ? rawBody : body === undefined ? undefined : JSON.stringify(body);
+  const res = await fetch(`${base}${pathname}`, { method, headers, body: payload });
   let parsed = null;
   try {
     parsed = await res.json();
   } catch {}
   return { status: res.status, body: parsed, headers: res.headers };
+}
+
+async function submitRequest(base, requestBody, ticket) {
+  const text = JSON.stringify(requestBody);
+  const digest = await contract.jobDigest(text);
+  return request(base, "/v2/import/cookies", {
+    method: "POST",
+    ticket,
+    rawBody: text,
+    digest,
+  });
 }
 
 async function main() {
@@ -240,62 +261,195 @@ async function main() {
   };
 
   // ---------------------------------------------------------------------
-  // A. Contract validation and privacy
+  // A. Contract v2: ticket, consent, cookie policy, public views
   // ---------------------------------------------------------------------
-  await check("contract accepts a well-formed request and normalizes counts", () => {
-    const res = contract.validateImportRequest(
-      importRequest({
+  await check("contract accepts a well-formed v2 request and normalizes counts", async () => {
+    const res = await contract.validateImportRequest(
+      await importRequest({
         domains: ["example.test", "sub.example.test"],
         cookies: [
           cookie(),
-          cookie({ domain: "sub.example.test", value: CANARY2, session: true }),
+          cookie({ domain: "sub.example.test", hostOnly: true, value: CANARY2, session: true }),
         ],
       }),
     );
     assert.equal(res.ok, true, JSON.stringify(res.errors));
-    assert.deepEqual(res.normalized.totals, { cookies: 2, domains: 2, selectedDomains: 2 });
+    assert.deepEqual(res.normalized.totals, {
+      cookies: 2,
+      domains: 2,
+      selectedDomains: 2,
+      hostOnlyCookies: 1,
+      domainCookies: 1,
+      sessionCookies: 1,
+      partitionedCookies: 0,
+    });
     assert.equal(res.normalized.cookies[0].value, CANARY);
     assert.equal(res.normalized.cookies[1].session, true);
     assert.equal(res.normalized.cookies[1].expirationDate, undefined);
   });
 
-  await check("contract rejects missing consent, bad ids, empty selection and unselected domains", () => {
+  await check("contract rejects missing consent, stale consent, bad nonce and unselected domains", async () => {
     const cases = [
-      [{ ...importRequest(), consent: undefined }, "consent.missing"],
-      [{ ...importRequest(), consent: { kind: "implicit", at: new Date().toISOString(), extensionVersion: "x" } }, "consent.kind-invalid"],
-      [{ ...importRequest(), requestId: "short" }, "requestId-invalid"],
-      [{ ...importRequest(), domains: [] }, "domains-empty"],
-      [{ ...importRequest(), domains: ["example.test", "example.test"] }, "domains[1]-duplicate"],
-      [{ ...importRequest(), cookies: [] }, "cookies-empty"],
-      [{ ...importRequest(), domains: ["other.test"] }, "domain-not-selected"],
-      [{ ...importRequest(), cookies: [cookie({ value: "x".repeat(9000) })] }, "value-too-long"],
-      [{ ...importRequest(), cookies: [cookie({ sameSite: "weird" })] }, "sameSite-invalid"],
-      [{ ...importRequest(), cookies: [cookie({ session: false, expirationDate: undefined })] }, "expirationDate-invalid"],
-      [{ ...importRequest(), cookies: [cookie({ domain: "bad domain" })] }, "domain-invalid"],
+      [{ ...(await importRequest()), consent: undefined }, "consent.missing"],
+      [
+        await importRequest({
+          consent: {
+            kind: "implicit",
+            at: new Date().toISOString(),
+            extensionVersion: "x",
+            scope: "selected-domains",
+            domainsDigest: "0".repeat(64),
+          },
+        }),
+        "consent.kind-invalid",
+      ],
+      [await importRequest({ jobNonce: "short" }), "jobNonce-invalid"],
+      [await importRequest({ domains: [] }), "domains-empty"],
+      [await importRequest({ domains: ["example.test", "example.test"] }), "domains[1]-duplicate"],
+      [await importRequest({ cookies: [] }), "cookies-empty"],
+      [await importRequest({ domains: ["other.test"] }), "domain-not-selected"],
+      [await importRequest({ cookies: [cookie({ value: "x".repeat(9000) })] }), "value-too-long"],
+      [await importRequest({ cookies: [cookie({ sameSite: "weird" })] }), "sameSite-invalid"],
+      [await importRequest({ cookies: [cookie({ session: false, expirationDate: undefined })] }), "expirationDate-invalid"],
+      [await importRequest({ cookies: [cookie({ domain: "bad domain" })] }), "domain-invalid"],
+      [await importRequest({ cookies: [cookie({ hostOnly: true })] }), "hostOnly-domain-has-dot"],
+      [await importRequest({ cookies: [cookie({ domain: "example.test", hostOnly: false })] }), "domain-cookie-missing-dot"],
+      [await importRequest({ cookies: [cookie({ session: true, expirationDate: 2000000000 })] }), "session-cookie-has-expiration"],
     ];
     for (const [payload, expected] of cases) {
-      const res = contract.validateImportRequest(payload);
-      assert.equal(res.ok, false);
+      const res = await contract.validateImportRequest(payload);
+      assert.equal(res.ok, false, `${expected} unexpectedly accepted`);
       assert.ok(res.errors.some((e) => e.includes(expected)), `${expected} not in ${res.errors.join(",")}`);
       assert.equal(JSON.stringify(res).includes(CANARY), false, "validation result leaked a cookie value");
       assert.equal(JSON.stringify(res).includes("example.test"), false, "validation result leaked a domain");
     }
   });
 
-  await check("domain selection matches registrable domain and subdomains, not parents", () => {
+  await check("contract rejects consent that is not bound to the exact domain scope", async () => {
+    const payload = await importRequest({ domains: ["example.test"] });
+    const wrong = { ...payload, consent: { ...payload.consent, domainsDigest: "f".repeat(64) } };
+    const res = await contract.validateImportRequest(wrong);
+    assert.equal(res.ok, false);
+    assert.ok(res.errors.includes("consent.domains-digest-mismatch"));
+
+    const old = {
+      ...payload,
+      consent: {
+        ...payload.consent,
+        at: new Date(Date.now() - contract.CONSENT_MAX_AGE_MS - 60_000).toISOString(),
+      },
+    };
+    const stale = await contract.validateImportRequest(old);
+    assert.equal(stale.ok, false);
+    assert.ok(stale.errors.includes("consent.at-too-old"));
+  });
+
+  await check("cookie prefix, SameSite, partitioned and expiry policy is enforced", async () => {
+    const cases = [
+      [{ name: "__Host-sid", hostOnly: false }, "cookie-prefix-rejected"],
+      [{ name: "__Host-sid", path: "/x" }, "cookie-prefix-rejected"],
+      [{ name: "__Secure-sid", secure: false }, "cookie-prefix-rejected"],
+      [{ name: "__Http-sid", httpOnly: false }, "cookie-prefix-rejected"],
+      [{ sameSite: "no_restriction", secure: false }, "samesite-none-requires-secure"],
+      [{ secure: false, partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: true } }, "partitioned-requires-secure"],
+      [{ partitionKey: { topLevelSite: "https://top.test/path", hasCrossSiteAncestor: true } }, "partitionKey.topLevelSite-invalid"],
+      [{ partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: "yes" } }, "partitionKey.hasCrossSiteAncestor-invalid"],
+      [{ expirationDate: Math.floor(Date.now() / 1000) - 60 }, "expirationDate-in-past"],
+    ];
+    for (const [overrides, expected] of cases) {
+      const payload = await importRequest({ cookies: [cookie(overrides)] });
+      const res = await contract.validateImportRequest(payload);
+      assert.equal(res.ok, false, `${expected} unexpectedly accepted`);
+      assert.ok(res.errors.some((e) => e.includes(expected)), `${expected} not in ${res.errors.join(",")}`);
+    }
+    const good = await contract.validateImportRequest(
+      await importRequest({ cookies: [cookie({ name: "__Host-sid", hostOnly: true, domain: "example.test" })] }),
+    );
+    assert.equal(good.ok, true, JSON.stringify(good.errors));
+  });
+
+  await check("domain selection matches the selected domain and subdomains, not parents", () => {
     assert.equal(contract.domainMatchesSelection(".example.test", ["example.test"]), true);
     assert.equal(contract.domainMatchesSelection("sub.example.test", ["example.test"]), true);
     assert.equal(contract.domainMatchesSelection(".example.test", ["sub.example.test"]), false);
     assert.equal(contract.domainMatchesSelection("notexample.test", ["example.test"]), false);
   });
 
-  await check("public job view and sanitizer contain counts only and force not_verified", () => {
+  await check("ticket is 160-bit, formatted, normalized and hashed one-way", async () => {
+    const ticket = contract.generateTicket();
+    assert.equal(ticket.length, 32);
+    assert.equal(contract.isValidTicket(ticket), true);
+    const formatted = contract.formatTicket(ticket);
+    assert.ok(formatted.startsWith("BCLI-"));
+    assert.equal(contract.normalizeTicket(formatted), ticket);
+    assert.equal(contract.isValidTicket("123456"), false);
+    assert.equal(contract.isValidTicket("BCLI-0000-0000-0000-0000-0000-0000-0000-0000"), true);
+    const hash = await contract.ticketHash(ticket);
+    assert.match(hash, /^[a-f0-9]{64}$/);
+    assert.equal(await contract.ticketMatchesHash(formatted, hash), true);
+    assert.equal(await contract.ticketMatchesHash(contract.generateTicket(), hash), false);
+    assert.equal(hash.includes(ticket), false);
+  });
+
+  await check("session descriptor is short-lived, bound to target/profile/job surface and excludes the ticket", async () => {
+    const ticket = contract.generateTicket();
+    const descriptor = contract.createSessionDescriptor({
+      targetProduct: "Browser CLI",
+      targetVersion: "156.0.8067.0",
+      targetPid: process.pid,
+      targetStartTimeMs: Date.now() - 1000,
+      targetInstanceId: "1".repeat(32),
+      profileHash: "2".repeat(64),
+      ticketHash: await contract.ticketHash(ticket),
+      transport: "named-pipe",
+      pipeName: `\\\\.\\pipe\\browser-cli-import-${"3".repeat(32)}`,
+    });
+    assert.equal(contract.validateSessionDescriptor(descriptor).ok, true);
+    assert.equal(JSON.stringify(descriptor).includes(ticket), false);
+    assert.equal(JSON.stringify(descriptor).includes(CANARY), false);
+    const expired = { ...descriptor, expiresAt: new Date(Date.now() - 1000).toISOString() };
+    assert.equal(contract.validateSessionDescriptor(expired).ok, false);
+    const tooLong = {
+      ...descriptor,
+      createdAt: new Date(Date.now() - contract.TICKET_TTL_MS * 2).toISOString(),
+      expiresAt: new Date(Date.now() + contract.TICKET_TTL_MS).toISOString(),
+    };
+    assert.equal(contract.validateSessionDescriptor(tooLong).ok, false);
+  });
+
+  await check("chunking preserves bytes and detects a tampered digest", async () => {
+    const text = JSON.stringify({ hello: "world", value: CANARY, nested: { a: 1, b: [1, 2, 3] } });
+    const chunks = contract.chunkJobPayload(text);
+    assert.ok(chunks.length >= 1);
+    assert.equal(contract.decodeUtf8(contract.assembleChunks(chunks)), text);
+    const digest = await contract.jobDigest(text);
+    const tampered = contract.decodeUtf8(contract.assembleChunks([chunks[0].slice(0, -4) + "AAAA"]));
+    assert.notEqual(await contract.jobDigest(tampered), digest);
+  });
+
+  await check("public job view and sanitizer contain counts only and force not_verified", async () => {
+    const consent = await contract.buildConsent({ extensionVersion: "0.3.0", domains: ["example.test"] });
     const job = {
       id: "a".repeat(24),
       state: "done",
-      totals: { cookies: 2, domains: 1, selectedDomains: 1 },
+      transport: "named-pipe",
+      native: true,
+      totals: {
+        cookies: 2,
+        domains: 1,
+        selectedDomains: 1,
+        sessionCookies: 1,
+        partitionedCookies: 0,
+      },
       progress: { applied: 1, failed: 1 },
       failures: { "partitioned-cookie-rejected": 1 },
+      authorization: {
+        targetUserConfirmed: true,
+        simulated: false,
+        source: "target-browser-dialog",
+        scopeDigest: consent.domainsDigest,
+        confirmedAt: new Date().toISOString(),
+      },
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:01.000Z",
     };
@@ -305,6 +459,9 @@ async function main() {
     assert.equal(text.includes("example.test"), false);
     assert.equal(text.includes("sid"), false);
     assert.equal(view.loginVerified.status, "not_verified");
+    assert.equal(view.authorization.targetUserConfirmed, true);
+    assert.equal(view.authorization.simulated, false);
+    assert.equal(view.sessionCookies.mayNotSurviveRestart, true);
     assert.equal(view.cookieImported.status, "partially_imported");
 
     const hostile = {
@@ -322,6 +479,36 @@ async function main() {
     assert.equal(safe.cookieImported.status, "partially_imported");
     assert.equal(safe.extra, undefined);
     assert.equal(contract.sanitizePublicJobView({ ...view, state: "weird" }), null);
+    assert.equal(contract.sanitizePublicJobView({ ...view, jobId: "not-hex" }), null);
+  });
+
+  await check("target authorization never becomes login verification", async () => {
+    const view = contract.createPublicJobView({
+      id: "e".repeat(24),
+      state: "done",
+      transport: "named-pipe",
+      native: true,
+      totals: { cookies: 1, domains: 1, selectedDomains: 1 },
+      progress: { applied: 1, failed: 0 },
+      failures: {},
+      authorization: {
+        targetUserConfirmed: true,
+        simulated: false,
+        source: "target-browser-dialog",
+        scopeDigest: "a".repeat(64),
+      },
+      createdAt: "x",
+      updatedAt: "y",
+    });
+    assert.equal(view.authorization.targetUserConfirmed, true);
+    assert.equal(view.loginVerified.status, "not_verified");
+    const report = createCookieImportReport({
+      source: { browser: "chrome", browserName: "Chrome", label: "Synthetic" },
+      target: { product: "Browser CLI", mode: "native", native: true, capabilities: { persistAcrossRestart: true } },
+      view,
+    });
+    assert.equal(report.authorization.targetUserConfirmed, true);
+    assert.equal(report.loginVerified.status, "not_verified");
   });
 
   await check("chrome cookie mapping returns reasons, never values", () => {
@@ -353,25 +540,27 @@ async function main() {
   // B. Source extension packaging and static safety
   // ---------------------------------------------------------------------
   const manifest = JSON.parse(readText(path.join(EXT, "manifest.json")));
-  await check("source extension manifest is minimal, MV3, and keyed to the product id", () => {
+  await check("source extension manifest is minimal, MV3, native-messaging-only and keyed to the product id", () => {
     assert.equal(manifest.manifest_version, 3);
-    assert.deepEqual([...manifest.permissions].sort(), ["cookies", "storage"]);
-    assert.deepEqual(manifest.host_permissions, ["<all_urls>", "http://127.0.0.1/*"]);
+    assert.deepEqual([...manifest.permissions].sort(), ["cookies", "nativeMessaging", "storage"]);
+    assert.deepEqual(manifest.host_permissions, ["<all_urls>"]);
     assert.equal(manifest.background.type, "module");
     assert.equal(manifest.action.default_popup, "popup.html");
-    for (const forbidden of ["tabs", "history", "bookmarks", "downloads", "nativeMessaging", "webRequest", "management"]) {
+    for (const forbidden of ["tabs", "history", "bookmarks", "downloads", "webRequest", "management"]) {
       assert.equal(manifest.permissions.includes(forbidden), false, `forbidden permission ${forbidden}`);
     }
     assert.equal(extensionIdFromManifestKey(manifest.key), SOURCE_EXTENSION_ID);
+    assert.equal(manifest.version, "0.3.0");
   });
 
-  await check("extension sources contain no logging, persistent cookie storage, or remote URLs", () => {
+  await check("extension sources contain no logging, persistent storage, HTTP or history APIs", () => {
     const files = [
       "service-worker.js",
       "popup.js",
       "popup.html",
       "lib/selection.mjs",
       "lib/contract.mjs",
+      "lib/native-transport.mjs",
       "manifest.json",
     ];
     for (const relative of files) {
@@ -383,15 +572,25 @@ async function main() {
       assert.equal(text.includes("chrome.bookmarks"), false, `${relative} uses bookmarks`);
       assert.equal(text.includes("XMLHttpRequest"), false, `${relative} uses XHR`);
       assert.equal(text.includes("eval("), false, `${relative} uses eval`);
-      for (const match of text.matchAll(/https?:\/\/[^\s"'`)]+/g)) {
-        assert.ok(match[0].startsWith("http://127.0.0.1"), `${relative} contains non-loopback URL ${match[0]}`);
+      // The shared contract keeps a literal-loopback validator for the test
+      // target; it is not a destination and the service worker never calls it.
+      if (relative !== "lib/contract.mjs") {
+        for (const match of text.matchAll(/https?:\/\/[^\s"'`)]+/g)) {
+          assert.fail(`${relative} contains HTTP URL ${match[0]}; the source extension must use native messaging only`);
+        }
       }
     }
     const worker = readText(path.join(EXT, "service-worker.js"));
     assert.ok(worker.includes("consent !== true"));
     assert.ok(worker.includes("acknowledged !== true"));
-    assert.ok(worker.includes("validateLoopbackEndpoint"));
-    assert.ok(worker.includes("validatePairCode"));
+    assert.ok(worker.includes("createNativeTransport"));
+    assert.ok(worker.includes("isValidTicket"));
+    assert.ok(worker.includes("buildConsent"));
+    assert.equal(worker.includes("validatePairCode"), false);
+    assert.equal(worker.includes("127.0.0.1"), false);
+    const transport = readText(path.join(EXT, "lib/native-transport.mjs"));
+    assert.ok(transport.includes("connectNative"));
+    assert.ok(transport.includes("connectNative(hostName)"));
   });
 
   await check("extension contract copy is byte-identical to the canonical contract", () => {
@@ -433,9 +632,12 @@ async function main() {
     const view = contract.createPublicJobView({
       id: "b".repeat(24),
       state: "done",
-      totals: { cookies: 1, domains: 1, selectedDomains: 1 },
+      transport: "named-pipe",
+      native: true,
+      totals: { cookies: 1, domains: 1, selectedDomains: 1, sessionCookies: 0 },
       progress: { applied: 1, failed: 0 },
       failures: {},
+      authorization: { targetUserConfirmed: true, simulated: false, source: "target-browser-dialog" },
       createdAt: "x",
       updatedAt: "y",
     });
@@ -446,15 +648,12 @@ async function main() {
     assert.equal(sanitized.ok, true);
     assert.equal(JSON.stringify(sanitized).includes(CANARY), false);
     assert.equal(sanitized.view.loginVerified.status, "not_verified");
-    assert.equal(sanitizedJobExtra(sanitized.view), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(sanitized.view, "cookies"), false);
     assert.equal(sanitizeJobView({ ...view, state: "weird" }, contract).ok, false);
+    assert.equal(sanitizeJobView({ ...view, jobId: "bad" }, contract).ok, false);
   });
 
-  function sanitizedJobExtra(view) {
-    return Object.prototype.hasOwnProperty.call(view, "cookies");
-  }
-
-  await check("loopback endpoint validator rejects DNS, LAN, TLS, paths and credentials", () => {
+  await check("loopback endpoint validator is test-only and rejects DNS, LAN, TLS, paths and credentials", () => {
     assert.deepEqual(contract.validateLoopbackEndpoint("http://127.0.0.1:47832"), {
       ok: true,
       base: "http://127.0.0.1:47832",
@@ -470,9 +669,6 @@ async function main() {
     ]) {
       assert.equal(contract.validateLoopbackEndpoint(bad).ok, false, bad);
     }
-    assert.equal(contract.validatePairCode("123456"), true);
-    assert.equal(contract.validatePairCode("12345"), false);
-    assert.equal(contract.validatePairCode("abcdef"), false);
   });
 
   // ---------------------------------------------------------------------
@@ -508,49 +704,64 @@ async function main() {
   });
 
   // ---------------------------------------------------------------------
-  // D. Local target contract behavior
+  // D. Local HTTP test target: one-time ticket, authorization, jobs
   // ---------------------------------------------------------------------
   const targetLogs = [];
   const backend = createMemoryBackend();
   const target = startLocalTarget({
     port: 0,
-    pair: "123456",
+    ticket: TEST_TICKET,
     allowedOrigins: [`chrome-extension://${SOURCE_EXTENSION_ID}`],
     backend,
     log: (line) => targetLogs.push(line),
-    ttlMs: 60_000,
   });
   const port = await target.listening;
   const base = `http://127.0.0.1:${port}`;
-  const client = new TargetClient({ endpoint: base, pair: "123456" });
+  const client = new TargetClient({ endpoint: base, ticket: TEST_TICKET });
 
-  await check("target capabilities are honest about being a non-native test target", async () => {
-    const res = await request(base, "/v1/import/capabilities");
+  await check("test target capabilities are honest: native=false, http-test, simulated authorization", async () => {
+    const res = await request(base, "/v2/import/capabilities");
     assert.equal(res.status, 200);
     assert.equal(res.body.contract, contract.CONTRACT_ID);
     assert.equal(res.body.native, false);
     assert.equal(res.body.mode, "test");
+    assert.equal(res.body.transport, "http-test");
+    assert.equal(res.body.authorization.independentTargetConfirmation, false);
     assert.equal(res.body.capabilities.cookieStoreWrite, true);
     assert.equal(res.body.capabilities.persistAcrossRestart, false);
+    assert.equal(res.body.capabilities.sessionCookiePersistence, "not_guaranteed");
     const cap = await client.capabilities();
     assert.equal(cap.ok, true);
     assert.equal(cap.native, false);
     assert.equal(cap.capabilities.persistAcrossRestart, false);
+    assert.ok(formatCapabilities(cap).includes("不是 Browser CLI 原生目标"));
   });
 
-  await check("target enforces pairing and origin while health stays metadata-only", async () => {
-    const noPair = await request(base, "/v1/import/status");
-    assert.equal(noPair.status, 401);
-    const badPair = await request(base, "/v1/import/status", { pair: "000000" });
-    assert.equal(badPair.status, 401);
-    const badOrigin = await request(base, "/v1/import/cookies", {
+  await check("test target requires the one-time ticket and does not expose an approval endpoint", async () => {
+    const noTicket = await request(base, "/v2/import/status");
+    assert.equal(noTicket.status, 401);
+    const badTicket = await request(base, "/v2/import/status", { ticket: "0".repeat(32) });
+    assert.equal(badTicket.status, 401);
+    // A valid ticket with no job digest is rejected before it is consumed.
+    const noDigest = await request(base, "/v2/import/cookies", {
       method: "POST",
-      pair: "123456",
-      origin: "chrome-extension://evil",
-      body: importRequest(),
+      ticket: TEST_TICKET,
+      rawBody: JSON.stringify(await importRequest()),
     });
-    assert.equal(badOrigin.status, 403);
-    const preflight = await request(base, "/v1/import/cookies", {
+    assert.equal(noDigest.status, 400);
+    assert.equal(noDigest.body.error, "job-digest-required");
+    // No Origin is allowed for local test clients; a hostile Origin is not.
+    const hostile = await request(base, "/v2/import/cookies", {
+      method: "POST",
+      ticket: TEST_TICKET,
+      origin: "chrome-extension://evil",
+      rawBody: "{}",
+      digest: "0".repeat(64),
+    });
+    assert.equal(hostile.status, 403);
+    const approve = await request(base, "/v2/import/approve", { method: "POST", ticket: TEST_TICKET, body: {} });
+    assert.equal(approve.status, 404);
+    const preflight = await request(base, "/v2/import/cookies", {
       method: "OPTIONS",
       origin: `chrome-extension://${SOURCE_EXTENSION_ID}`,
     });
@@ -558,83 +769,97 @@ async function main() {
     assert.equal(preflight.headers.get("access-control-allow-origin"), `chrome-extension://${SOURCE_EXTENSION_ID}`);
   });
 
-  await check("target applies a job and reports three separate states", async () => {
-    const submit = await client.submit(importRequest());
-    assert.equal(submit.ok, true);
+  await check("test target applies a job, reports target authorization and three separate states", async () => {
+    const requestBody = await importRequest({
+      jobNonce: "b".repeat(32),
+      cookies: [
+        cookie({ name: "persistent" }),
+        cookie({ name: "session", session: true }),
+        cookie({
+          name: "partitioned",
+          partitionKey: { topLevelSite: "https://top.test", hasCrossSiteAncestor: true },
+        }),
+      ],
+    });
+    const submit = await client.submit(requestBody);
+    assert.equal(submit.ok, true, JSON.stringify(submit));
     const done = await waitForJob({ client, timeoutMs: 5000, intervalMs: 25 });
     assert.equal(done.ok, true, JSON.stringify(done));
     assert.equal(done.view.state, "done");
-    assert.equal(done.view.progress.applied, 1);
+    assert.equal(done.view.progress.applied, 3);
     assert.equal(done.view.cookieImported.status, "imported");
     assert.equal(done.view.loginVerified.status, "not_verified");
     assert.equal(done.view.dataCopied.cookies, false);
+    assert.equal(done.view.authorization.targetUserConfirmed, true);
+    assert.equal(done.view.authorization.simulated, true);
+    assert.equal(done.view.sessionCookies.count, 1);
+    assert.equal(done.view.sessionCookies.mayNotSurviveRestart, true);
     const text = JSON.stringify(done.view);
     assert.equal(text.includes(CANARY), false);
     assert.equal(text.includes("example.test"), false);
     assert.equal(text.includes("sid"), false);
-    assert.equal(backend.snapshot().length, 1);
+    assert.equal(backend.snapshot().length, 3);
     assert.equal(backend.snapshot()[0].value, CANARY);
+    assert.equal(formatThreeState(done.view).includes("实际登录：未验证"), true);
+    assert.equal(formatThreeState(done.view).includes("测试目标模拟"), true);
   });
 
-  await check("target status is idempotent per requestId", async () => {
-    const request = importRequest({ requestId: "req-duplicate-1" });
-    const first = await client.submit(request);
-    assert.equal(first.ok, true);
-    const second = await client.submit(request);
-    assert.equal(second.ok, true);
-    assert.equal(second.duplicate, true);
-    assert.equal(second.jobId, first.jobId);
+  await check("test target rejects a second submit with the consumed ticket", async () => {
+    const res = await submitRequest(base, await importRequest({ jobNonce: "c".repeat(32) }), TEST_TICKET);
+    assert.equal(res.status, 409);
+    assert.equal(res.body.error, "ticket-consumed");
   });
 
-  await check("target rejects a second job while one is applying", async () => {
-    let release;
-    const gate = new Promise((resolve) => {
-      release = resolve;
+  await check("test target enforces the job digest and content type before accepting", async () => {
+    const t = startLocalTarget({ port: 0, ticket: "11111111111111111111111111111111", backend: createMemoryBackend(), log: () => {} });
+    await t.listening;
+    const c = new TargetClient({ endpoint: t.endpoint, ticket: "11111111111111111111111111111111" });
+    const text = JSON.stringify(await importRequest({ jobNonce: "d".repeat(32) }));
+    const noDigest = await request(t.endpoint, "/v2/import/cookies", {
+      method: "POST",
+      ticket: t.ticket,
+      rawBody: text,
     });
-    const baseBackend = createMemoryBackend();
-    let firstStarted;
-    const started = new Promise((resolve) => {
-      firstStarted = resolve;
+    assert.equal(noDigest.status, 400);
+    assert.equal(noDigest.body.error, "job-digest-required");
+    const badDigest = await request(t.endpoint, "/v2/import/cookies", {
+      method: "POST",
+      ticket: t.ticket,
+      rawBody: text,
+      digest: "f".repeat(64),
     });
-    const slow = {
-      ...baseBackend,
-      async applyCookie(c) {
-        firstStarted();
-        await gate;
-        return baseBackend.applyCookie(c);
-      },
-    };
-    const tBusy = startLocalTarget({ port: 0, pair: "333444", backend: slow, log: () => {} });
-    await tBusy.listening;
-    const busyClient = new TargetClient({ endpoint: tBusy.endpoint, pair: "333444" });
-    const first = await busyClient.submit(importRequest({ requestId: "req-busy-1" }));
-    assert.equal(first.ok, true);
-    await started;
-    const second = await busyClient.submit(importRequest({ requestId: "req-busy-2" }));
-    assert.equal(second.ok, false);
-    assert.equal(second.error, "target-busy");
-    release();
-    const terminal = await waitForJob({ client: busyClient, timeoutMs: 5000, intervalMs: 25 });
-    assert.equal(terminal.ok, true);
-    await tBusy.close();
+    assert.equal(badDigest.status, 400);
+    assert.equal(badDigest.body.error, "job-digest-mismatch");
+    const wrongType = await request(t.endpoint, "/v2/import/cookies", {
+      method: "POST",
+      ticket: t.ticket,
+      rawBody: text,
+      digest: await contract.jobDigest(text),
+      contentType: "text/plain",
+    });
+    assert.equal(wrongType.status, 415);
+    const submit = await c.submit(await importRequest({ jobNonce: "e".repeat(32) }));
+    assert.equal(submit.ok, true);
+    await t.close();
   });
 
-  await check("target reports partial and total write failures without leaking values", async () => {
+  await check("test target reports partial and total write failures without leaking values", async () => {
     const failing = createMemoryBackend({
       failWith: (c) => (c.name === "bad" ? "partitioned-cookie-rejected" : null),
     });
-    const t2 = startLocalTarget({ port: 0, pair: "654321", backend: failing, log: () => {} });
+    const t2 = startLocalTarget({ port: 0, ticket: "22222222222222222222222222222222", backend: failing, log: () => {} });
     await t2.listening;
-    const c2 = new TargetClient({ endpoint: t2.endpoint, pair: "654321" });
+    const c2 = new TargetClient({ endpoint: t2.endpoint, ticket: t2.ticket });
     const submit = await c2.submit(
-      importRequest({
-        requestId: "req-partial-1",
+      await importRequest({
+        jobNonce: "f".repeat(32),
         cookies: [cookie({ name: "good" }), cookie({ name: "bad", value: CANARY2 })],
       }),
     );
     assert.equal(submit.ok, true);
     const done = await waitForJob({ client: c2, timeoutMs: 5000, intervalMs: 25 });
     assert.equal(done.ok, true);
+    assert.equal(done.view.state, "done");
     assert.equal(done.view.cookieImported.status, "partially_imported");
     assert.equal(done.view.cookieImported.applied, 1);
     assert.equal(done.view.cookieImported.failed, 1);
@@ -642,10 +867,10 @@ async function main() {
     assert.equal(JSON.stringify(done.view).includes(CANARY2), false);
 
     const allBad = createMemoryBackend({ failWith: () => "samesite-rejected" });
-    const t3 = startLocalTarget({ port: 0, pair: "654322", backend: allBad, log: () => {} });
+    const t3 = startLocalTarget({ port: 0, ticket: "33333333333333333333333333333333", backend: allBad, log: () => {} });
     await t3.listening;
-    const c3 = new TargetClient({ endpoint: t3.endpoint, pair: "654322" });
-    await c3.submit(importRequest({ requestId: "req-allfail-1" }));
+    const c3 = new TargetClient({ endpoint: t3.endpoint, ticket: t3.ticket });
+    await c3.submit(await importRequest({ jobNonce: "9".repeat(32) }));
     const failed = await waitForJob({ client: c3, timeoutMs: 5000, intervalMs: 25 });
     assert.equal(failed.ok, true);
     assert.equal(failed.view.state, "failed");
@@ -655,7 +880,48 @@ async function main() {
     await t3.close();
   });
 
-  await check("target cancel stops future writes and never claims a rollback", async () => {
+  await check("test target rejects public-suffix domain cookies and invalid prefixes", async () => {
+    const t = startLocalTarget({ port: 0, ticket: "44444444444444444444444444444444", backend: createMemoryBackend(), log: () => {} });
+    await t.listening;
+    const c = new TargetClient({ endpoint: t.endpoint, ticket: t.ticket });
+    // `test` is a public suffix in the test list; a host-only cookie on it is
+    // allowed, a Domain cookie is not.
+    await c.submit(
+      await importRequest({
+        jobNonce: "1".repeat(32),
+        domains: ["test"],
+        cookies: [cookie({ domain: ".test", hostOnly: false })],
+      }),
+    );
+    const view = await waitForJob({ client: c, timeoutMs: 5000, intervalMs: 25 });
+    assert.equal(view.ok, true);
+    assert.equal(view.view.state, "failed");
+    assert.equal(view.view.cookieImported.failures["public-suffix-rejected"], 1);
+    await t.close();
+  });
+
+  await check("test target can deny the import and writes nothing", async () => {
+    const t = startLocalTarget({
+      port: 0,
+      ticket: "55555555555555555555555555555555",
+      backend: createMemoryBackend(),
+      approve: false,
+      log: () => {},
+    });
+    await t.listening;
+    const c = new TargetClient({ endpoint: t.endpoint, ticket: t.ticket });
+    await c.submit(await importRequest({ jobNonce: "2".repeat(32) }));
+    const view = await waitForJob({ client: c, timeoutMs: 5000, intervalMs: 25 });
+    assert.equal(view.ok, true);
+    assert.equal(view.view.state, "denied");
+    assert.equal(view.view.authorization.targetUserConfirmed, false);
+    assert.equal(view.view.authorization.simulated, true);
+    assert.equal(view.view.cookieImported.status, "not_started");
+    assert.equal(t.backend.snapshot().length, 0);
+    await t.close();
+  });
+
+  await check("test target cancel stops future writes and never claims a rollback", async () => {
     let release;
     const gate = new Promise((resolve) => {
       release = resolve;
@@ -667,18 +933,18 @@ async function main() {
     });
     const slow = {
       ...baseBackend,
-      async applyCookie(c) {
+      async applyCookie(cookieValue) {
         firstStarted();
         await gate;
-        return baseBackend.applyCookie(c);
+        return baseBackend.applyCookie(cookieValue);
       },
     };
-    const t4 = startLocalTarget({ port: 0, pair: "111222", backend: slow, log: () => {} });
+    const t4 = startLocalTarget({ port: 0, ticket: "66666666666666666666666666666666", backend: slow, log: () => {} });
     await t4.listening;
-    const c4 = new TargetClient({ endpoint: t4.endpoint, pair: "111222" });
+    const c4 = new TargetClient({ endpoint: t4.endpoint, ticket: t4.ticket });
     const submit = await c4.submit(
-      importRequest({
-        requestId: "req-cancel-1",
+      await importRequest({
+        jobNonce: "3".repeat(32),
         cookies: [cookie({ name: "a" }), cookie({ name: "b" }), cookie({ name: "c" })],
       }),
     );
@@ -695,46 +961,53 @@ async function main() {
     await t4.close();
   });
 
-  await check("target rejects oversized bodies, wrong content type, and unknown routes", async () => {
+  await check("test target enforces failure count and rate limit", async () => {
+    const t = startLocalTarget({ port: 0, ticket: "77777777777777777777777777777777", backend: createMemoryBackend(), log: () => {} });
+    await t.listening;
+    for (let i = 0; i < contract.MAX_TICKET_FAILURES; i += 1) {
+      const res = await request(t.endpoint, "/v2/import/status", { ticket: "0".repeat(32) });
+      assert.equal(res.status, 401, `attempt ${i}`);
+    }
+    const limited = await request(t.endpoint, "/v2/import/status", { ticket: "0".repeat(32) });
+    assert.equal(limited.status, 429);
+    assert.equal(limited.body.error, "rate-limited");
+    await t.close();
+  });
+
+  await check("test target rejects oversized bodies and unknown routes", async () => {
     const tSmall = startLocalTarget({
       port: 0,
-      pair: "123456",
-      allowedOrigins: [`chrome-extension://${SOURCE_EXTENSION_ID}`],
+      ticket: "88888888888888888888888888888888",
       backend: createMemoryBackend(),
       maxBytes: 2048,
       log: () => {},
     });
     await tSmall.listening;
-    const huge = await request(tSmall.endpoint, "/v1/import/cookies", {
+    const text = JSON.stringify(await importRequest({ jobNonce: "4".repeat(32), cookies: [cookie({ value: "x".repeat(4096) })] }));
+    const huge = await request(tSmall.endpoint, "/v2/import/cookies", {
       method: "POST",
-      pair: "123456",
-      body: importRequest({ cookies: [cookie({ value: "x".repeat(4096) })] }),
+      ticket: tSmall.ticket,
+      rawBody: text,
+      digest: await contract.jobDigest(text),
     });
     assert.equal(huge.status, 413);
     await tSmall.close();
-    const wrongType = await request(base, "/v1/import/cookies", {
-      method: "POST",
-      pair: "123456",
-      body: importRequest({ requestId: "req-wrong-type" }),
-      contentType: "text/plain",
-    });
-    assert.equal(wrongType.status, 415);
-    const verifyRoute = await request(base, "/v1/import/verify", { method: "POST", pair: "123456", body: {} });
-    assert.equal(verifyRoute.status, 404);
+    const unknown = await request(base, "/v2/import/verify", { method: "POST", ticket: TEST_TICKET, body: {} });
+    assert.equal(unknown.status, 404);
   });
 
-  await check("target logs contain counts/ids only, never values, names or domains", async () => {
+  await check("test target logs contain counts/ids only, never values, names, domains or ticket", async () => {
     const text = targetLogs.join("\n");
     assert.equal(text.includes(CANARY), false);
     assert.equal(text.includes("example.test"), false);
     assert.equal(text.includes("sid"), false);
+    assert.equal(text.includes(TEST_TICKET), false);
     assert.ok(text.includes("accepted"));
   });
 
   await target.close();
 
   await check("test-only CDP mapping preserves host-only/domain, session and partition fields", async () => {
-    // Imported lazily so the memory-target tests do not depend on CDP.
     const cdp = await import("./import/target/cdp-backend.mjs");
     const hostOnly = cdp.toCdpCookie(
       cookie({ domain: "plain.test", hostOnly: true, session: true, secure: false, path: "/x" }),
@@ -759,7 +1032,7 @@ async function main() {
   // ---------------------------------------------------------------------
   // E. CLI flow, report and explicit login confirmation
   // ---------------------------------------------------------------------
-  await check("waitForJob honors retries, timeouts and abort without inventing a login", async () => {
+  await check("waitForJob honors retries, timeouts, denial and abort without inventing a login", async () => {
     const fake = {
       calls: 0,
       async status() {
@@ -772,9 +1045,12 @@ async function main() {
               contract.createPublicJobView({
                 id: "c".repeat(24),
                 state: "done",
+                transport: "named-pipe",
+                native: true,
                 totals: { cookies: 1, domains: 1, selectedDomains: 1 },
                 progress: { applied: 1, failed: 0 },
                 failures: {},
+                authorization: { targetUserConfirmed: true, simulated: false, source: "target-browser-dialog" },
                 createdAt: "x",
                 updatedAt: "y",
               }),
@@ -797,16 +1073,52 @@ async function main() {
     controller.abort();
     const aborted = await waitForJob({ client: fake, timeoutMs: 1000, signal: controller.signal });
     assert.equal(aborted.error, "cancelled-by-user");
+
+    const denied = {
+      async status() {
+        return {
+          ok: true,
+          idle: false,
+          view: contract.sanitizePublicJobView(
+            contract.createPublicJobView({
+              id: "d".repeat(24),
+              state: "denied",
+              transport: "named-pipe",
+              native: true,
+              totals: { cookies: 1, domains: 1, selectedDomains: 1 },
+              progress: { applied: 0, failed: 0 },
+              failures: {},
+              authorization: { targetUserConfirmed: false, simulated: false, source: "target-browser-dialog" },
+              error: { code: "authorization-denied" },
+              createdAt: "x",
+              updatedAt: "y",
+            }),
+          ),
+        };
+      },
+    };
+    const deniedResult = await waitForJob({ client: denied, timeoutMs: 1000, intervalMs: 5 });
+    assert.equal(deniedResult.ok, true);
+    assert.equal(deniedResult.view.state, "denied");
+    assert.equal(deniedResult.view.loginVerified.status, "not_verified");
   });
 
-  await check("reports contain no cookie names/values/domains before user confirmation", () => {
+  await check("reports contain no cookie names/values/domains before user confirmation", async () => {
     const view = contract.sanitizePublicJobView(
       contract.createPublicJobView({
         id: "d".repeat(24),
         state: "done",
-        totals: { cookies: 2, domains: 1, selectedDomains: 1 },
+        transport: "named-pipe",
+        native: true,
+        totals: { cookies: 2, domains: 1, selectedDomains: 1, sessionCookies: 1 },
         progress: { applied: 1, failed: 1 },
         failures: { "partitioned-cookie-rejected": 1 },
+        authorization: {
+          targetUserConfirmed: true,
+          simulated: false,
+          source: "target-browser-dialog",
+          scopeDigest: "a".repeat(64),
+        },
         createdAt: "x",
         updatedAt: "y",
       }),
@@ -814,10 +1126,12 @@ async function main() {
     const report = createCookieImportReport({
       source: { browser: "chrome", browserName: "Chrome", label: "Synthetic", dirName: "Default" },
       target: {
-        product: "BrowserPilot local contract target",
-        mode: "test",
-        native: false,
-        capabilities: { persistAcrossRestart: false },
+        product: "Browser CLI",
+        mode: "native",
+        transport: "named-pipe",
+        native: true,
+        capabilities: { persistAcrossRestart: true },
+        authorization: { mode: "target-browser-dialog", independentTargetConfirmation: true },
       },
       view,
       startedAt: "2026-01-01T00:00:00.000Z",
@@ -829,6 +1143,8 @@ async function main() {
     assert.equal(text.includes("sid"), false);
     assert.equal(report.loginVerified.status, "not_verified");
     assert.equal(report.cookieImported.status, "partially_imported");
+    assert.equal(report.authorization.targetUserConfirmed, true);
+    assert.equal(report.sessionCookies.count, 1);
     const written = writeCookieImportReport({ reportDir: path.join(tmp, "reports"), report });
     assert.equal(fs.existsSync(written.path), true);
     const read = readReport(written.path);
@@ -837,11 +1153,17 @@ async function main() {
     assert.equal(formatThreeState(view).includes(CANARY), false);
     assert.equal(formatThreeState(view).includes("example.test"), false);
     assert.ok(reloginGuidance(view).includes("Browser CLI"));
+    assert.ok(formatCookieImportReport(read.report).includes("target authorization: confirmed"));
   });
 
   let reportPath = null;
-  await check("CLI connect + external target end-to-end writes a count-only report", async () => {
-    const t5 = startLocalTarget({ port: 0, pair: "777888", backend: createMemoryBackend(), log: () => {} });
+  await check("CLI connect + external test target end-to-end writes a count-only report", async () => {
+    const t5 = startLocalTarget({
+      port: 0,
+      ticket: "99999999999999999999999999999999",
+      backend: createMemoryBackend(),
+      log: () => {},
+    });
     await t5.listening;
     const reportDir = path.join(tmp, "cli-reports");
     const child = spawn(
@@ -853,8 +1175,8 @@ async function main() {
         "chrome:Default",
         "--endpoint",
         t5.endpoint,
-        "--pair",
-        "777888",
+        "--ticket",
+        t5.ticketFormatted,
         "--report-dir",
         reportDir,
         "--timeout-ms",
@@ -874,8 +1196,8 @@ async function main() {
     child.stderr.on("data", (d) => (stderr += d));
     const exited = new Promise((resolve) => child.on("close", (code) => resolve(code)));
     await new Promise((resolve) => setTimeout(resolve, 900));
-    const c5 = new TargetClient({ endpoint: t5.endpoint, pair: "777888" });
-    const submit = await c5.submit(importRequest({ requestId: "req-cli-1" }));
+    const c5 = new TargetClient({ endpoint: t5.endpoint, ticket: t5.ticket });
+    const submit = await c5.submit(await importRequest({ jobNonce: "5".repeat(32) }));
     assert.equal(submit.ok, true);
     const code = await exited;
     await t5.close();
@@ -885,6 +1207,8 @@ async function main() {
     assert.equal(parsed.report.cookieImported.status, "imported");
     assert.equal(parsed.report.loginVerified.status, "not_verified");
     assert.equal(parsed.report.target.native, false);
+    assert.equal(parsed.report.target.transport, "http-test");
+    assert.equal(parsed.report.authorization.simulated, true);
     assert.equal(stdout.includes(CANARY), false);
     assert.equal(stdout.includes("example.test"), false);
     reportPath = parsed.reportPath;
@@ -893,9 +1217,10 @@ async function main() {
     assert.equal(text.includes(CANARY), false);
     assert.equal(text.includes("example.test"), false);
     assert.equal(text.includes("sid"), false);
+    assert.equal(text.includes(t5.ticket), false);
   });
 
-  await check("CLI connect with the local test target prints pairing and completes", async () => {
+  await check("CLI connect with the local test target prints a ticket and completes", async () => {
     const reportDir = path.join(tmp, "local-target-reports");
     const child = spawn(
       process.execPath,
@@ -923,11 +1248,20 @@ async function main() {
     let submitPromise = Promise.resolve(null);
     child.stdout.on("data", (d) => {
       stdout += d;
-      const m = stdout.match(/地址填 (http:\/\/127\.0\.0\.1:\d+)，配对码填 (\d{6})/);
+      const m = stdout.match(/导入票据填 (BCLI-[A-Z0-9-]+)/);
       if (m && !submitted) {
         submitted = true;
-        const client = new TargetClient({ endpoint: m[1], pair: m[2] });
-        submitPromise = client.submit(importRequest({ requestId: "req-local-cli-1" }));
+        const ticket = m[1];
+        // The CLI's local target is an in-process target; the ticket is the
+        // only credential this test needs.
+        submitPromise = (async () => {
+          const portMatch = stdout.match(/端点|endpoint|http:\/\/127\.0\.0\.1:\d+/);
+          if (!portMatch) return null;
+          const base = (stdout.match(/http:\/\/127\.0\.0\.1:\d+/) || [])[0];
+          if (!base) return null;
+          const t = new TargetClient({ endpoint: base, ticket });
+          return t.submit(await importRequest({ jobNonce: "6".repeat(32) }));
+        })();
       }
     });
     child.stderr.on("data", (d) => (stderr += d));
@@ -935,7 +1269,7 @@ async function main() {
     const submit = await submitPromise;
     assert.equal(code, 0, `stdout:\n${stdout}\nstderr:\n${stderr}`);
     assert.equal(submitted, true);
-    assert.equal(submit.ok, true);
+    assert.ok(submit && submit.ok, JSON.stringify(submit));
     assert.ok(stdout.includes("这是本地测试目标"));
     assert.ok(stdout.includes("persistAcrossRestart=false"));
     assert.ok(stdout.includes("三态结果"));
@@ -949,7 +1283,7 @@ async function main() {
     assert.equal(readText(reportFile[1].trim()).includes(CANARY), false);
   });
 
-  await check("CLI refuses an unsupported source browser and a missing pairing code", () => {
+  await check("CLI refuses an unsupported source browser and a missing or invalid ticket", () => {
     const ff = runCli(
       ["connect", "--source", "firefox:ff.default", "--json", ...roots.rootArgs],
       { expect: 3 },
@@ -958,11 +1292,11 @@ async function main() {
     assert.equal(ffJson.ok, false);
     assert.equal(ffJson.error, "source-browser-unsupported");
 
-    const noPair = runCli(
+    const noTicket = runCli(
       ["connect", "--source", "chrome:Default", "--endpoint", "http://127.0.0.1:1", "--json", ...roots.rootArgs],
       { expect: 2 },
     );
-    assert.ok(noPair.combined.includes("--pair"));
+    assert.ok(noTicket.combined.includes("--ticket"));
 
     const badFormat = runCli(
       [
@@ -971,18 +1305,23 @@ async function main() {
         "chrome:Default",
         "--endpoint",
         "http://127.0.0.1:1",
-        "--pair",
-        "12345",
+        "--ticket",
+        "123456",
         "--json",
         ...roots.rootArgs,
       ],
       { expect: 2 },
     );
-    assert.ok(badFormat.combined.includes("6 digits"));
+    assert.ok(badFormat.combined.includes("BCLI-"));
   });
 
-  await check("CLI rejects a wrong pairing code before waiting for a job", async () => {
-    const tPair = startLocalTarget({ port: 0, pair: "999999", backend: createMemoryBackend(), log: () => {} });
+  await check("CLI rejects a wrong ticket before waiting for a job", async () => {
+    const tPair = startLocalTarget({
+      port: 0,
+      ticket: "ABCDEFGHJKMNPQRSTVWXYZ0123456789",
+      backend: createMemoryBackend(),
+      log: () => {},
+    });
     await tPair.listening;
     const res = await runCliAsync([
       "connect",
@@ -990,8 +1329,8 @@ async function main() {
       "chrome:Default",
       "--endpoint",
       tPair.endpoint,
-      "--pair",
-      "000000",
+      "--ticket",
+      "00000000000000000000000000000000",
       "--json",
       ...roots.rootArgs,
     ]);
@@ -999,10 +1338,10 @@ async function main() {
     assert.equal(res.status, 3, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
     const parsed = JSON.parse(res.stdout);
     assert.equal(parsed.ok, false);
-    assert.equal(parsed.error, "pairing-required");
+    assert.equal(parsed.error, "ticket-invalid");
   });
 
-  await check("CLI confirm-login refuses automatic confirmation and never upgrades cookie state", () => {
+  await check("CLI confirm-login refuses automatic confirmation and never upgrades cookie or authorization state", () => {
     assert.ok(reportPath);
     const before = readReport(reportPath).report;
     const refused = runCli(
@@ -1012,6 +1351,7 @@ async function main() {
     assert.ok(refused.combined.includes("explicit-user-action-required"));
     const unchanged = readReport(reportPath).report;
     assert.deepEqual(unchanged.cookieImported, before.cookieImported);
+    assert.deepEqual(unchanged.authorization, before.authorization);
     assert.equal(unchanged.loginVerified.status, "not_verified");
 
     const confirmed = runCli(
@@ -1034,13 +1374,15 @@ async function main() {
     assert.equal(parsed.report.loginChecks.length, 1);
     assert.equal(parsed.report.loginChecks[0].domain, "example.test");
     assert.deepEqual(parsed.report.cookieImported, before.cookieImported);
+    assert.deepEqual(parsed.report.authorization, before.authorization);
     assert.equal(parsed.report.dataCopied.cookies, false);
     assert.equal(JSON.stringify(parsed.report).includes(CANARY), false);
   });
 
-  await check("CLI report command prints counts and the explicit login check", () => {
+  await check("CLI report command prints counts, target authorization and the explicit login check", () => {
     const res = runCli(["report", "--file", reportPath], { expect: 0 });
     assert.ok(res.stdout.includes("cookies: imported"));
+    assert.ok(res.stdout.includes("target authorization: confirmed"));
     assert.ok(res.stdout.includes("login verified: user_confirmed"));
     assert.ok(res.stdout.includes("example.test"));
     assert.equal(res.stdout.includes(CANARY), false);
@@ -1052,7 +1394,7 @@ async function main() {
     assert.deepEqual(hashTree(roots.ffRoot), sourceHashBefore.firefox);
   });
 
-  await check("no temporary output contains a canary", () => {
+  await check("no temporary output contains a canary or the test ticket", () => {
     // Only inspect the temp dir created by this test; never scan real profiles.
     const walk = (dir) => {
       let text = "";
@@ -1066,6 +1408,7 @@ async function main() {
     const text = walk(tmp);
     assert.equal(text.includes(CANARY), false);
     assert.equal(text.includes(CANARY2), false);
+    assert.equal(text.includes(TEST_TICKET), false);
   });
 
   console.log(`\n${passed} passed, ${failures.length} failed`);

@@ -47,6 +47,8 @@
     "import:bridge": "node scripts/import/cookie-bridge/broker.mjs",
     "test:import": "node scripts/test-browser-data-import.mjs",
     "test:import:product": "node scripts/test-import-product.mjs",
+    "test:import:native": "node scripts/test-native-import.mjs",
+    "test:import:all": "node scripts/test-import-product.mjs && node scripts/test-native-import.mjs",
     "test:cookie-bridge": "node scripts/test-cookie-bridge.mjs"
   },
   "devDependencies": {

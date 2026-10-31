@@ -11,7 +11,7 @@ import { applyLoginCheck, LOGIN_STATES } from "./verify.mjs";
 import { CONTRACT_ID } from "../contract.mjs";
 
 export const REPORT_KIND = "cookie-import";
-export const REPORT_FORMAT = 1;
+export const REPORT_FORMAT = 2;
 
 export function defaultReportDir() {
   if (process.platform === "win32") {
@@ -61,8 +61,11 @@ export function createCookieImportReport({
     target: {
       product: target?.product || "unknown",
       mode: target?.mode || "unknown",
+      transport: target?.transport || "unknown",
       native: target?.native === true,
       persistAcrossRestart: target?.capabilities?.persistAcrossRestart === true,
+      authorizationMode: target?.authorization?.mode || "unknown",
+      independentTargetConfirmation: target?.authorization?.independentTargetConfirmation === true,
     },
     job: {
       jobId: view?.jobId || null,
@@ -72,11 +75,33 @@ export function createCookieImportReport({
             cookies: view.totals.cookies,
             domains: view.totals.domains,
             selectedDomains: view.totals.selectedDomains,
+            sessionCookies: view.totals.sessionCookies || 0,
+            partitionedCookies: view.totals.partitionedCookies || 0,
           }
-        : { cookies: 0, domains: 0, selectedDomains: 0 },
+        : { cookies: 0, domains: 0, selectedDomains: 0, sessionCookies: 0, partitionedCookies: 0 },
       progress: view ? { applied: view.progress.applied, failed: view.progress.failed } : { applied: 0, failed: 0 },
     },
     dataCopied: { cookies: false },
+    // The target's own user authorization is separate from cookie import and
+    // from login verification. `simulated` is true only for the test target.
+    authorization: view?.authorization
+      ? {
+          targetUserConfirmed: view.authorization.targetUserConfirmed === true,
+          simulated: view.authorization.simulated === true,
+          source: view.authorization.source || "unknown",
+          ...(view.authorization.scopeDigest ? { scopeDigest: view.authorization.scopeDigest } : {}),
+          ...(view.authorization.confirmedAt ? { confirmedAt: view.authorization.confirmedAt } : {}),
+        }
+      : {
+          targetUserConfirmed: false,
+          simulated: false,
+          source: "not_started",
+        },
+    sessionCookies: {
+      count: view?.sessionCookies?.count || view?.totals?.sessionCookies || 0,
+      mayNotSurviveRestart: true,
+      note: "会话 Cookie 不保证在浏览器重启后保留。",
+    },
     cookieImported,
     loginVerified: {
       status: "not_verified",
@@ -127,8 +152,17 @@ export function formatCookieImportReport(report) {
   for (const [item, copied] of Object.entries(report.dataCopied || {})) {
     lines.push(`  ${item}: ${copied ? "copied" : "not copied"}`);
   }
+  const auth = report.authorization || {};
+  lines.push(
+    `target authorization: ${auth.targetUserConfirmed === true ? "confirmed" : "not confirmed"}` +
+      (auth.simulated === true ? " (simulated test target; NOT a real user confirmation)" : "") +
+      ` [source=${auth.source || "unknown"}]`,
+  );
   const c = report.cookieImported || {};
   lines.push(`cookies: ${c.status || "unknown"} (applied=${c.applied ?? 0}, failed=${c.failed ?? 0})`);
+  if (report.sessionCookies?.count > 0) {
+    lines.push(`session cookies: ${report.sessionCookies.count} (not guaranteed across restart)`);
+  }
   for (const [code, count] of Object.entries(c.failures || {})) {
     lines.push(`  ${code}: ${count}`);
   }

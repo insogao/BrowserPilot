@@ -18,6 +18,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FIXED_EXTENSION_ID = "nnollghpaggbcdkkgoieneffnlijinio";
 const ORIGIN = "chrome-extension://" + FIXED_EXTENSION_ID + "/";
+const IMPORT_ORIGIN = "chrome-extension://ljoekiddijnohefaghljlcodgljienoj/";
 
 let passed = 0;
 let failed = 0;
@@ -128,7 +129,7 @@ check("host.manifest.json 的 origins 与推导一致", registeredIdFromHostMani
       first.description === "BrowserPilot native messaging host" &&
       first.type === "stdio" &&
       first.path === wrapperPath &&
-      JSON.stringify(first.allowed_origins) === JSON.stringify([ORIGIN]),
+      JSON.stringify(first.allowed_origins) === JSON.stringify([ORIGIN, IMPORT_ORIGIN]),
     JSON.stringify(first),
   );
   check("各目标 manifest 内容一致", files.every((file) => fs.readFileSync(file, "utf8") === fs.readFileSync(files[0], "utf8")));

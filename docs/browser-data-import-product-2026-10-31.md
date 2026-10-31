@@ -289,3 +289,33 @@ node scripts/import/browser-data-import.mjs confirm-login --file <report.json> `
 # 7. 扩展安装
 # chrome://extensions -> 开发者模式 -> 加载已解压的扩展程序 -> extensions/import-source
 ```
+
+## 2026-11-01 v2 安全硬化（本轮）
+
+本轮把 cookie-import 契约升级到 **v2**，并修复“6 位配对码 + Origin 即授权”的不足：
+
+- 一次性 160-bit 导入票据（Crockford base32 `BCLI-…`，5 分钟 TTL，首次 hello
+  即消费；失败 5 次/60 秒锁定；每进程每小时最多 10 次 hello）。
+- 票据绑定目标进程（pipe client PID ↔ hostPid）、目标 Profile（per-process salt
+  hash）、jobNonce/jobDigest 和用户勾选域名的 `domainsDigest`。
+- 传输改为 **BrowserPilot native messaging host import-only relay →
+  Browser CLI Windows named pipe**；产品路径不再有 localhost HTTP API。
+- 目标浏览器内必须由用户本人确认来源/域名范围；来源扩展、host、CLI 都不能代替确认。
+- 目标端规则：HostOnly/Domain、Public Suffix、`__Host-/__Secure-/__Http-` 前缀、
+  SameSite=None 必须 Secure、Partitioned/partition key、过期时间；失败按固定 code 计数。
+- Session Cookie 明确标注“不保证跨重启保留”。
+- 三态仍严格分离：数据复制 / Cookie 写入 / 实际登录；目标授权是独立字段，不是登录。
+
+代码/文档：
+
+- `scripts/import/contract.mjs`（v2）、`extensions/import-source/`（nativeMessaging，
+  无 HTTP）、`native-host/import-relay.mjs`、`native-host/host.js`（lazy normal mode）；
+- `scripts/import/target/native-pipe-target.mjs`（测试替身）、
+  `scripts/import/target/local-target.mjs`（v2 HTTP 测试替身）；
+- `scripts/test-import-product.mjs`（42 项）、`scripts/test-native-import.mjs`（11 项）；
+- `docs/browser-cli-native-cookie-import-interface.md`（v2 交接）。
+
+Browser CLI 原生端点：**proposed，未编译、未集成**，见
+`D:\work\wt\bc-rc-p1\chromium\patches\proposed\034-browser-cli-cookie-import.patch`
+与 `D:\work\wt\bc-rc-p1\docs\p1-cookie-import-native-v2-2026-11-01.md`。
+不得据此宣称产品闭环完成。
