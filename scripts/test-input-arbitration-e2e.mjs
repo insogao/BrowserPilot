@@ -31,6 +31,9 @@
 //   node scripts/test-input-arbitration-e2e.mjs                   # 全部可跑用例（off + on 两个会话）
 //   node scripts/test-input-arbitration-e2e.mjs --stage=baseline  # 只跑基线（off + on）
 //   node scripts/test-input-arbitration-e2e.mjs --stage=human,shapes --feature=off
+//   node scripts/test-input-arbitration-e2e.mjs --case=R2              # 只跑指定用例（逗号分隔可多选）
+//   node scripts/test-input-arbitration-e2e.mjs --until=R2             # 按声明顺序跑到 R2（含）为止
+//   node scripts/test-input-arbitration-e2e.mjs --until=R2 --diag      # 额外打印 popup 活性探针
 //   node scripts/test-input-arbitration-e2e.mjs --no-build        # 复用现有 dist / host exe
 //   node scripts/test-input-arbitration-e2e.mjs --keep-open       # 失败时保留浏览器（调试用，仍会清理 host/注册表）
 //
@@ -74,6 +77,15 @@ const STAGES = new Set((STAGE_ARG || "all").split(",").map((s) => s.trim()).filt
 const FEATURE_ARG = (argv.find((a) => a.startsWith("--feature=")) || "").slice("--feature=".length).trim();
 const FEATURE_FILTER = new Set((FEATURE_ARG || "off,on,on-visible").split(",").map((s) => s.trim()).filter(Boolean));
 const SESSION_FEATURES = ["off", "on", "on-visible"];
+// --case=R2 / --case=R1,R2：只跑指定用例（单点失败复现）。
+const CASE_ARG = (argv.find((a) => a.startsWith("--case=")) || "").slice("--case=".length).trim();
+const CASE_FILTER = new Set((CASE_ARG || "").split(",").map((s) => s.trim()).filter(Boolean));
+// --until=R2：按 CASES 声明顺序跑到该用例（含）为止（复现“前序用例污染后”的失败）。
+const UNTIL_ARG = (argv.find((a) => a.startsWith("--until=")) || "").slice("--until=".length).trim();
+const DIAG = argv.includes("--diag") || process.env.E2E_DIAG === "1";
+// --fault=popup-crash-after-create：仅用于验证 popup 自愈路径（真实渲染器崩溃由 Page.crash 触发），
+// 不属于产品用例，不计入 PASS/FAIL。
+const FAULT_ARG = (argv.find((a) => a.startsWith("--fault=")) || "").slice("--fault=".length).trim();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const nowIso = () => new Date().toISOString();
@@ -1745,7 +1757,15 @@ const CASES = [
       // send a real OS key; the kernel still sees a trusted human key event.
       const humanTypeReal = async () => {
         await cdp.evaluate(popup.sessionId, "window.__bpPresence = []").catch(() => null);
-        const clicked = await ctx.humanClick(key, before.rects.btn, { real: true });
+        // 1) plain：真实硬件点击（会激活窗口），不改窗口 show/z-order（不会触发 presentation 策略的
+        //    “自动化不得改变呈现”拒绝分支）；2) 若窗口被覆盖/未呈现导致没落地，再退回 forced
+        //    （ShowWindow+SetForegroundWindow）一次。两条路径都写进证据。
+        const plain = await ctx.humanClick(key, before.rects.btn, { real: true });
+        let clicked = plain;
+        if (plain.landed !== true) {
+          clicked = await ctx.humanClick(key, before.rects.btn, { real: true, realMode: "forced" });
+          clicked = { ...clicked, plainAttempt: { landed: plain.landed, attempts: plain.attempts, candidates: plain.candidates } };
+        }
         await sleep(900);
         return clicked;
       };
@@ -1775,9 +1795,23 @@ const CASES = [
       const pausedClick = await popupClick();
       const afterPaused = await ctx.probe(key);
       const kernelRejected = /InputOwnership: debugger input rejected/i;
+      if (human2.landed !== true) {
+        // 第二次真实人类输入没落地（managed 窗口的 OS 级输入注入与 presentation 策略竞争，
+        // 见 docs/input-arbitration-e2e-matrix-2026-10-28.md）。内核侧的暂停行为此时无法按
+        // “人类输入后 1s 内”的语义验证，按环境限制 BLOCKED，不伪造成 PASS/FAIL。
+        ctx.record("K4", { show, listenerSetup, assist, before, human, presence, human2, pausedClick, clicks: afterPaused.clicks });
+        ctx.markBlocked({
+          code: "managed-human-input-unavailable",
+          deps: ["managed 窗口的第二条真实人类输入（OS 级注入）"],
+          reason:
+            "第二次真实人类输入未落地（human2.landed=false，human2=" + JSON.stringify(human2).slice(0, 500) +
+            "）；pausedClick.rejected=" + pausedClick.rejected + "。1s 暂停窗口无法按语义验证。",
+        });
+        return;
+      }
       check(
         "K4 人类输入后 1s 内的 AI click 被暂停（human pause）",
-        human2.landed === true && pausedClick.rejected === true && kernelRejected.test(String(pausedClick.error)),
+        pausedClick.rejected === true && kernelRejected.test(String(pausedClick.error)),
         JSON.stringify({ human2, pausedClick, clicks: afterPaused.clicks }),
       );
       // Patch 032: the latch is 30s, so an unresponsive SW cannot re-grab input
@@ -1830,7 +1864,9 @@ const CASES = [
         return;
       }
       const tokenValue = ctx.token + "-ime";
-      const widget = visibleWindow.widget.hwnd;
+      // 冷启动时的 widget 只用于定位“可见窗口”；切到 IME tab 后该 tab 的 render widget 会销毁，
+      // 因此后面要按 IME tab 的标题重新解析窗口 + widget（见下方 widget 赋值）。
+      let widget = visibleWindow.widget.hwnd;
       const cdp = await ctx.cdp();
       const popup = await ctx.ensurePopup();
       const url = ctx.mainOrigin + "/ime-inputs?token=" + tokenValue;
@@ -1859,11 +1895,45 @@ const CASES = [
         const raw = await imeEval("JSON.stringify(window.__ime())");
         return JSON.parse(raw);
       };
+      // 切到 IME tab 后：冷启动窗口的 render widget 已被替换。按 IME tab 的窗口标题
+      // （这里显式设置 document.title = "ia-" + token，仅用于把 tab 映射回 Win32 顶层窗口）
+      // 重新解析顶层窗口和它当前的 widget，否则后续 SetFocus/PostMessage/ClientToScreen
+      // 都会作用在失效或错误的 HWND 上。
+      await imeEval("document.title = " + JSON.stringify("ia-" + tokenValue) + "; document.title").catch(() => null);
+      await sleep(300);
+      const imeWindow = await ctx.findWindowByTitleToken("ia-" + tokenValue, 20000);
+      const imeWidget = imeWindow ? await ctx.widgetOf(imeWindow.hwnd) : null;
+      const windowResolve = {
+        imeWindow,
+        imeWidget,
+        coldStartWidget: visibleWindow.widget,
+        navWindowId: nav.windowId,
+        chromeWindows: (await win32.call("listWindows", { pid: ctx.session.windowPid }).catch(() => ({ windows: [] }))).windows
+          ?.map((w) => ({ hwnd: w.hwnd, className: w.className, title: String(w.title || "").slice(0, 70), visible: w.visible, iconic: w.iconic, rect: w.rect })),
+      };
+      check("IME 重新定位 IME tab 自己的顶层窗口与 render widget", !!imeWindow && !!imeWidget, JSON.stringify(windowResolve).slice(0, 1200));
+      if (!imeWindow || !imeWidget) {
+        ctx.record("IME", { visibleWindow: visibleWindow.window, nav, windowResolve });
+        ctx.markBlocked({ code: "ime-window-resolve-failed", deps: ["IME tab 顶层窗口 + render widget"], reason: JSON.stringify(windowResolve).slice(0, 1000) });
+        return;
+      }
+      widget = imeWidget.hwnd;
       const rects = await imeEval("(()=>{const r={};for(const id of ['in','ta','ce']){const b=document.getElementById(id).getBoundingClientRect();r[id]={x:b.x,y:b.y,w:b.width,h:b.height};}return JSON.stringify(r);})()");
       const rect = JSON.parse(rects);
       const clickField = async (id) => {
         const r = rect[id];
-        return await win32.call("realMouse", { hwnd: widget, x: Math.round(r.x + r.w / 2), y: Math.round(r.y + r.h / 2) });
+        const x = Math.round(r.x + r.w / 2);
+        const y = Math.round(r.y + r.h / 2);
+        // 优先“纯输入”点击：窗口已由产品 user-explicit-show 呈现，不需要（也不应该）由测试再去
+        // show/activate（会被 presentation 策略拒绝并可能把窗口隐藏 → 页面失焦 → OS 按键丢失）。
+        const plain = await win32.call("realClick", { hwnd: widget, x, y });
+        await sleep(250);
+        const state = await readIme();
+        if (state.active === id) return { ...plain, mode: "plain" };
+        // 兜底：页面没接收到点击时才强制显示窗口再点（旧路径），并把两次结果都留作证据。
+        const forced = await win32.call("realMouse", { hwnd: widget, x, y });
+        await sleep(250);
+        return { ...forced, mode: "forced", plain };
       };
       const realKey = async (vk) => {
         const down = await win32.call("realKey", { hwnd: widget, vk, down: true });
@@ -1882,6 +1952,30 @@ const CASES = [
         await win32.call("sendKeys", { text: " " }); // space commits the first candidate
         await sleep(500);
       };
+      // 取证：WScript/SendKeys 只发给“真正的 OS 前台窗口”，所以必须确认测试窗口就是前台窗口，
+      // 否则按键不会到达页面（页面 activeElement 对、但 document.hasFocus()=false）。
+      const winInfo = async (hwnd) => (hwnd ? await win32.call("state", { hwnd }).then((r) => r.window || r).catch((error) => ({ error: String(error?.message || error) })) : null);
+      const focusEvidence = { widget, imeTabId: tabId, imeWindowId: nav.windowId };
+      const captureFocus = async (phase) => {
+        const fg = await win32.call("foreground").catch((error) => ({ error: String(error?.message || error) }));
+        const state = await readIme().catch((error) => ({ error: String(error?.message || error) }));
+        const entry = {
+          phase,
+          foreground: fg,
+          foregroundWindow: await winInfo(fg?.hwnd),
+          widgetWindow: await winInfo(widget),
+          page: { active: state.active, focus: state.focus, visibility: state.visibility },
+        };
+        console.log("[ime-focus] " + JSON.stringify(entry).slice(0, 1200));
+        return entry;
+      };
+      focusEvidence.prelude = {
+        coldStartWindow: visibleWindow.window,
+        widget,
+        chromeWindows: (await win32.call("listWindows", { pid: ctx.session.windowPid }).catch(() => ({ windows: [] }))).windows
+          ?.map((w) => ({ hwnd: w.hwnd, className: w.className, title: String(w.title || "").slice(0, 70), visible: w.visible, iconic: w.iconic, rect: w.rect })),
+      };
+      focusEvidence.beforeClick = await captureFocus("before-click");
 
       const before = await readIme();
       check("IME fixture 就绪且三个输入面存在", before && before.values && "in" in before.values && "ta" in before.values && "ce" in before.values, JSON.stringify(before));
@@ -1890,8 +1984,30 @@ const CASES = [
       const clickIn = await clickField("in");
       await imeEval("document.getElementById('in').focus(); true").catch(() => null);
       await sleep(400);
-      const afterFocus = await readIme();
-      check("IME 点击后 input 获得焦点", afterFocus.active === "in", JSON.stringify({ clickIn, active: afterFocus.active, focus: afterFocus.focus }));
+      let afterFocus = await readIme();
+      focusEvidence.afterClick = { clickIn, ...((await captureFocus("after-click")) || {}) };
+      if (afterFocus.focus !== true) {
+        // 测试前置条件：真实用户在输入法里打字时，浏览器窗口就是 OS 前台窗口。
+        // 点击已把焦点给到页面，但 OS 前台窗口不是它（焦点窗口=focus 证据）。这是窗口/
+        // 前台状态的测试搭建问题，不是产品行为：显式置前后再验证一次。
+        const reset = await win32.call("focusWindow", { hwnd: widget }).catch((error) => ({ error: String(error?.message || error) }));
+        await sleep(250);
+        const afterReset = await captureFocus("after-focus-reset");
+        focusEvidence.focusReset = { reset, afterReset };
+        afterFocus = await readIme();
+        if (afterFocus.focus !== true) {
+          ctx.record("IME", { visibleWindow: visibleWindow.window, nav, windowResolve, focusEvidence, before, afterFocus });
+          ctx.markBlocked({
+            code: "ime-window-not-foreground",
+            deps: ["把 IME tab 的窗口置为 OS 前台窗口（SetForegroundWindow）"],
+            reason:
+              "点击后页面获得 activeElement，但窗口不是 OS 前台窗口（document.hasFocus()=false）；" +
+              "WScript.SendKeys 只会发给前台窗口，按键无法到达页面。证据：" + JSON.stringify(focusEvidence).slice(0, 1200),
+          });
+          return;
+        }
+      }
+      check("IME 点击后 input 获得焦点", afterFocus.active === "in", JSON.stringify({ clickIn, active: afterFocus.active, focus: afterFocus.focus, osFocus: focusEvidence.afterClick }));
       await typeLetters("n");
       const firstKey = { down: { ok: true }, up: { ok: true } };
       const afterFirstKey = await readIme();
@@ -1983,12 +2099,18 @@ const CASES = [
       const final = await readIme().catch((error) => ({ error: String(error) }));
       const detach = await ctx.popupDebuggerDetach(tabId);
       const closed = await ctx.closeTab(tabId);
-      ctx.record("IME", { visibleWindow: visibleWindow.window, nav, tabId, before, final, human, aiInHuman, assist, grant, aiAssist, aiSecond, human2, human3, grant2, aiRecover, detach, closed });
+      ctx.record("IME", { visibleWindow: visibleWindow.window, nav, windowResolve, tabId, focusEvidence, before, final, human, aiInHuman, assist, grant, aiAssist, aiSecond, human2, human3, grant2, aiRecover, detach, closed });
     },
   },
 ];
 
 function caseSelected(c) {
+  if (CASE_FILTER.size && !CASE_FILTER.has(c.id)) return false;
+  if (UNTIL_ARG) {
+    const untilIndex = CASES.findIndex((x) => x.id === UNTIL_ARG);
+    if (untilIndex < 0) throw new Error("--until 指定的用例不存在：" + UNTIL_ARG);
+    if (CASES.indexOf(c) > untilIndex) return false;
+  }
   if (!STAGES.has("all") && !STAGES.has(c.stage)) return false;
   if (c.feature && !FEATURE_FILTER.has(c.feature)) return false;
   return true;
@@ -2032,6 +2154,9 @@ function printMatrix() {
   console.log("  D:/c/logs writable                = " + fs.existsSync(LOG_DIR));
   console.log("\n运行全部可跑用例：node scripts/test-input-arbitration-e2e.mjs");
   console.log("只跑某阶段：      node scripts/test-input-arbitration-e2e.mjs --stage=human,baseline --feature=off");
+  console.log("只跑某用例：      node scripts/test-input-arbitration-e2e.mjs --case=R2 --no-build");
+  console.log("跑到某用例为止：  node scripts/test-input-arbitration-e2e.mjs --until=R2 --no-build");
+  console.log("带 popup 健康探针：node scripts/test-input-arbitration-e2e.mjs --diag --until=R2 --no-build");
 }
 
 // ---------------------------------------------------------------- win32 helper
@@ -2076,6 +2201,8 @@ public static class BpW {
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int max);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, StringBuilder text, int max);
   [DllImport("user32.dll")] public static extern uint MapVirtualKeyW(uint code, uint mapType);
+  [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hWnd);
 
   public static List<IntPtr> Top() {
     List<IntPtr> list = new List<IntPtr>();
@@ -2215,6 +2342,22 @@ while ($script:running) {
         [BpW]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
         Reply ([ordered]@{ ok = [bool]$okPos; fgOk = [bool]$fgOk; screen = @($pt.X, $pt.Y); root = $root.ToInt64(); foreground = ([BpW]::GetForegroundWindow()).ToInt64() })
       }
+      'realClick' {
+        # 纯输入：不做 ShowWindow/SetWindowPos/SetForegroundWindow。
+        # 用于产品已用 user-explicit-show 呈现的窗口——再对窗口做 show/activate 会被 presentation
+        # 策略按“自动化不得改变呈现”拒绝并可能把窗口重新隐藏，导致页面失焦、OS 按键无法到达。
+        $h = [System.IntPtr]([int64]$cmd.hwnd)
+        $pt = [BpW+POINT]::new()
+        $pt.X = [int]$cmd.x
+        $pt.Y = [int]$cmd.y
+        [void][BpW]::ClientToScreen($h, [ref]$pt)
+        $okPos = [BpW]::SetCursorPos($pt.X, $pt.Y)
+        Start-Sleep -Milliseconds 60
+        [BpW]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 60
+        [BpW]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        Reply ([ordered]@{ ok = [bool]$okPos; screen = @($pt.X, $pt.Y); root = ([BpW]::GetAncestor($h, 2)).ToInt64(); foreground = ([BpW]::GetForegroundWindow()).ToInt64() })
+      }
       'sendKeys' {
         if ($cmd.hwnd) {
           $h = [System.IntPtr]([int64]$cmd.hwnd)
@@ -2252,6 +2395,32 @@ while ($script:running) {
         $focusAfter = ([BpW]::GetFocus()).ToInt64()
         [void][BpW]::AttachThreadInput($selfThread, $rootThread, $false)
         Reply ([ordered]@{ ok = $true; vk = $vk; scan = $scan; root = $root.ToInt64(); foreground = ([BpW]::GetForegroundWindow()).ToInt64(); focus = $focusAfter; focusBefore = $focusNow })
+      }
+      'focusWindow' {
+        # 测试前置条件：真实用户在输入法里打字时，浏览器窗口就是 OS 前台窗口。
+        # 这里只做“把测试目标窗口置前 + 置焦点”，并回报实际结果（不重试、不伪造）。
+        $h = [System.IntPtr]([int64]$cmd.hwnd)
+        $root = [BpW]::GetAncestor($h, 2)
+        [void][BpW]::ShowWindow($root, 5)
+        [void][BpW]::SetWindowPos($root, [System.IntPtr]::Zero, 0, 0, 0, 0, [uint32](0x0040 -bor 0x0002 -bor 0x0001))
+        $rootPid = [uint32]0
+        $rootThread = [BpW]::GetWindowThreadProcessId($root, [ref]$rootPid)
+        $selfThread = [BpW]::GetCurrentThreadId()
+        [void][BpW]::AttachThreadInput($selfThread, $rootThread, $true)
+        $fgOk = [BpW]::SetForegroundWindow($root)
+        [void][BpW]::SetActiveWindow($root)
+        [void][BpW]::BringWindowToTop($root)
+        $focusOk = [BpW]::SetFocus($h)
+        Start-Sleep -Milliseconds 150
+        $fg = ([BpW]::GetForegroundWindow()).ToInt64()
+        $focus = ([BpW]::GetFocus()).ToInt64()
+        [void][BpW]::AttachThreadInput($selfThread, $rootThread, $false)
+        Reply ([ordered]@{
+          ok = $true; root = $root.ToInt64(); foreground = $fg; focus = $focus;
+          fgOk = [bool]$fgOk; focusOk = [bool]$focusOk;
+          isForeground = ($fg -eq $root.ToInt64());
+          widgetValid = [BpW]::IsWindow($h)
+        })
       }
       'wheel' {
         $h = [System.IntPtr]([int64]$cmd.hwnd)
@@ -3210,7 +3379,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
      * 一个窗口可能同时存在多个 legacy widget（旧 tab/隐藏 widget），因此逐个候选尝试，
      * 直到页面状态真的变化为止；返回实际生效的候选与尝试次数（作为证据）。
      */
-    async humanClick(spaceKey, rect, { expect, real = false, useKnownWidget = false } = {}) {
+    async humanClick(spaceKey, rect, { expect, real = false, useKnownWidget = false, realMode = "plain" } = {}) {
       const win = ctx.windows[spaceKey];
       if (!win?.hwnd) throw new Error("no window for " + spaceKey);
       const token = ctx.spaces[spaceKey].token;
@@ -3239,7 +3408,11 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
         let down, up;
         let realResult = null;
         if (real) {
-          realResult = await win32.call("realMouse", { hwnd: candidate.hwnd, x, y });
+          // plain：只做 SetCursorPos + mouse_event（真实点击会激活窗口）；不调用 ShowWindow/SetWindowPos，
+          // 因为对 user-explicit-show 的 human-owned 窗口做“自动化 show/activate”会被 presentation
+          // 策略拒绝并可能把窗口重新隐藏（页面失焦 → 后续 OS 按键发给别的窗口）。
+          // forced：仅在窗口确实没有被呈现时使用（humanClick 的 realMode 参数）。
+          realResult = await win32.call(realMode === "forced" ? "realMouse" : "realClick", { hwnd: candidate.hwnd, x, y });
           down = realResult; up = realResult;
         } else {
           await win32.call("mouse", { hwnd: candidate.hwnd, type: "move", x, y, buttons: 0 });
@@ -3304,25 +3477,195 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
     },
     // ------------------------------------------------------------ kernel API helpers
     async cdp() {
-      if (!ctx._browserCdp) ctx._browserCdp = await new BrowserCdp(profileDir).connect();
+      if (!ctx._browserCdp) {
+        ctx._browserCdp = await new BrowserCdp(profileDir).connect();
+        // 浏览器级 CDP 事件环：用于事后区分「连接丢失 / 会话失效 / 执行上下文销毁 / target 崩溃重建」。
+        ctx._cdpEvents = [];
+        ctx._browserCdp.onEvent((message) => {
+          const method = String(message.method || "");
+          if (!/^(Inspector\.detached|Target\.detachedFromTarget|Target\.targetDestroyed|Target\.targetCrashed|Target\.targetCreated|Target\.targetInfoChanged|Runtime\.executionContextDestroyed|Runtime\.executionContextsCleared|Runtime\.executionContextCreated|Inspector\.targetCrashed)$/.test(method)) return;
+          const params = message.params || {};
+          ctx._cdpEvents.push({
+            at: nowIso(),
+            method,
+            sessionId: message.sessionId || null,
+            targetId: params.targetId || params.targetInfo?.targetId || null,
+            reason: params.reason || null,
+            url: params.targetInfo?.url ? String(params.targetInfo.url).slice(0, 160) : null,
+            type: params.targetInfo?.type || null,
+            contextId: params.executionContextId ?? params.context?.id ?? null,
+            frameId: params.context?.auxData?.frameId || null,
+            origin: params.origin ? String(params.origin).slice(0, 80) : null,
+            name: params.name ? String(params.name).slice(0, 60) : null,
+            crash: params.status ? JSON.stringify(params.status).slice(0, 200) : null,
+          });
+          if (ctx._cdpEvents.length > 800) ctx._cdpEvents.splice(0, ctx._cdpEvents.length - 800);
+        });
+      }
       return ctx._browserCdp;
+    },
+    cdpEvents(filter = {}) {
+      const list = ctx._cdpEvents || [];
+      return list.filter((e) => {
+        if (filter.method && !new RegExp(filter.method).test(e.method)) return false;
+        if (filter.sessionId && e.sessionId !== filter.sessionId) return false;
+        if (filter.targetId && e.targetId !== filter.targetId) return false;
+        return true;
+      });
+    },
+    /**
+     * popup 扩展页面是否还能执行 JS。
+     * 优先看浏览器级 targetCrashed 事件（最快且无歧义），否则做一次短超时 echo。
+     * 注意：崩溃后的 tab 仍然是可 attach 的 page target，所以不能用 Target.getTargets 判断。
+     */
+    async popupLiveness(timeoutMs = 2500) {
+      if (!ctx.popup) return { alive: false, reason: "no-popup" };
+      const crashEvents = ctx.cdpEvents({ targetId: ctx.popup.targetId, method: "^Target\\.targetCrashed$" });
+      if (crashEvents.length) {
+        return { alive: false, reason: "target-crashed", targetId: ctx.popup.targetId, crashEvents: crashEvents.slice(-3) };
+      }
+      const cdp = await ctx.cdp().catch((error) => ({ __error: String(error?.message || error) }));
+      if (cdp.__error) return { alive: false, reason: "cdp-unavailable", error: cdp.__error };
+      const t0 = Date.now();
+      const echo = await cdp
+        .evaluate(ctx.popup.sessionId, "({sum: 1+1, loadId: window.__bpPopupLoadId || null, href: location.href})", { timeoutMs })
+        .then((value) => ({ value }))
+        .catch((error) => ({ error: String(error?.message || error) }));
+      return {
+        alive: !echo.error,
+        reason: echo.error ? "evaluate-timeout" : "ok",
+        ms: Date.now() - t0,
+        echo,
+        expectedLoadId: ctx.popup.loadId,
+        targetId: ctx.popup.targetId,
+      };
+    },
+    /** 关闭并丢弃当前 popup 页面（crashed/无响应页面同样可关闭），并清掉依赖它的 API 上下文。 */
+    async popupRecycle(reason, detail = {}) {
+      const old = ctx.popup;
+      if (!old) return { recycled: false, reason };
+      const cdp = await ctx.cdp().catch(() => null);
+      const out = {
+        recycled: true,
+        at: nowIso(),
+        reason,
+        old: { targetId: old.targetId, sessionId: old.sessionId, tabId: old.tabId, windowId: old.windowId, loadId: old.loadId, createdAt: old.createdAt },
+        detail,
+      };
+      if (cdp) {
+        // 先 detach 我们的 session，再关闭 target（对 crashed tab 也有效：等价于关闭标签）。
+        out.detach = await cdp.send("Target.detachFromTarget", { sessionId: old.sessionId }).catch((error) => ({ error: String(error?.message || error) }));
+        out.closeTarget = await cdp.send("Target.closeTarget", { targetId: old.targetId }).catch((error) => ({ error: String(error?.message || error) }));
+      }
+      ctx.popup = null;
+      if (ctx.apiContext?.kind === "popup") ctx.apiContext = null;
+      (ctx._popupRecycles ||= []).push(out);
+      if (ctx.session) (ctx.session.popupRecycles ||= []).push(out);
+      console.log("[popup] recycled (" + reason + ") target=" + old.targetId + " ageMs=" + (Date.now() - Date.parse(old.createdAt || nowIso())) + " closeTarget=" + JSON.stringify(out.closeTarget).slice(0, 200));
+      return out;
+    },
+    /**
+     * 长调用超时后的判定：popup 渲染器是否已经死亡。
+     * dead=true 时重建 popup（一次性），调用方据此决定是否重跑该操作；
+     * dead=false（页面还活着）说明是被调用的 chrome.* 本身不返回，属于真实缺陷，不得重试。
+     */
+    async recoverPopupIfDead(label, livenessTimeoutMs = 2500) {
+      const live = await ctx.popupLiveness(livenessTimeoutMs);
+      const out = { label, at: nowIso(), liveness: live, dead: !live.alive, recycled: null };
+      if (out.dead) out.recycled = await ctx.popupRecycle(label + "：popup 渲染器不响应", { liveness: live });
+      return out;
+    },
+    /**
+     * 故障注入（仅 --fault=popup-crash-after-create）：用 Page.crash 让新 popup 渲染器真实崩溃，
+     * 验证「崩溃 target 仍可 attach 但 evaluate 不返回 → 重建 popup」这条自愈路径。
+     * 不计入 PASS/FAIL，只写证据。
+     */
+    async faultCrashPopup(popup) {
+      const cdp = await ctx.cdp();
+      const out = { at: nowIso(), targetId: popup.targetId, sessionId: popup.sessionId };
+      await cdp.send("Page.enable", {}, popup.sessionId, 3000).catch(() => undefined);
+      out.crash = await cdp.send("Page.crash", {}, popup.sessionId, 3000).catch((error) => ({ error: String(error?.message || error) }));
+      // 等浏览器级 targetCrashed 事件（最多 5s）；崩溃后 tab 仍在，Runtime.evaluate 不再返回。
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        const events = ctx.cdpEvents({ targetId: popup.targetId, method: "^Target\\.targetCrashed$" });
+        if (events.length) {
+          out.crashEvent = events[events.length - 1];
+          break;
+        }
+        await sleep(100);
+      }
+      ctx._faultInjected = out;
+      if (ctx.session) (ctx.session.faultInjection ||= []).push(out);
+      console.log("[fault] popup crashed (injected) target=" + popup.targetId + " event=" + JSON.stringify(out.crashEvent || null));
+      return out;
+    },
+    /**
+     * 在 popup 页面执行表达式，仅在「popup 渲染器已证死」时重建并重试一次；
+     * 页面仍活着时绝不重试（不掩盖产品缺陷）。
+     */
+    async popupEval(label, expr, { timeoutMs = 30000 } = {}) {
+      const attempts = [];
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const popup = await ctx.ensurePopup();
+        const cdp = await ctx.cdp();
+        try {
+          const value = await cdp.evaluate(popup.sessionId, expr, { timeoutMs });
+          return { ok: true, value, targetId: popup.targetId, attempts };
+        } catch (error) {
+          const message = String(error?.message || error);
+          attempts.push({ attempt, error: message, targetId: popup.targetId });
+          const recovery = await ctx.recoverPopupIfDead(label);
+          attempts[attempts.length - 1].recovery = { dead: recovery.dead, liveness: recovery.liveness };
+          if (!recovery.dead || attempt === 1) {
+            return { ok: false, error: message, popupDead: recovery.dead, attempts };
+          }
+        }
+      }
+      return { ok: false, error: "popupEval exhausted", attempts };
+    },
+    /** 产品命令封装：扩展渲染器崩溃可能连带 SW/native host 退出；连接被拒时等 host 重连后重试一次。 */
+    async productCall(name, args = {}, options = {}) {
+      const invoke = () => ctx.client.call(name, args, options);
+      try {
+        return await invoke();
+      } catch (error) {
+        const message = String(error?.message || error);
+        if (!/ECONNREFUSED|ECONNRESET|EPIPE|socket hang up|fetch failed/i.test(message)) throw error;
+        console.log("[host] " + name + " 连接失败（" + message + "）；等待扩展/native host 重连…");
+        const refreshed = await ctx.refreshHostClient(45000).catch(() => ({ ok: false }));
+        if (!refreshed.ok) throw error;
+        console.log("[host] 重连成功 pid=" + refreshed.session?.pid + " port=" + refreshed.session?.port);
+        return await invoke();
+      }
     },
     /**
      * 受信扩展页面（popup/index.html）作为 chrome.browserCli.inputOwnership 的真实调用方。
      * 通过浏览器级 CDP 在该页面主世界执行调用：不经过 chrome.debugger（extension:// 页面
      * 不在 host_permissions 覆盖范围内），也不改变页面的扩展上下文。
+     *
+     * 复用前先验证活性：managed hidden 窗口里的扩展页在“持续重绘但永不 present”的状态下，
+     * 渲染器会因 Blink presentation-callback 缓冲（kMaxBufferSize=60）DCHECK 崩溃
+     * （Target.targetCrashed），之后该 target 仍然存在、attach 也成功，但 Runtime.evaluate
+     * 永不返回。崩溃后必须重建页面，否则后续每个用例都会 30s 超时（见 2026-10-31 首故障）。
      */
     async ensurePopup() {
-      if (ctx.popup) return ctx.popup;
+      if (ctx.popup) {
+        const live = await ctx.popupLiveness(2500);
+        if (live.alive) return ctx.popup;
+        await ctx.popupRecycle("popup 不可用（渲染器崩溃/无响应）", { liveness: live });
+      }
       const extId = report.env.extensionId;
       if (!extId) throw new Error("extension id unknown");
       const url = "chrome-extension://" + extId + "/popup/index.html";
-      const data = await ctx.client.call("open_space", { name: "popup-" + token, url });
-      const info = { spaceId: data.spaceId, tabId: data.tabId, windowId: data.windowId, url, kind: "extension-page" };
+      const data = await ctx.productCall("open_space", { name: "popup-" + token, url });
+      const info = { spaceId: data.spaceId, tabId: data.tabId, windowId: data.windowId, url, kind: "extension-page", createdAt: nowIso() };
       const cdp = await ctx.cdp();
       const target = await cdp.findTarget("chrome-extension://" + extId + "/popup/", "page");
       info.targetId = target.targetId;
       info.sessionId = await cdp.attach(target.targetId);
+      // 记录执行上下文事件（上下文销毁/重建是本轮故障的可能根因之一）。
+      await cdp.send("Runtime.enable", {}, info.sessionId).catch(() => undefined);
       let probe = null;
       const deadline = Date.now() + 20000;
       while (Date.now() < deadline) {
@@ -3342,8 +3685,40 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
         if (probe && probe.api === true && probe.io) break;
         await sleep(200);
       }
+      // 本次页面加载的标记：后续探针若发现标记消失 → 页面被重载/替换（上下文丢失），而非渲染器 hang。
+      info.loadId = token + "-popup-" + Math.random().toString(36).slice(2, 8);
+      info.markerProbe = await cdp
+        .evaluate(info.sessionId, "(() => { window.__bpPopupLoadId = " + JSON.stringify(info.loadId) + "; return window.__bpPopupLoadId; })()", { timeoutMs: 10000 })
+        .catch((error) => ({ error: String(error?.message || error) }));
       info.probe = probe;
+      // frame id 证据：崩溃/超时诊断里需要区分「target 死了」与「某个 frame 的上下文没了」。
+      info.frameTree = await cdp
+        .send("Page.getFrameTree", {}, info.sessionId, 3000)
+        .then((tree) => {
+          const flat = [];
+          const walk = (node) => {
+            if (!node) return;
+            flat.push({ frameId: node.frame?.id, parentId: node.frame?.parentId || null, url: String(node.frame?.url || "").slice(0, 120), loaderId: node.frame?.loaderId || null, mimeType: node.frame?.mimeType || null });
+            for (const child of node.childFrames || []) walk(child);
+          };
+          walk(tree?.frameTree);
+          return flat;
+        })
+        .catch((error) => ({ error: String(error?.message || error) }));
       ctx.popup = info;
+      console.log(
+        "[popup] created targetId=" + info.targetId + " session=" + info.sessionId + " space=" + info.spaceId +
+          " tab=" + info.tabId + " window=" + info.windowId +
+          " frames=" + (Array.isArray(info.frameTree) ? info.frameTree.map((f) => f.frameId).join(",") : JSON.stringify(info.frameTree).slice(0, 160)),
+      );
+      if (FAULT_ARG === "popup-crash-after-create" && !ctx._faultInjectDone) {
+        ctx._faultInjectDone = true;
+        const injected = await ctx.faultCrashPopup(info);
+        // 不手动重建：递归进入 ensurePopup 的活性检查分支，走真实检测（targetCrashed → recycle → 重建）。
+        const recovered = await ctx.ensurePopup();
+        injected.detectedAndRecovered = recovered?.targetId !== info.targetId;
+        return recovered;
+      }
       return info;
     },
     /**
@@ -3519,21 +3894,32 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
      * 用来验证内核 30s stale 契约（无需停 SW，避免 SW 自动重启后立刻重放）。
      */
     async createUntrackedWindow(name) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
       const tokenValue = token + "-untracked-" + name;
       const url = servers.mainOrigin + "/" + name + "?token=" + tokenValue;
       // 独立窗口（不属于任何 Task Space）：扩展的周期同步按 space.windowId 覆盖，
       // 不会给这个窗口/tab 发 heartbeat。
       const expr =
         "new Promise((resolve) => { try { chrome.windows.create({url: " + JSON.stringify(url) + ", focused: false, state: 'normal'}, (win) => resolve({ok: !chrome.runtime.lastError, windowId: win ? win.id : null, tabId: win && win.tabs && win.tabs[0] ? win.tabs[0].id : null, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
-      const created = await cdp.evaluate(popup.sessionId, expr, { timeoutMs: 30000 }).catch((error) => ({ ok: false, error: String(error) }));
-      if (created?.ok !== true) return { ok: false, created };
+      let attempt = await ctx.popupEval("createUntrackedWindow", expr, { timeoutMs: 30000 });
+      let adopted = null;
+      if (!attempt.ok) {
+        // 超时是“结果未知”：若窗口其实已经建出来（beacon 已就绪），直接采纳，不重复建窗口。
+        adopted = await ctx.adoptPageByBeacon(tokenValue, url);
+        if (!adopted) {
+          // popupEval 只在证明 popup 渲染器已死后才会重试；这里再失败就是真实失败。
+          return { ok: false, created: { ok: false, error: attempt.error }, popupAttempts: attempt.attempts, token: tokenValue, url };
+        }
+      }
+      const created = adopted ? { ok: true, windowId: adopted.windowId, tabId: adopted.tabId } : attempt.value;
+      if (created?.ok !== true) {
+        const diag = await ctx.popupDiag("chrome.windows.create 返回失败", { token: tokenValue }).catch((error) => ({ error: String(error?.message || error) }));
+        return { ok: false, created, diag, token: tokenValue, url };
+      }
       const deadline = Date.now() + 30000;
       while (Date.now() < deadline) {
         const entry = servers.stateFor(tokenValue);
         if (entry?.state?.token === tokenValue) {
-          return { ok: true, tabId: created.tabId, windowId: created.windowId, state: entry.state, token: tokenValue, url };
+          return { ok: true, tabId: created.tabId, windowId: created.windowId, state: entry.state, token: tokenValue, url, adoptedAfterPopupCrash: Boolean(adopted), popupAttempts: attempt.attempts };
         }
         await sleep(150);
       }
@@ -3544,79 +3930,218 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
      * 不经过扩展的 Task Space 同步；新 tab 只应继承窗口账本。
      */
     async createTabInWindow(windowId, name, active = false) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
       const tokenValue = token + "-newtab-" + name;
       const url = servers.mainOrigin + "/" + name + "?token=" + tokenValue;
       const expr =
         "new Promise((resolve) => { try { chrome.tabs.create({windowId: " + Number(windowId) + ", url: " + JSON.stringify(url) + ", active: " + (active ? "true" : "false") + "}, (tab) => resolve({ok: !chrome.runtime.lastError, tabId: tab ? tab.id : null, windowId: tab ? tab.windowId : null, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
-      const created = await cdp.evaluate(popup.sessionId, expr, { timeoutMs: 30000 }).catch((error) => ({ ok: false, error: String(error) }));
+      const attempt = await ctx.popupEval("createTabInWindow", expr, { timeoutMs: 30000 });
+      if (!attempt.ok) {
+        const adopted = await ctx.adoptPageByBeacon(tokenValue, url);
+        if (adopted) return { ok: true, tabId: adopted.tabId, windowId: adopted.windowId, state: adopted.state, token: tokenValue, url, adoptedAfterPopupCrash: true };
+        return { ok: false, created: { ok: false, error: attempt.error }, popupAttempts: attempt.attempts, token: tokenValue, url };
+      }
+      const created = attempt.value;
       if (created?.ok !== true) return { ok: false, created, token: tokenValue, url };
       const deadline = Date.now() + 30000;
       while (Date.now() < deadline) {
         const entry = servers.stateFor(tokenValue);
         if (entry?.state?.token === tokenValue) {
-          return { ok: true, tabId: created.tabId, windowId: created.windowId, state: entry.state, token: tokenValue, url };
+          return { ok: true, tabId: created.tabId, windowId: created.windowId, state: entry.state, token: tokenValue, url, popupAttempts: attempt.attempts };
         }
         await sleep(150);
       }
       return { ok: false, created, reason: "beacon-not-ready", token: tokenValue, url };
     },
+    /** 页面已加载完成（beacon 已就绪）时，用扩展 API 反查 tab/window（避免重复建窗口）。 */
+    async adoptPageByBeacon(tokenValue, url) {
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        const entry = servers.stateFor(tokenValue);
+        if (entry?.state?.token === tokenValue) {
+          const found = await ctx.findTabByUrl(url).catch((error) => ({ error: String(error?.message || error) }));
+          if (found && !found.error) return { tabId: found.tabId, windowId: found.windowId, state: entry.state, via: found.via };
+          return { tabId: null, windowId: null, state: entry.state, via: "beacon-only" };
+        }
+        await sleep(200);
+      }
+      return null;
+    },
+    /** 按窗口标题（tab title）找 Chrome 顶层窗口；窗口/tab 切换后必须重新解析。 */
+    async findWindowByTitleToken(needle, timeoutMs = 15000) {
+      const deadline = Date.now() + timeoutMs;
+      let last = [];
+      while (Date.now() < deadline) {
+        const listing = await win32.call("listWindows", { pid: chrome.record.pid });
+        last = Array.isArray(listing.windows) ? listing.windows : listing.windows ? [listing.windows] : [];
+        const matches = last.filter((w) => w.className === "Chrome_WidgetWin_1" && String(w.title || "").includes(needle));
+        const hit = matches.find((w) => w.visible) || matches[0];
+        if (hit) return hit;
+        await sleep(200);
+      }
+      return null;
+    },
+    /** 顶层窗口当前的 render widget 子窗口（tab 切换后旧的 widget HWND 会销毁）。 */
+    async widgetOf(topHwnd) {
+      const kids = await win32.call("children", { hwnd: topHwnd });
+      const list = Array.isArray(kids.children) ? kids.children : kids.children ? [kids.children] : [];
+      return (
+        list
+          .filter((c) => c.className === "Chrome_RenderWidgetHostHWND")
+          .filter((c) => Number(c.clientWidth) * Number(c.clientHeight) > 20000)
+          .sort((a, b) => {
+            const va = a.visible === true ? 1 : 0;
+            const vb = b.visible === true ? 1 : 0;
+            if (va !== vb) return vb - va;
+            return Number(b.clientWidth) * Number(b.clientHeight) - Number(a.clientWidth) * Number(a.clientHeight);
+          })[0] || null
+      );
+    },
+    /** 用扩展 API（SW 或 popup）按 URL 找 tab。 */
+    async findTabByUrl(url) {
+      const expr =
+        "new Promise((resolve) => chrome.tabs.query({}, (tabs) => resolve({tab: (tabs || []).filter((t) => String(t.url || '') === " + JSON.stringify(url) + ").map((t) => ({tabId: t.id, windowId: t.windowId}))[0] || null, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})))";
+      const viaSw = await ctx.swEval(expr, 8000);
+      if (viaSw && viaSw.tab) return { tabId: viaSw.tab.tabId, windowId: viaSw.tab.windowId, via: "service_worker" };
+      const viaPopup = await ctx.popupEval("findTabByUrl", expr, { timeoutMs: 8000 });
+      if (viaPopup.ok && viaPopup.value?.tab) return { tabId: viaPopup.value.tab.tabId, windowId: viaPopup.value.tab.windowId, via: "popup" };
+      throw new Error("tab not found by url: " + url + " sw=" + JSON.stringify(viaSw).slice(0, 200) + " popup=" + JSON.stringify(viaPopup).slice(0, 200));
+    },
     async closeWindow(windowId) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
-      return await cdp.evaluate(
-        popup.sessionId,
+      if (windowId === null || windowId === undefined) return { ok: false, skipped: "windowId unknown (adopted after popup crash)" };
+      const r = await ctx.popupEval(
+        "closeWindow",
         "new Promise((resolve) => { try { chrome.windows.remove(" + Number(windowId) + ", () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })",
-      ).catch((error) => ({ ok: false, error: String(error) }));
+        { timeoutMs: 15000 },
+      );
+      return r.ok ? r.value : { ok: false, error: r.error };
     },
     async closeTab(tabId) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
-      return await cdp.evaluate(
-        popup.sessionId,
+      const r = await ctx.popupEval(
+        "closeTab",
         "new Promise((resolve) => { try { chrome.tabs.remove(" + Number(tabId) + ", () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })",
-      ).catch((error) => ({ ok: false, error: String(error) }));
+        { timeoutMs: 15000 },
+      );
+      return r.ok ? r.value : { ok: false, error: r.error };
     },
     /** 从 popup 页面直接 attach chrome.debugger（SW 停掉后用于产生 AI 输入）。 */
     async popupDebuggerAttach(tabId) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
       const expr =
         "new Promise((resolve) => { try { chrome.debugger.attach({tabId: " + Number(tabId) + "}, '1.3', () => resolve({attached: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({attached: false, error: String((e && e.message) || e)}); } })";
-      return await cdp.evaluate(popup.sessionId, expr).catch((error) => ({ attached: false, error: String(error) }));
+      const r = await ctx.popupEval("popupDebuggerAttach", expr, { timeoutMs: 20000 });
+      if (r.ok) return r.value;
+      return { attached: false, error: r.error, popupDead: r.popupDead, attempts: r.attempts };
     },
     async popupDebuggerDetach(tabId) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
-      return await cdp.evaluate(
-        popup.sessionId,
+      const r = await ctx.popupEval(
+        "popupDebuggerDetach",
         "new Promise((resolve) => { try { chrome.debugger.detach({tabId: " + Number(tabId) + "}, () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })",
-      ).catch((error) => ({ ok: false, error: String(error) }));
+        { timeoutMs: 20000 },
+      );
+      return r.ok ? r.value : { ok: false, error: r.error, popupDead: r.popupDead };
     },
     async popupDebuggerSend(tabId, method, params) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
       const expr =
         "new Promise((resolve) => { try { chrome.debugger.sendCommand({tabId: " + Number(tabId) + "}, " +
         JSON.stringify(method) + ", " + JSON.stringify(params) + ", (result) => resolve({ok: !chrome.runtime.lastError, result: result === undefined ? null : result, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
-      return await cdp.evaluate(popup.sessionId, expr, { timeoutMs: 30000 }).catch((error) => ({ ok: false, error: String(error) }));
+      const r = await ctx.popupEval("popupDebuggerSend:" + method, expr, { timeoutMs: 30000 });
+      return r.ok ? r.value : { ok: false, error: r.error, popupDead: r.popupDead, attempts: r.attempts };
+    },
+    /**
+     * popup 扩展页面一次 Runtime.evaluate 超时后的取证（只在失败路径调用）：
+     * 区分「CDP 连接/会话丢失」与「渲染器/页面 hang」与「某个 chrome.* 回调永不返回」。
+     * 只读探测，不改变产品状态。
+     */
+    async popupDiag(reason, extra = {}) {
+      const out = { at: nowIso(), reason, extra, cached: null, probes: {} };
+      out.cached = ctx.popup
+        ? { spaceId: ctx.popup.spaceId, tabId: ctx.popup.tabId, windowId: ctx.popup.windowId, targetId: ctx.popup.targetId, sessionId: ctx.popup.sessionId }
+        : null;
+      const cdp = await ctx.cdp().catch((error) => ({ __error: String(error?.message || error) }));
+      if (cdp.__error) return { ...out, cdp: cdp.__error };
+      out.probes.targets = await cdp
+        .targets()
+        .then((list) =>
+          list.map((t) => ({ targetId: t.targetId, type: t.type, attached: t.attached, url: String(t.url || "").slice(0, 160), openerId: t.openerId || null })),
+        )
+        .catch((error) => ({ error: String(error?.message || error) }));
+      // 1) 缓存的 popup session 是否还能执行最简单的同步表达式（渲染器/会话活性）。
+      out.probes.cachedSessionEcho = ctx.popup
+        ? await cdp.evaluate(ctx.popup.sessionId, "1+1", { timeoutMs: 5000 }).then((v) => ({ value: v })).catch((error) => ({ error: String(error?.message || error) }))
+        : { skipped: "no popup" };
+      // 2) 新建 session 到同一个 popup target（排除“单个 session 卡死”）。
+      const targetId = ctx.popup?.targetId;
+      let freshSession = null;
+      if (targetId) {
+        freshSession = await cdp.attach(targetId).catch((error) => ({ error: String(error?.message || error) }));
+        if (typeof freshSession === "string") {
+          out.probes.freshSessionEcho = await cdp.evaluate(freshSession, "({sum: 1+1, href: location.href, readyState: document.readyState})", { timeoutMs: 5000 }).then((v) => ({ value: v })).catch((error) => ({ error: String(error?.message || error) }));
+          // 3) chrome.windows / chrome.tabs 回调是否根本不返回（浏览器端挂起 vs 渲染器挂起）。
+          out.probes.tabsGetAll = await cdp
+            .evaluate(freshSession, "new Promise((resolve) => chrome.tabs.query({}, (tabs) => resolve({ok: !chrome.runtime.lastError, count: (tabs || []).length, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})))", { timeoutMs: 8000 })
+            .then((v) => ({ value: v }))
+            .catch((error) => ({ error: String(error?.message || error) }));
+          out.probes.windowsGetAll = await cdp
+            .evaluate(freshSession, "new Promise((resolve) => chrome.windows.getAll({populate: true}, (wins) => resolve({ok: !chrome.runtime.lastError, windows: (wins || []).map((w) => ({id: w.id, focused: w.focused, state: w.state, tabs: (w.tabs || []).map((t) => t.id)}))})))", { timeoutMs: 8000 })
+            .then((v) => ({ value: v }))
+            .catch((error) => ({ error: String(error?.message || error) }));
+          // 4) 是否真的出现了新窗口/新 target（判断 windows.create 是“没执行”还是“执行了但回调丢失”）。
+          if (extra.token) {
+            out.probes.newTargets = await cdp
+              .targets()
+              .then((list) => list.filter((t) => t.type === "page" && String(t.url || "").includes(extra.token)).map((t) => ({ targetId: t.targetId, url: String(t.url || "").slice(0, 200), attached: t.attached })))
+              .catch((error) => ({ error: String(error?.message || error) }));
+          }
+          await cdp.send("Target.detachFromTarget", { sessionId: freshSession }).catch(() => undefined);
+        } else {
+          out.probes.freshSessionAttach = freshSession;
+        }
+      }
+      // 5) 页面是否还是同一个加载（标记是否存活）+ chrome.* 是否仍可用（扩展上下文是否还在）。
+      out.probes.framesAtCreation = ctx.popup?.frameTree || null;
+      out.probes.marker = ctx.popup?.loadId
+        ? await cdp
+            .evaluate(ctx.popup.sessionId, "({loadId: window.__bpPopupLoadId || null, href: location.href, readyState: document.readyState, hasChrome: typeof chrome !== 'undefined', hasRuntime: !!(typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id), runtimeId: (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.id) || null})", { timeoutMs: 5000 })
+            .then((v) => ({ value: v, expectedLoadId: ctx.popup.loadId }))
+            .catch((error) => ({ error: String(error?.message || error), expectedLoadId: ctx.popup.loadId }))
+        : { skipped: "no popup loadId" };
+      out.probes.popupEvents = ctx
+        .cdpEvents({ targetId: ctx.popup?.targetId, method: "^(Inspector\\.|Target\\.|Runtime\\.executionContext)" })
+        .slice(-25);
+      out.probes.sessionEvents = ctx.cdpEvents({ sessionId: ctx.popup?.sessionId }).slice(-25);
+      // 全量落盘（控制台只打摘要），避免被 slice 截断后丢失证据。
+      try {
+        const file = path.join(artifactsDir, "popup-diag-" + label + "-" + runToken + "-" + Date.now() + ".json");
+        fs.writeFileSync(file, JSON.stringify(out, null, 2));
+        out.file = file;
+      } catch (error) {
+        out.fileError = String(error?.message || error);
+      }
+      const summary = {
+        cachedEcho: out.probes.cachedSessionEcho,
+        freshEcho: out.probes.freshSessionEcho,
+        tabsGetAll: out.probes.tabsGetAll,
+        windowsGetAll: out.probes.windowsGetAll,
+        marker: out.probes.marker,
+        framesAtCreation: out.probes.framesAtCreation,
+        newTargets: out.probes.newTargets,
+        popupEvents: out.probes.popupEvents?.length ?? 0,
+        sessionEvents: out.probes.sessionEvents?.length ?? 0,
+        file: out.file,
+      };
+      console.log("[diag] popup evaluate 超时取证 " + JSON.stringify(summary).slice(0, 2500));
+      return out;
     },
     /** popup 页面上下文里发真实用户消息（SW 内 markInternalCommand）。 */
     async popupSend(kind, spaceId, timeoutMs = 30000) {
-      const popup = await ctx.ensurePopup();
-      const cdp = await ctx.cdp();
       const expr =
         "new Promise((resolve) => { try { chrome.runtime.sendMessage(" +
         JSON.stringify({ kind, spaceId }) +
         ", (response) => resolve({ ok: true, response: response === undefined ? null : response, " +
         "lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null })); } catch (e) { " +
         "resolve({ ok: false, error: String((e && e.message) || e) }); } })";
-      try {
-        return await cdp.evaluate(popup.sessionId, expr, { timeoutMs });
-      } catch (error) {
-        return { ok: false, error: String(error?.message || error) };
-      }
+      const r = await ctx.popupEval("popupSend:" + kind, expr, { timeoutMs });
+      if (r.ok) return r.value;
+      return { ok: false, error: r.error, popupDead: r.popupDead, attempts: r.attempts };
     },
     /** 在 popup 页面里点击真实 UI 控件（验证按钮接线）。 */
     async popupClick(selector) {
@@ -3984,6 +4509,15 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       const failStart = failures.length;
       ctx.blocked = null;
       console.log("\n--- [" + label + "] " + testCase.id + " " + testCase.title);
+      if (DIAG && ctx.popup) {
+        // 只在 --diag 下打开：用例边界上 popup 扩展页是否还能执行（定位“从哪个用例开始不可用”）。
+        const cdp = await ctx.cdp();
+        const t0 = Date.now();
+        const echo = await cdp
+          .evaluate(ctx.popup.sessionId, "({sum: 1+1, loadId: window.__bpPopupLoadId || null, href: location.href})", { timeoutMs: 4000 })
+          .catch((error) => ({ error: String(error?.message || error) }));
+        console.log("[popup-health] before " + testCase.id + " " + JSON.stringify({ ms: Date.now() - t0, echo }).slice(0, 600));
+      }
       try {
         await testCase.run(ctx);
         if (ctx.blocked) {
@@ -4002,6 +4536,25 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       }
       caseReport.checks = checkLog.slice(logStart);
       caseReport.finishedAt = nowIso();
+      // popup 生命周期收尾：managed-hidden（不 present）的扩展页持续重绘约 60s 后，Blink
+      // presentation-callback 缓冲达到上限会让渲染器 DCHECK 崩溃（Target.targetCrashed），
+      // 崩溃后的 target 仍可 attach 但 Runtime.evaluate 永不返回。跨用例长期复用同一个 popup
+      // 会把这一环境缺陷放大成后续用例连续 30s 超时，因此每个用例结束后丢弃 popup；
+      // 下一个需要它的用例由 ensurePopup 重新创建（并在崩溃时自愈）。
+      if (ctx.popup) {
+        const crashEvents = ctx.cdpEvents({ targetId: ctx.popup.targetId, method: "^Target\\.targetCrashed$" });
+        const recycled = await ctx.popupRecycle("case-end").catch((error) => ({ recyclFailed: String(error?.message || error) }));
+        if (crashEvents.length) {
+          (caseReport.popupCrashes ||= []).push({ events: crashEvents.slice(-3), recycled });
+          const note =
+            "popup 渲染器在用例 " + testCase.id + " 内崩溃（Target.targetCrashed @" + crashEvents[0].at + "）：" +
+            "managed-hidden 扩展页持续重绘但拿不到 presentation 反馈，Blink PresentationTimeCallbackBuffer 达到 60 " +
+            "上限触发 DCHECK（third_party/blink/renderer/platform/widget/compositing/layer_tree_view.cc:554）；" +
+            "崩溃后 target 仍可 attach，但 Runtime.evaluate 永不返回。harness 已重建 popup（非产品行为失败）。";
+          if (!report.notes.includes(note)) report.notes.push(note);
+          console.log("[popup] CRASH detected in case " + testCase.id + " at " + crashEvents[0].at + "; popup recycled, next user re-creates");
+        }
+      }
       // 用例收尾：把可能残留的 HUMAN 状态恢复成 agent，避免污染后续用例。
       for (const key of ["main", "multi"]) {
         try {
