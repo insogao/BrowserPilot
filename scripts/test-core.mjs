@@ -13,6 +13,15 @@ globalThis.chrome = {
   },
 };
 
+// 真实 debugger-bridge 在模块加载时注册 chrome.debugger.onEvent；截图测试需要
+// 手动触发一次 Page.screencastFrame，模拟扩展事件流。
+let debuggerEventListeners = [];
+function emitDebuggerEvent(tabId, method, params) {
+  for (const listener of debuggerEventListeners) {
+    listener({ tabId }, method, params);
+  }
+}
+
 async function importTs(entry) {
   const result = await build({
     entryPoints: [entry],
@@ -62,7 +71,7 @@ const maskBuild = await build({
             ? "export const pushEvent=()=>{};"
             : args.path === "spaces"
               ? "export const handoffSpaceForTab=async()=>{};export const assertTabInCommandSpace=async()=>{};export const ensureCommandSpace=async()=>({spaceId:'stub'});"
-              : "export const interruptTab=async()=>{};export const attach=async()=>{};export const isAttached=()=>false;export const sendCommand=async()=>({});",
+              : "export const interruptTab=async()=>{};export const attach=async()=>{};export const isAttached=()=>false;export const sendCommand=async()=>({});export const waitForDebuggerEvent=async()=>new Promise(()=>{});",
       }));
     },
   }],
@@ -890,7 +899,7 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
     "captureScreenshot must never call ensureTabVisible",
   );
   assert.ok(
-    cdpSource.includes("SurfaceCooldown") && cdpSource.includes("skipFromSurface"),
+    cdpSource.includes("SurfaceCooldown") && cdpSource.includes("skipSurface"),
     "cdp.ts must throttle repeated fromSurface attempts on a tab that timed out",
   );
   assert.ok(
@@ -939,8 +948,9 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
 
 // ---------- cdp.ts 截图请求表：挂在 fromSurface 的请求超时后必须从 pending 移除 ----------
 {
+  debuggerEventListeners = [];
   globalThis.chrome.debugger = {
-    onEvent: { addListener() {} },
+    onEvent: { addListener(fn) { debuggerEventListeners.push(fn); } },
     onDetach: { addListener() {} },
     async attach() {},
     async detach() {},
@@ -949,7 +959,11 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   const cdp = await importTs("src/background/cdp.ts");
   let resolveHung;
   let captured = 0;
-  globalThis.chrome.debugger.sendCommand = async (_target, method, params) => {
+  globalThis.chrome.debugger.sendCommand = async (target, method, params) => {
+    if (method === "Page.startScreencast") {
+      setTimeout(() => emitDebuggerEvent(target.tabId, "Page.screencastFrame", { data: "SCREENCAST-FRAME", sessionId: 1 }), 0);
+      return {};
+    }
     if (method !== "Page.captureScreenshot") return { result: { value: true } };
     captured += 1;
     if (params.fromSurface === true) {
@@ -959,8 +973,10 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   };
 
   const shot = await cdp.captureScreenshot(11, "png", { timeoutMs: 30 });
-  assert.equal(shot.base64, "FALLBACK-FRAME");
-  assert.equal(shot.meta.possiblyStale, true, "降级帧必须标记 possiblyStale，不能当新鲜帧");
+  assert.equal(shot.base64, "SCREENCAST-FRAME", "fromSurface 超时后必须走单帧投屏兜底");
+  assert.equal(shot.meta.path, "screencast");
+  assert.equal(shot.meta.fromSurface, true, "投屏帧仍来自合成器");
+  assert.equal(shot.meta.possiblyStale, false, "投屏兜底返回的必须是新鲜帧");
   assert.match(String(shot.meta.reason), /30ms/, "降级原因必须保留超时时长");
   assert.equal(cdp.pendingScreenshotAttempts(11), 0, "超时后不得留下 pending 截图请求");
 
@@ -969,19 +985,26 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   await new Promise((r) => setTimeout(r, 20));
   assert.ok(cdp.screenshotCleanupStats().abandoned >= 1, "abandoned attempt must be counted");
   assert.ok(cdp.screenshotCleanupStats().lateSettles >= 1, "late frame must be observed and discarded");
-  globalThis.chrome.debugger.sendCommand = async (_target, method, params) =>
-    method === "Page.captureScreenshot" ? { data: params.fromSurface ? "FRESH-2" : "OLD-2" } : { result: { value: true } };
+  globalThis.chrome.debugger.sendCommand = async (target, method, params) => {
+    if (method === "Page.startScreencast") {
+      setTimeout(() => emitDebuggerEvent(target.tabId, "Page.screencastFrame", { data: "SCREENCAST-FRAME", sessionId: 1 }), 0);
+      return {};
+    }
+    return method === "Page.captureScreenshot"
+      ? { data: params.fromSurface ? "FRESH-2" : "OLD-2" }
+      : { result: { value: true } };
+  };
   const second = await cdp.captureScreenshot(11, "png", { timeoutMs: 500 });
-  assert.equal(second.base64, "OLD-2", "cooldown must go straight to the snapshot path");
-  assert.equal(second.meta.possiblyStale, true, "cooldown snapshot must stay explicitly stale");
+  assert.equal(second.base64, "SCREENCAST-FRAME", "cooldown 必须直接走单帧投屏");
+  assert.equal(second.meta.possiblyStale, false);
   assert.equal(second.meta.reason, "fromSurface-cooldown-after-timeout");
   cdp.__resetSurfaceCooldownsForTests();
   const third = await cdp.captureScreenshot(11, "png", { timeoutMs: 500 });
   assert.equal(third.base64, "FRESH-2", "a late frame must never leak into the next capture");
   assert.equal(third.meta.possiblyStale, false);
   assert.equal(cdp.pendingScreenshotAttempts(11), 0);
-  assert.ok(captured >= 2);
-  console.log("PASS core: timed-out CDP screenshots are removed from the pending table and late frames are discarded");
+  assert.ok(captured >= 1);
+  console.log("PASS core: timed-out CDP screenshots fall back to a fresh screencast frame and late frames are discarded");
 }
 
 // ---------- 同一 tab 截图串行 / 不同 tab 互不阻塞 / 冷却阻止重复 fromSurface ----------
@@ -990,6 +1013,10 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   cdp.__resetSurfaceCooldownsForTests();
   const surfaceCalls = new Map([[21, 0], [22, 0]]);
   globalThis.chrome.debugger.sendCommand = async (target, method, params) => {
+    if (method === "Page.startScreencast") {
+      setTimeout(() => emitDebuggerEvent(target.tabId, "Page.screencastFrame", { data: "SCREENCAST-21", sessionId: 1 }), 0);
+      return {};
+    }
     if (method === "Runtime.evaluate") return { result: { value: true } };
     if (method !== "Page.captureScreenshot") return {};
     const tabId = target.tabId;
@@ -1012,11 +1039,12 @@ console.log("PASS core: @results page expressions are syntactically valid and fi
   assert.equal(firstSettled, false, "a hanging tab must not block screenshots on other tabs");
 
   const firstShot = await first;
-  assert.equal(firstShot.base64, "SNAPSHOT-21");
-  assert.equal(firstShot.meta.possiblyStale, true);
+  assert.equal(firstShot.base64, "SCREENCAST-21");
+  assert.equal(firstShot.meta.path, "screencast");
+  assert.equal(firstShot.meta.possiblyStale, false);
   const secondShot = await second;
-  assert.equal(secondShot.base64, "SNAPSHOT-21");
-  assert.equal(secondShot.meta.possiblyStale, true);
+  assert.equal(secondShot.base64, "SCREENCAST-21");
+  assert.equal(secondShot.meta.possiblyStale, false);
   assert.equal(secondShot.meta.reason, "fromSurface-cooldown-after-timeout");
   assert.equal(surfaceCalls.get(21), 1, "same-tab concurrent captures issued more than one fromSurface request");
   console.log("PASS core: same-tab captures serialise, other tabs stay independent, cooldown blocks repeat fromSurface");
