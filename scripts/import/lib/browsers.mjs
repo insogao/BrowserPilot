@@ -195,11 +195,26 @@ function isSafeProfileDirName(name) {
 
 function chromiumProfileFiles(profilePath) {
   const files = {};
+  // Modern Chromium/Chrome/Edge keep cookies under Network/, older builds and
+  // some test fixtures keep them at the profile root. The public key stays
+  // "Cookies" so inventory/export code has one stable name.
+  for (const [relative, label] of [
+    [path.join("Network", "Cookies"), "Network/Cookies"],
+    ["Cookies", "Cookies"],
+  ]) {
+    const p = path.join(profilePath, relative);
+    if (!fileExists(p)) continue;
+    let size = 0;
+    try {
+      size = fs.statSync(p).size;
+    } catch {}
+    files.Cookies = { path: p, size, location: label };
+    break;
+  }
   const names = [
     "Bookmarks",
     "Bookmarks.bak",
     "History",
-    "Cookies",
     "Login Data",
     "Login Data For Account",
     "Web Data",
@@ -218,7 +233,7 @@ function chromiumProfileFiles(profilePath) {
     } catch {}
     files[name] = { path: p, size };
   }
-  for (const dirName of ["Extensions", "Sessions", "Local Storage", "IndexedDB"]) {
+  for (const dirName of ["Extensions", "Sessions", "Local Storage", "IndexedDB", "Network"]) {
     const p = path.join(profilePath, dirName);
     if (dirExists(p)) files[dirName] = { path: p, directory: true };
   }

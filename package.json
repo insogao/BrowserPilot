@@ -37,8 +37,18 @@
     "import:export": "node scripts/import/browser-data-import.mjs export",
     "import:apply": "node scripts/import/browser-data-import.mjs apply",
     "import:verify": "node scripts/import/browser-data-import.mjs verify",
+    "import:sources": "node scripts/import/browser-data-import.mjs sources",
+    "import:connect": "node scripts/import/browser-data-import.mjs connect",
+    "import:report": "node scripts/import/browser-data-import.mjs report",
+    "import:confirm-login": "node scripts/import/browser-data-import.mjs confirm-login",
+    "import:target": "node scripts/import/target/local-target.mjs",
+    "import:sync": "node scripts/import/sync-extension-contract.mjs",
+    "import:check": "node scripts/import/sync-extension-contract.mjs --check",
     "import:bridge": "node scripts/import/cookie-bridge/broker.mjs",
     "test:import": "node scripts/test-browser-data-import.mjs",
+    "test:import:product": "node scripts/test-import-product.mjs",
+    "test:import:native": "node scripts/test-native-import.mjs",
+    "test:import:all": "node scripts/test-import-product.mjs && node scripts/test-native-import.mjs",
     "test:cookie-bridge": "node scripts/test-cookie-bridge.mjs"
   },
   "devDependencies": {

@@ -9,6 +9,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { detectProfile } from "./profile.js";
 import { sessionDir } from "./paths.js";
+import { createImportRelay, defaultSessionDir } from "./import-relay.mjs";
 
 const configuredBasePort = Number(process.env.BROWSERPILOT_HOST_BASE_PORT);
 const DEFAULT_PORT = Number.isInteger(configuredBasePort) && configuredBasePort >= 1024 && configuredBasePort <= 65480
@@ -35,11 +36,15 @@ function resolveAuthToken() {
   }
   return token;
 }
-const authToken = resolveAuthToken();
+let authToken = "";
 const pending = new Map();
 let clientSeq = 0;
 let requestSeq = 0;
 let sessionFile = "";
+let normalServerStarted = false;
+let startupTimer = null;
+let importRelay = null;
+const pendingNormalMessages = [];
 const AGENT_ACTIVE_TTL_MS = 30_000;
 const PROFILE_CACHE_FILE = "profile-cache.json";
 let lastAgentActivity = 0;
@@ -94,8 +99,7 @@ function onExtensionData(chunk) {
   }
 }
 
-function handleFromExtension(msg) {
-  if (!msg || typeof msg !== "object") return;
+function handleNormalFromExtension(msg) {
   if (msg.type === "result" || msg.type === "event") {
     if (msg.type === "result") {
       const route = pending.get(msg.requestId);
@@ -124,8 +128,58 @@ function handleFromExtension(msg) {
   }
 }
 
+// Import mode is selected by the first native message. It must never fall
+// through to the generic command forwarder: the import extension must not be
+// able to drive arbitrary browser commands through the same channel that
+// carries cookies.
+function startNormalServer() {
+  if (normalServerStarted) return;
+  normalServerStarted = true;
+  if (startupTimer) {
+    clearTimeout(startupTimer);
+    startupTimer = null;
+  }
+  authToken = resolveAuthToken();
+  startServer(DEFAULT_PORT, () => {
+    const queued = pendingNormalMessages.splice(0);
+    for (const queuedMessage of queued) handleNormalFromExtension(queuedMessage);
+  });
+}
+
+function handleFromExtension(msg) {
+  if (!msg || typeof msg !== "object") return;
+  if (importRelay) {
+    void importRelay.handle(msg);
+    return;
+  }
+  if (msg.type === "hello" && msg.mode === "cookie-import") {
+    if (normalServerStarted) {
+      sendToExtension({ type: "error", code: "import-mode-conflict" });
+      return;
+    }
+    if (startupTimer) {
+      clearTimeout(startupTimer);
+      startupTimer = null;
+    }
+    importRelay = createImportRelay({
+      send: sendToExtension,
+      log: (line) => console.error("[import] " + line),
+      sessionDir: defaultSessionDir(),
+    });
+    console.error("[host] import-only relay mode (no TCP listener)");
+    void importRelay.handle(msg);
+    return;
+  }
+  if (!normalServerStarted) {
+    pendingNormalMessages.push(msg);
+    startNormalServer();
+    return;
+  }
+  handleNormalFromExtension(msg);
+}
+
 // ---------- 外部 AI TCP 接入 ----------
-function startServer(port) {
+function startServer(port, onReady) {
   const server = net.createServer((socket) => {
     socket.bpClientId = ++clientSeq;
     socket.bpAuthenticated = false;
@@ -158,7 +212,7 @@ function startServer(port) {
 
   server.on("error", (err) => {
     if (err.code === "EADDRINUSE" && port < MAX_PORT) {
-      startServer(port + 1);
+      startServer(port + 1, onReady);
     } else {
       console.error("[host] server error:", err.message);
     }
@@ -173,6 +227,7 @@ function startServer(port) {
     // ready 上报：port + profile 一并给扩展
     sendToExtension({ type: "event", name: "ready", args: { port, authToken, profile } });
     emitClientState(false);
+    if (typeof onReady === "function") onReady();
   });
 }
 
@@ -270,7 +325,16 @@ function cleanupSessionFile() {
 // ---------- 启动 ----------
 function main() {
   process.stdin.on("data", onExtensionData);
-  startServer(DEFAULT_PORT);
+  // The main BrowserPilot extension sends get_ready_state immediately; the
+  // import extension sends hello. Wait briefly so an import host can start
+  // without ever opening the generic loopback command listener.
+  startupTimer = setTimeout(() => startNormalServer(), 500);
+  process.stdin.on("end", () => {
+    if (importRelay) {
+      importRelay.close();
+      process.exit(0);
+    }
+  });
   console.error("[host] com.browserpilot.browseragent up, pid=" + process.pid);
 }
 

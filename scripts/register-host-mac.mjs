@@ -111,13 +111,23 @@ export function buildWrapperContent({ nodePath, hostEntry }) {
   return "#!/bin/sh\n# " + WRAPPER_MARKER + " — do not edit.\nexec " + JSON.stringify(nodePath) + " " + JSON.stringify(hostEntry) + ' "$@"\n';
 }
 
+// The same host serves the main BrowserPilot extension and the minimal
+// import-source extension. Chrome validates the calling extension id against
+// this list; the host itself only sees stdio. The import extension sends an
+// import-mode hello and the host then runs the import-only relay (no TCP
+// listener, no generic command forwarding).
+export const IMPORT_SOURCE_EXTENSION_ID = "ljoekiddijnohefaghljlcodgljienoj";
+
 export function buildNativeManifest({ extensionId, wrapperPath }) {
+  const origins = ["chrome-extension://" + extensionId + "/"];
+  const importOrigin = "chrome-extension://" + IMPORT_SOURCE_EXTENSION_ID + "/";
+  if (!origins.includes(importOrigin)) origins.push(importOrigin);
   return {
     name: HOST_NAME,
     description: HOST_DESCRIPTION,
     path: wrapperPath,
     type: "stdio",
-    allowed_origins: ["chrome-extension://" + extensionId + "/"],
+    allowed_origins: origins,
   };
 }
 

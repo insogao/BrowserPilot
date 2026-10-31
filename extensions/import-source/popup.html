@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browser CLI Import</title>
+    <style>
+      :root {
+        --blue: #2563eb;
+        --blue-hover: #1d4ed8;
+        --bg: #ffffff;
+        --fg: #111827;
+        --muted: #6b7280;
+        --border: #e5e7eb;
+        --ok: #15803d;
+        --warn: #b45309;
+        --danger: #b91c1c;
+        --soft: #f9fafb;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 14px;
+        width: 560px;
+        max-height: 760px;
+        overflow-y: auto;
+        font-family: -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif;
+        font-size: 13px;
+        line-height: 1.45;
+        color: var(--fg);
+        background: var(--bg);
+      }
+      h1 { font-size: 15px; margin: 0 0 6px; }
+      h2 { font-size: 13px; margin: 0 0 8px; }
+      p { margin: 4px 0 8px; }
+      .hint { color: var(--muted); }
+      .card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: var(--soft); }
+      .card.plain { background: #fff; }
+      .danger { background: #fff7ed; border-color: #fed7aa; }
+      .row { display: flex; gap: 8px; align-items: flex-end; }
+      .row > div { flex: 1; min-width: 0; }
+      label { display: block; font-weight: 600; margin: 6px 0 2px; }
+      label.inline { font-weight: 400; display: flex; gap: 7px; align-items: flex-start; margin: 6px 0; }
+      input[type="text"], input[type="password"] {
+        width: 100%; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px;
+      }
+      button {
+        border: 1px solid var(--border); background: #fff; color: var(--fg); border-radius: 7px;
+        padding: 7px 11px; font-size: 12px; cursor: pointer;
+      }
+      button:hover:not(:disabled) { background: #f3f4f6; }
+      button.primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+      button.primary:hover:not(:disabled) { background: var(--blue-hover); }
+      button:disabled { opacity: .45; cursor: not-allowed; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+      .summary { background: #eef2ff; border-radius: 6px; padding: 7px 9px; margin-top: 8px; white-space: pre-wrap; }
+      .summary.error { background: #fef2f2; color: var(--danger); }
+      .summary.ok { background: #f0fdf4; color: var(--ok); }
+      #listWrap { max-height: 240px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; margin-top: 8px; background: #fff; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid #f0f0f0; font-size: 12px; white-space: nowrap; }
+      th { position: sticky; top: 0; background: #fafafa; z-index: 1; }
+      td.domain { white-space: normal; word-break: break-all; }
+      .bar { height: 8px; background: #e5e7eb; border-radius: 999px; overflow: hidden; margin: 8px 0; }
+      .bar > div { height: 100%; width: 0; background: var(--blue); transition: width .2s; }
+      .states { display: grid; grid-template-columns: 92px 1fr; gap: 4px 8px; margin-top: 6px; }
+      .states .k { color: var(--muted); }
+      .states .v { font-weight: 600; }
+      .v.ok { color: var(--ok); }
+      .v.warn { color: var(--warn); }
+      .v.bad { color: var(--danger); }
+      .v.pending { color: var(--muted); }
+      .failures { margin: 6px 0 0; padding-left: 18px; color: var(--danger); }
+      .failures li { margin: 2px 0; }
+      .notice { border-left: 3px solid var(--warn); background: #fffbeb; padding: 6px 8px; margin-top: 8px; }
+      .footer { color: var(--muted); font-size: 11px; margin-top: 4px; }
+      details { margin-top: 4px; }
+      summary { cursor: pointer; color: var(--muted); }
+      code { background: #f3f4f6; padding: 0 3px; border-radius: 3px; }
+    </style>
+  </head>
+  <body>
+    <h1>Browser CLI Import（来源浏览器）</h1>
+    <p class="hint">
+      通过官方 <code>chrome.cookies</code> API 读取本 Profile 的 Cookie，只发送你勾选的域名，
+      且只经 BrowserPilot 本机中转进程发送给同一台机器上的 Browser CLI。不会上传，不写日志，不保存 Cookie 值。
+    </p>
+
+    <div class="card">
+      <h2>1. 明确授权</h2>
+      <label class="inline">
+        <input id="ack" type="checkbox" />
+        <span>
+          我理解 Cookie 等同于登录凭证；我只在自己拥有/有权使用的 Profile 上操作，并且只在明确同意时
+          把勾选域名的 Cookie 发送给本机 Browser CLI。迁移后我会在目标浏览器中确认登录状态。
+        </span>
+      </label>
+      <div class="actions">
+        <button id="scanBtn" disabled>扫描本 Profile 的域名（仅显示数量）</button>
+      </div>
+      <div id="scanSummary" class="summary" hidden></div>
+    </div>
+
+    <div class="card">
+      <h2>2. 连接本机 Browser CLI 导入会话</h2>
+      <p class="hint">
+        Browser CLI 启动导入时会显示一张一次性导入票据（<code>BCLI-</code> 开头，5 分钟内有效，只能使用一次）。
+        本扩展通过 BrowserPilot 本机中转进程连接目标，不使用 HTTP 端口。
+      </p>
+      <label for="ticket">导入票据</label>
+      <input id="ticket" type="password" maxlength="64" placeholder="BCLI-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" />
+      <label for="profileLabel">Profile 标签（可选，只用于结果说明）</label>
+      <input id="profileLabel" type="text" maxlength="80" placeholder="例如：工作 / 个人" autocomplete="off" />
+      <div class="notice">
+        目标 Browser CLI 会单独弹出确认窗口，列出本次勾选的域名范围；只有你在目标浏览器中点击“允许”后才会写入。
+        本扩展无法代替你确认。
+      </div>
+    </div>
+
+    <div class="card" id="listWrapCard" hidden>
+      <h2>3. 选择要迁移的域名</h2>
+      <p class="hint">默认不勾选。只有勾选域名的 Cookie 会被读取并发送（包含其子域名）。</p>
+      <div class="actions">
+        <button id="allBtn">全选</button>
+        <button id="noneBtn">全不选</button>
+        <span id="selectionCount" class="hint"></span>
+      </div>
+      <div id="listWrap"><table id="groupsTable"><thead><tr><th></th><th>域名</th><th>数量</th><th>HttpOnly</th><th>Session</th><th>分区</th></tr></thead><tbody></tbody></table></div>
+    </div>
+
+    <div class="card danger" id="sendCard" hidden>
+      <h2>4. 发送到本机 Browser CLI</h2>
+      <label class="inline">
+        <input id="sendConsent" type="checkbox" />
+        <span>
+          我确认把上面勾选域名的 Cookie 发送到本机 Browser CLI。我理解目标端只能报告“Cookie 已写入”，
+          不能代替我确认网站登录；已写入的 Cookie 不会自动回滚。
+        </span>
+      </label>
+      <div class="actions">
+        <button id="sendBtn" class="primary" disabled>发送勾选域名的 Cookie</button>
+      </div>
+      <div id="sendSummary" class="summary" hidden></div>
+    </div>
+
+    <div class="card plain" id="resultCard" hidden>
+      <h2>导入进度</h2>
+      <div id="stateLabel" class="hint">等待来源浏览器发送…</div>
+      <div class="bar"><div id="progressBar"></div></div>
+      <div class="states">
+        <span class="k">数据复制</span><span id="stateData" class="v pending">不适用（Cookie 不写入文件包）</span>
+        <span class="k">目标授权</span><span id="stateAuth" class="v pending">等待目标浏览器确认</span>
+        <span class="k">Cookie 写入</span><span id="stateCookie" class="v pending">未开始</span>
+        <span class="k">实际登录</span><span id="stateLogin" class="v warn">未验证（不做推断）</span>
+      </div>
+      <div id="resultDetail" class="hint"></div>
+      <ul id="failures" class="failures" hidden></ul>
+      <div class="notice" id="relogin" hidden>
+        请在 Browser CLI 中打开上面勾选的网站，确认是否仍处于登录状态。若未登录，请重新登录；
+        设备绑定/风控会话可能无法迁移。Cookie 写入成功不等于登录成功。
+      </div>
+      <div class="actions">
+        <button id="cancelBtn" hidden>取消导入</button>
+        <button id="retryBtn" hidden>重试（重新扫描并发送）</button>
+      </div>
+    </div>
+
+    <div class="footer">
+      <details>
+        <summary>安装与安全说明</summary>
+        <p>
+          来源扩展：本目录 <code>extensions/import-source</code>。通过 Chrome/Edge 的“加载已解压的扩展程序”
+          安装（需要用户开启开发者模式；正式分发应走 Web Store 或企业策略）。
+        </p>
+        <p>
+          权限只有 <code>cookies</code>、<code>storage</code> 与 <code>nativeMessaging</code>；
+          <code>storage.session</code> 仅内存保存任务号与勾选域名，浏览器重启即清空。导入票据只在本次发送期间
+          保存在内存中，不写入存储。扩展不会读取密码、书签、历史或 Cookie 值以外的页面数据。
+        </p>
+        <p>
+          目标端接口见 <code>docs/browser-cli-native-cookie-import-interface.md</code>。本扩展不依赖任何第三方
+          Cookie 导出扩展。
+        </p>
+      </details>
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

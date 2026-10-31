@@ -38,6 +38,8 @@ stale_after: 2026-12-03
 
 - [browser-data-import-research-2026-10-30.md](browser-data-import-research-2026-10-30.md) — 支持矩阵、Chromium Importer/Cookie 加密源码依据、blocked 项。
 - [browser-data-import-architecture-2026-10-30.md](browser-data-import-architecture-2026-10-30.md) — Normal/Agent 会话共享与隔离、一次性迁移状态机、并发 Profile 禁令、三态结果。
+- [browser-data-import-product-2026-10-31.md](browser-data-import-product-2026-10-31.md) — **P1 产品化**：来源扩展、Profile 选择、CLI 授权/进度/取消/重试、三态、测试结果、未完成项。
+- [browser-cli-native-cookie-import-interface.md](browser-cli-native-cookie-import-interface.md) — **原生目标契约 v1**：端点、请求/响应、失败码、Browser CLI 最小 patch 设计。
 - [browser-import-competitive-report-2026-10-30.md](browser-import-competitive-report-2026-10-30.md) — 五个问题的竞品对比、v10/v20 边界、单来源扩展+原生目标方案。
 - [ego-lite-windows-import-test-2026-10-30.md](ego-lite-windows-import-test-2026-10-30.md) — 官方 ego(lite) 0.6.2.5 Windows 导入实测/反证。
 - [windows-ego-import-applicability-2026-10-31.md](windows-ego-import-applicability-2026-10-31.md) — Windows App-Bound 复制边界与真实 inso 登录态导入证据。
