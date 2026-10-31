@@ -3259,7 +3259,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       }
       return { x, y, dpr, hwnd: null, attempts, landed: false, candidates };
     },
-    async humanType(spaceKey, text) {
+    async humanType(spaceKey, text, { real = false, useKnownWidget = false } = {}) {
       const win = ctx.windows[spaceKey];
       if (!win?.hwnd) throw new Error("no window for " + spaceKey);
       // 只支持 [a-z0-9]：WM_KEYDOWN 的 VK 由字符推导，标点需要额外的 VK 映射；
