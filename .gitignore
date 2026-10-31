@@ -7,3 +7,5 @@ native-host/profile-cache.json
 .browserpilot-runs/
 .DS_Store
 Thumbs.db
+.manual-profile-normal/
+.gpu-matrix*/
