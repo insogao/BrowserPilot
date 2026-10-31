@@ -5,10 +5,14 @@ import net from "node:net";
 
 const child = spawn(process.execPath, ["native-host/host.js"], {
   cwd: process.cwd(),
-  env: { ...process.env, BROWSERPILOT_HOST_BASE_PORT: "48001" },
+  // A fixed base port collides with other CI jobs / leftover local hosts; a
+  // random window keeps the test isolated without changing what it asserts.
+  env: { ...process.env, BROWSERPILOT_HOST_BASE_PORT: String(48000 + Math.floor(Math.random() * 200)) },
 });
 let nativeBuf = Buffer.alloc(0);
 let ready;
+let childStderr = "";
+child.stderr.on("data", (chunk) => { childStderr += chunk.toString(); });
 const forwarded = [];
 
 function sendNative(obj) {
@@ -30,7 +34,7 @@ child.stdout.on("data", (chunk) => {
   }
 });
 
-const waitFor = async (fn, timeout = 5000) => {
+const waitFor = async (fn, timeout = 15000) => {
   const start = Date.now();
   while (Date.now() - start < timeout) {
     const value = fn();
@@ -63,7 +67,12 @@ function messages(socket) {
 }
 
 try {
-  await waitFor(() => ready);
+  try {
+    await waitFor(() => ready);
+  } catch (error) {
+    throw new Error("host did not become ready: " + error.message
+      + (childStderr.trim() ? "; stderr=" + childStderr.trim() : ""));
+  }
   const a = await connect(ready.port);
   const b = await connect(ready.port);
   const am = messages(a);

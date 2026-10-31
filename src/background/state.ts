@@ -1,6 +1,27 @@
 // SW 唯一权威状态：storage.session 持久化（attach/层级/命名空间/host 端口/profile）。
 // 参考技术路径 §4.10 / §4.11。
 import type { ProfileInfo } from "../shared/types";
+import type { HostCapabilities } from "./capabilities";
+
+/** 一次性输入 grant：ASSIST 模式下放行 AI 输入的唯一凭据。
+ *  - actions：可放行的输入命令次数（每条命令消耗 1 次，不是每条 CDP 事件）；
+ *  - expiresAt：绝对到期时间；用尽/过期/ownership 变更即清；
+ *  - token：随机串，状态里保存完整值，对外只返回截断摘要。 */
+export interface AssistGrant {
+  token: string;
+  actions: number;
+  expiresAt: number;
+}
+
+/** ASSIST 租约：只是 `ownership==="agent"` 时的从属标记，**不是**新的 ownership 取值。
+ *  ownership 一变（handoff/claim/complete/close/窗口消失）必须由 patchSpace 一并清除。 */
+export interface AssistLease {
+  since: number;
+  reason?: string;
+  tabId?: number;
+  /** 只允许这一次输入：grant 用完即清。 */
+  grant?: AssistGrant;
+}
 
 export interface SpaceState {
   spaceId: string;
@@ -9,6 +30,9 @@ export interface SpaceState {
   tabId?: number;
   ownerClientId?: string;
   ownership?: "agent" | "user" | "inactive";
+  /** ASSIST 派生视图的唯一来源：ownership 仍为 "agent"，人类临时在场。
+   *  输入权模式由 input-ownership.ts 的 inputModeForSpace() 派生，不落第二份状态。 */
+  assist?: AssistLease;
   /** true = 创建时即为后台空间：窗口可见（normal）但不抢焦点、不激活到最前；窗口内标签保持 active 以正常渲染。
    *  前台空间（显式 focus/保持可见）为 undefined。 */
   background?: boolean;
@@ -22,10 +46,52 @@ export interface SpaceState {
   eventQueueTail: number;
 }
 
+/** 内核输入权快照的同步账本（P3 生产 API，`chrome.browserCli.inputOwnership`）。
+ *
+ *  **不是第二套 ownership**：模式永远由 `inputModeForSpace(SpaceState)` 重新派生；
+ *  这里只记录「最后一次成功告诉内核的 mode/version + 确认时间」，用于：
+ *   1. SW 重启后按单调 version 重新同步（内核可能还保留旧快照）；
+ *   2. 版本冲突时采纳内核更高的 version，绝不回退；
+ *   3. 30s 心跳丢失后把该目标标记 degraded（输入命令 fail closed）。
+ *
+ *  key = `win:<windowId>`（窗口级 ownership）或 `tab:<tabId>`（命令级 grant 目标）。 */
+export type KernelInputOwnershipMode = "ai" | "assist" | "human";
+
+export interface KernelInputOwnershipRecord {
+  version: number;
+  /** 最后一次成功同步给内核的模式（同步镜像，不是所有权真源）。 */
+  mode: KernelInputOwnershipMode;
+  /** 最近一次内核确认（setOwnership / heartbeat 成功）的时间。 */
+  lastAckAt: number;
+  /** 最近一次尝试同步的时间（诊断用；30s 判定使用内存里的 firstAttemptAt/lastAckAt）。 */
+  lastAttemptAt?: number;
+}
+
+export interface KernelInputOwnershipState {
+  targets: Record<string, KernelInputOwnershipRecord>;
+  updatedAt?: number;
+}
+
+/** 一条前台/目标租约。key 决定作用域：
+ *  - `global`：真正会改变“哪个窗口在前台”的呈现操作，全进程互斥；
+ *  - `space:<spaceId>`：只影响某个 Task Space（= 一个窗口）的操作，按目标互斥，不同 space 并行。
+ *  所有权仍复用 SpaceState 的 ownerClientId 语义，不引入第二套 ownership。 */
+export interface ForegroundLeaseRecord {
+  token: string;
+  /** `global` 或 `space:<spaceId>`。 */
+  key: string;
+  scope: "global" | "space";
+  ownerClientId: string;
+  spaceId?: string;
+  startedAt: number;
+  expiresAt: number;
+}
+
 export interface GlobalState {
   spaces: Record<string, SpaceState>;
   activeSpaceId?: string;
   activeSpaceIds?: Record<string, string>;
+  /** 旧版单条进程级租约（v1）。只读兼容：新代码会把未过期记录迁移成 global keyed 租约。 */
   foregroundLease?: {
     token: string;
     ownerClientId: string;
@@ -33,12 +99,19 @@ export interface GlobalState {
     startedAt: number;
     expiresAt: number;
   };
+  /** 多 Agent keyed 租约：global（窗口呈现）+ 每 space 一条。 */
+  foregroundLeases?: Record<string, ForegroundLeaseRecord>;
   hostPort?: number;
   hostToken?: string;
   externalClients?: number;
   agentActive?: boolean;
   lastAgentActivity?: number;
   profile?: ProfileInfo;
+  /** 宿主浏览器能力探测结果（Phase 7）。换浏览器或换启动参数都会改变它，
+   *  因此每次 SW 启动重新探测，不做跨会话持久化假设。 */
+  hostCapabilities?: HostCapabilities;
+  /** 内核输入权快照同步账本（可选；普通 Chrome / Feature 关闭时完全不存在）。 */
+  kernelInputOwnership?: KernelInputOwnershipState;
   /** 人工接管中的 tabId：takeover Set 的持久层，SW 重启后由 mask.restoreMaskState 恢复。 */
   humanTakeoverTabIds?: number[];
   startTime: number;
@@ -85,6 +158,31 @@ export async function getSpace(id: string): Promise<SpaceState | undefined> {
   return s.spaces[id];
 }
 
+/** ownership 写入的同步监听器。
+ *  用途仅限「作废与 ownership 绑定的临时态」（例如 input-ownership 里待触发的 human_presence
+ *  去抖定时器）。**监听器必须是同步的、不得调用 mutateState**，否则会在 mutation 队列里自锁。 */
+export type OwnershipWriteListener = (
+  spaceId: string,
+  ownership: SpaceState["ownership"] | undefined,
+) => void;
+
+const ownershipListeners = new Set<OwnershipWriteListener>();
+
+export function onOwnershipChanged(listener: OwnershipWriteListener): () => void {
+  ownershipListeners.add(listener);
+  return () => ownershipListeners.delete(listener);
+}
+
+function notifyOwnershipWritten(spaceId: string, ownership: SpaceState["ownership"] | undefined): void {
+  for (const listener of ownershipListeners) {
+    try {
+      listener(spaceId, ownership);
+    } catch {
+      /* 监听器失败不得影响状态写入 */
+    }
+  }
+}
+
 export async function patchSpace(id: string, p: Partial<SpaceState>): Promise<SpaceState> {
   let result!: SpaceState;
   await mutateState((s) => {
@@ -96,8 +194,18 @@ export async function patchSpace(id: string, p: Partial<SpaceState>): Promise<Sp
       eventQueueTail: 0,
     };
     result = { ...cur, ...p, updatedAt: Date.now() };
+    // 单一真源不变量：`assist` 只可能存在于 ownership==="agent"。
+    //  - ownership 被显式写入（handoff/claim/complete/close/窗口消失）→ 清空辅助租约；
+    //  - 任何非 agent 状态 → 清空（防止旧数据/并发写入留下脏状态）。
+    // 唯一例外：同一次 patch 显式给出了新的 assist（目前没有调用方这样做）。
+    if (result.ownership !== "agent") {
+      delete result.assist;
+    } else if (p.ownership !== undefined && p.assist === undefined) {
+      delete result.assist;
+    }
     s.spaces[id] = result;
   });
+  if (p.ownership !== undefined) notifyOwnershipWritten(id, p.ownership);
   return result;
 }
 
@@ -118,6 +226,7 @@ export async function clearAllSpaces(): Promise<void> {
     s.activeSpaceIds = {};
     delete s.activeSpaceId;
     delete s.foregroundLease;
+    s.foregroundLeases = {};
     delete s.humanTakeoverTabIds;
   });
 }

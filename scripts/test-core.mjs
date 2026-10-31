@@ -61,8 +61,8 @@ const maskBuild = await build({
           : args.path === "native"
             ? "export const pushEvent=()=>{};"
             : args.path === "spaces"
-              ? "export const handoffSpaceForTab=async()=>{};"
-              : "export const interruptTab=async()=>{};",
+              ? "export const handoffSpaceForTab=async()=>{};export const assertTabInCommandSpace=async()=>{};export const ensureCommandSpace=async()=>({spaceId:'stub'});"
+              : "export const interruptTab=async()=>{};export const attach=async()=>{};export const isAttached=()=>false;export const sendCommand=async()=>({});",
       }));
     },
   }],
@@ -354,29 +354,157 @@ assert.match(smokeSource, /import \{ ensureSmokeSpace \} from "\.\/smoke-space-l
 console.log("PASS core: smoke aborts without an attributable tab baseline and reports unverifiable cleanup");
 
 const foreground = await importTs("src/background/foreground-lease.ts");
-const outer = { type: "command", name: "open_space", requestId: "lease-a", _clientId: "agent:a" };
-const outerLease = await foreground.acquireForegroundLease(outer);
-await assert.rejects(
-  () => foreground.acquireForegroundLease({ type: "command", name: "open_space", requestId: "lease-b", _clientId: "agent:b" }),
-  (error) => error.code === "FOREGROUND_BUSY",
-);
-await assert.rejects(
-  () => foreground.acquireForegroundLease({ type: "command", name: "open_space", requestId: "lease-a2", _clientId: "agent:a" }),
-  (error) => error.code === "FOREGROUND_BUSY" && /同一 Agent/.test(error.message),
-  "same-client concurrent acquire must report self-ownership, not another agent",
-);
-const nestedLease = await foreground.acquireForegroundLease({
-  type: "command",
-  name: "snapshot",
-  requestId: "lease-a:nested",
-  _clientId: "agent:a",
-  _foregroundLeaseToken: outer._foregroundLeaseToken,
-});
-await nestedLease.release();
-await outerLease.release();
-const afterRelease = await foreground.acquireForegroundLease({ type: "command", name: "open_space", requestId: "lease-b2", _clientId: "agent:b" });
-await afterRelease.release();
-console.log("PASS core: foreground lease is exclusive, reentrant for templates, self-releasing, and distinguishes self-concurrency");
+const leaseStateModule = await importTs("src/background/state.ts");
+let leaseSeq = 0;
+function resetLeaseState(extra = {}) {
+  const now = Date.now();
+  const space = (id, owner, windowId) => ({
+    spaceId: id, name: id, windowId, ownerClientId: owner, ownership: "agent",
+    layer: "L0", navVersion: 0, attached: false, eventQueueTail: 0,
+  });
+  storedSession["browserpilot.state.v1"] = {
+    spaces: { "space-a": space("space-a", "agent:a", 101), "space-b": space("space-b", "agent:b", 102) },
+    activeSpaceIds: { "agent:a": "space-a", "agent:b": "space-b" },
+    startTime: now,
+    ...extra,
+  };
+}
+function leaseCmd(name, clientId, extra = {}) {
+  return { type: "command", name, requestId: "lease-" + name + "-" + (++leaseSeq), _clientId: clientId, ...extra };
+}
+const acquireLease = (name, clientId, extra = {}) => foreground.acquireForegroundLease(leaseCmd(name, clientId, extra));
+
+// 1) 纯后台命令不取任何前台租约：截图/点击/求值/等待/CDP 透传在不同窗口必须并行。
+{
+  resetLeaseState();
+  const background = [
+    "snapshot", "readText", "screenshot", "scroll_screenshot", "getElementInfo",
+    "click", "dblclick", "hover", "drag", "wheel", "down", "up", "press", "type", "fill",
+    "selectOption", "check", "uncheck", "setChecked",
+    "js", "waitForURL", "waitForSelector", "waitForTimeout", "wait_dom_idle", "pageInfo",
+    "tab_cdp_call", "download_image", "download_resource", "list_tabs",
+  ];
+  for (const name of background) {
+    const a = await acquireLease(name, "agent:a", { space: "space-a", args: { tabId: 11 } });
+    const b = await acquireLease(name, "agent:b", { space: "space-b", args: { tabId: 22 } });
+    assert.equal(a, undefined, name + " must not take a foreground lease (agent A)");
+    assert.equal(b, undefined, name + " must not take a foreground lease (agent B) — two agents must not serialise");
+  }
+  console.log("PASS core: background/observation commands take no lease, so different spaces run in parallel");
+}
+
+// 2) run_template 按 Task Space 加锁：不同 space 真并行，同一 space 互斥（含同 Agent 自冲突）。
+{
+  resetLeaseState();
+  const runA = leaseCmd("run_template", "agent:a", { space: "space-a", args: { id: "t" } });
+  const handleA = await foreground.acquireForegroundLease(runA);
+  const runB = leaseCmd("run_template", "agent:b", { space: "space-b", args: { id: "t" } });
+  const handleB = await foreground.acquireForegroundLease(runB);
+  assert.ok(handleA && handleB, "run_template in two different spaces must acquire both leases (real parallelism)");
+  assert.ok(runA._foregroundLeaseToken && runB._foregroundLeaseToken);
+  assert.notEqual(runA._foregroundLeaseToken, runB._foregroundLeaseToken, "different spaces must use different lease tokens");
+  assert.equal(runA._foregroundLeaseToken !== undefined && runB._foregroundLeaseToken !== undefined, true);
+
+  await assert.rejects(
+    () => foreground.acquireForegroundLease(leaseCmd("run_template", "agent:b", { space: "space-a", args: { id: "t" } })),
+    (error) => error.code === "FOREGROUND_BUSY" && /space:space-a/.test(error.message),
+    "another agent must be blocked by the same space key",
+  );
+  await assert.rejects(
+    () => foreground.acquireForegroundLease(leaseCmd("run_template", "agent:a", { space: "space-a", args: { id: "t" } })),
+    (error) => error.code === "FOREGROUND_BUSY" && /同一 Agent/.test(error.message),
+    "same-client concurrent acquire on the same space must report self-ownership",
+  );
+
+  // 3) 模板子步骤继承 token 重入同一 key；不同 key（global）单独竞争。
+  const nested = await foreground.acquireForegroundLease({
+    type: "command", name: "open_tab", args: { url: "about:blank" }, space: "space-a",
+    _clientId: "agent:a", requestId: "lease-nested", _foregroundLeaseToken: runA._foregroundLeaseToken,
+  });
+  assert.ok(nested, "template sub-step must re-enter its own space lease");
+  await nested.release();
+  const globalA = await acquireLease("ensure_visible", "agent:a", { space: "space-a" });
+  assert.ok(globalA, "the same agent may hold its own space lease plus a global presentation lease");
+  await assert.rejects(
+    () => acquireLease("ensure_visible", "agent:b", { space: "space-b" }),
+    (error) => error.code === "FOREGROUND_BUSY",
+    "global window presentation stays process-wide serialised",
+  );
+  await globalA.release();
+
+  // 4) 只有真正的前台呈现操作还在 global key 上串行。
+  const openA = await acquireLease("open_space", "agent:a");
+  await assert.rejects(() => acquireLease("open_space", "agent:b"), (error) => error.code === "FOREGROUND_BUSY");
+  await openA.release();
+
+  await handleA.release();
+  await handleB.release();
+  resetLeaseState();
+
+  // 5) 后台 open_tab/switch_tab/close_tab 按 space key：不同 space 可同时开标签。
+  const tabA = await acquireLease("open_tab", "agent:a", { space: "space-a", args: { url: "about:blank" } });
+  const tabB = await acquireLease("open_tab", "agent:b", { space: "space-b", args: { url: "about:blank" } });
+  assert.ok(tabA && tabB, "background open_tab in different spaces must not serialise");
+  await tabA.release();
+  await tabB.release();
+
+  // 6) 释放只清除自己的 key：A 释放后 B 仍持有 space-b。
+  const releaseA = await acquireLease("run_template", "agent:a", { space: "space-a", args: { id: "t" } });
+  const releaseB = await acquireLease("run_template", "agent:b", { space: "space-b", args: { id: "t" } });
+  await releaseA.release();
+  await assert.rejects(
+    () => foreground.acquireForegroundLease(leaseCmd("run_template", "agent:a", { space: "space-b", args: { id: "t" } })),
+    (error) => error.code === "FOREGROUND_BUSY" && /space:space-b/.test(error.message),
+    "releasing one key must not release another key",
+  );
+  await releaseB.release();
+  const afterRelease = await foreground.acquireForegroundLease(leaseCmd("run_template", "agent:b", { space: "space-b", args: { id: "t" } }));
+  assert.ok(afterRelease, "the released space key must be acquirable again");
+  await afterRelease.release();
+  console.log("PASS core: run_template is keyed per Task Space — parallel across spaces, exclusive within one");
+}
+
+// 7) 过期清理、旧版全局租约迁移、Agent 级 stop 只清理自己的 key。
+{
+  resetLeaseState({
+    foregroundLeases: {
+      "space:space-a": { token: "expired", key: "space:space-a", scope: "space", ownerClientId: "agent:b", spaceId: "space-a", startedAt: 1, expiresAt: 2 },
+    },
+  });
+  const revived = await acquireLease("run_template", "agent:a", { space: "space-a", args: { id: "t" } });
+  assert.ok(revived, "an expired lease must be pruned instead of blocking the target forever");
+  await revived.release();
+
+  // 旧版单条租约（v1）仍会挡住 global，但不再挡住其它 space。
+  resetLeaseState({
+    foregroundLease: { token: "legacy", ownerClientId: "agent:b", spaceId: "space-b", startedAt: Date.now(), expiresAt: Date.now() + 60_000 },
+  });
+  await assert.rejects(() => acquireLease("ensure_visible", "agent:a", { space: "space-a" }), (error) => error.code === "FOREGROUND_BUSY");
+  const legacyParallel = await acquireLease("run_template", "agent:a", { space: "space-a", args: { id: "t" } });
+  assert.ok(legacyParallel, "a legacy global lease must not serialise space-scoped work");
+  await legacyParallel.release();
+
+  // Agent stop：只删自己（含 legacy）的租约，其他 Agent 的 space 锁保留。
+  resetLeaseState();
+  const own = await acquireLease("run_template", "agent:a", { space: "space-a", args: { id: "t" } });
+  const other = await acquireLease("run_template", "agent:b", { space: "space-b", args: { id: "t" } });
+  let removed;
+  await leaseStateModule.mutateState((state) => {
+    removed = foreground.deleteForegroundLeasesFor(state, "agent:a");
+  });
+  assert.deepEqual(removed.sort(), ["space:space-a"], "scoped stop must delete exactly the caller's keys");
+  const reacquired = await acquireLease("run_template", "agent:a", { space: "space-a", args: { id: "t" } });
+  assert.ok(reacquired, "the stopped agent's space must be free again");
+  await assert.rejects(
+    () => acquireLease("run_template", "agent:a", { space: "space-b", args: { id: "t" } }),
+    (error) => error.code === "FOREGROUND_BUSY",
+    "another agent's lease must survive a scoped stop",
+  );
+  await reacquired.release();
+  await own.release();
+  await other.release();
+  console.log("PASS core: leases expire, legacy global leases migrate, and scoped stop only clears its own keys");
+}
 
 const boardHtml = fs.readFileSync("dist/onboarding/index.html", "utf8");
 for (const id of ["template-list", "install-content", "install-github", "load-catalog", "catalog-template", "template-search", "check-updates", "tag-filter", "updates-panel", "updates-list", "install-selected", "close-updates"]) {
@@ -519,8 +647,13 @@ console.log("PASS core: template step expectations are structural, path-aware, a
 const commandsSource = fs.readFileSync("src/background/commands.ts", "utf8");
 assert.match(commandsSource, /clientId === "browserpilot-internal"/, "popup/global stop must keep full cleanup");
 assert.match(commandsSource, /ownerClientId === clientId &&/, "agent stop must filter spaces by caller clientId");
-assert.match(commandsSource, /if \(state\.foregroundLease\?\.ownerClientId === clientId\) tpl\.cancelTemplateRuns\(\);/, "agent stop may only cancel template runs while holding the foreground lease itself");
+assert.match(commandsSource, /tpl\.cancelTemplateRuns\(clientId\)/, "agent stop may only cancel its own template runs (keyed concurrency)");
+assert.match(commandsSource, /deleteForegroundLeasesFor\(s, clientId\)/, "agent stop must delete only the caller's keyed leases");
 assert.doesNotMatch(commandsSource.replace(/clientId === "browserpilot-internal"[\s\S]*?clearAllSpaces\(\);/, ""), /clearAllSpaces\(\)/, "agent-scoped stop must not call global clearAllSpaces");
+const templatesSourceForStop = fs.readFileSync("src/background/templates.ts", "utf8");
+assert.match(templatesSourceForStop, /const clientRunGenerations = new Map<string, number>\(\)/, "template cancellation must be tracked per agent");
+assert.match(templatesSourceForStop, /export function cancelTemplateRuns\(clientId\?: string\): void/, "cancelTemplateRuns must accept an agent scope");
+assert.match(templatesSourceForStop, /isRunCancelled\(generation, clientKey\)/, "template steps must compare the caller's own generation");
 console.log("PASS core: stop is scoped per agent and only global via user entrypoints");
 
 // ---------- @results 页面表达式语法守卫（字符串拼出来的页面代码必须可被 V8 解析） ----------
@@ -555,3 +688,385 @@ assert.match(pagedExpr, /pageDelay=900/, "paged @results must honor the polite p
 assert.match(googleExpr, /#pnnext/, "google fallback results must auto-paginate via #pnnext");
 console.log("PASS core: @results page expressions are syntactically valid and filter Google UI links");
 }
+
+// ---------- 宿主能力探测：三种结果 + 禁止用 UA/产品名旁路（Phase 7） ----------
+{
+  // 探测模块直接读 chrome.browserCli；用可替换的 stub 覆盖各分支。
+  const capsMod = await importTs("src/background/capabilities.ts");
+
+  const withApi = async (impl) => {
+    globalThis.chrome = {
+      ...globalThis.chrome,
+      browserCli: impl === undefined ? undefined : { getCapabilities: impl },
+    };
+    // 接口存在时无需等待；只有 api-absent 分支会走满重试窗口，用 0 避免测试变慢。
+    return capsMod.detectHostCapabilities({ apiAppearTimeoutMs: 0 });
+  };
+
+  // 1. 接口不存在（普通 Chrome 的正常形态）→ generic
+  delete globalThis.chrome.browserCli;
+  const absent = await capsMod.detectHostCapabilities({ apiAppearTimeoutMs: 0 });
+  assert.equal(absent.mode, "generic", "absent API must degrade to generic");
+  assert.equal(absent.degradeReason, "api-absent", "absent API must record why");
+  assert.equal(absent.protocolVersion, 0, "generic mode has no host protocol");
+  assert.equal(absent.maxConcurrentWindows, 1, "generic mode allows exactly one window");
+  for (const flag of ["managedMode", "backgroundWindows", "backgroundCapture", "hardFocusIsolation", "foregroundAssist"]) {
+    assert.equal(absent[flag], false, `generic mode must report ${flag}=false`);
+  }
+
+  // 1b. 注入竞态：API 延迟出现时必须等到它，而不是误判成普通 Chrome。
+  //     （实测内核在 SW 创建后约 0.5s 才注入 browserCli。）
+  {
+    const saved = globalThis.chrome;
+    globalThis.chrome = { ...saved };
+    delete globalThis.chrome.browserCli;
+    const appeared = setTimeout(() => {
+      globalThis.chrome.browserCli = {
+        getCapabilities: async () => ({
+          protocolVersion: 1, managedMode: true, backgroundWindows: true,
+          backgroundCapture: true, hardFocusIsolation: true, foregroundAssist: true,
+          maxConcurrentWindows: 8,
+        }),
+      };
+    }, 150);
+    const late = await capsMod.detectHostCapabilities({ apiAppearTimeoutMs: 3000 });
+    clearTimeout(appeared);
+    assert.equal(late.mode, "enhanced", "API appearing after startup must not be misread as generic");
+    globalThis.chrome = saved;
+  }
+
+  // 2. 调用抛异常 → generic + 记录错误，绝不向上抛
+  const failed = await withApi(async () => { throw new Error("boom"); });
+  assert.equal(failed.mode, "generic", "throwing API must degrade, not propagate");
+  assert.match(failed.degradeReason, /call-failed: boom/, "call failure must be recorded");
+
+  // 3. 协议版本不认识 → generic（猜测能力正是该接口要防的事）
+  const wrongProtocol = await withApi(async () => ({
+    protocolVersion: 2, managedMode: true, backgroundWindows: true,
+    maxConcurrentWindows: 8,
+  }));
+  assert.equal(wrongProtocol.mode, "generic", "unknown protocol must degrade");
+  assert.match(wrongProtocol.degradeReason, /unsupported-protocol: 2/);
+  const badProtocolType = await withApi(async () => ({ protocolVersion: "1", managedMode: true }));
+  assert.equal(badProtocolType.mode, "generic", "non-numeric protocol must degrade");
+
+  // 4. 协议正确但 managedMode=false → generic（内核没有策略保护时不得相信其它标志）
+  const unmanaged = await withApi(async () => ({
+    protocolVersion: 1, managedMode: false,
+    backgroundWindows: true, backgroundCapture: true,
+    hardFocusIsolation: true, foregroundAssist: true,
+    maxConcurrentWindows: 8,
+  }));
+  assert.equal(unmanaged.mode, "generic", "managedMode=false must degrade even if flags claim otherwise");
+  assert.equal(unmanaged.degradeReason, "managed-mode-disabled");
+  assert.equal(unmanaged.backgroundWindows, false, "unmanaged mode must not trust host flags");
+
+  // 5. 全绿 → enhanced，字段透传
+  const enhanced = await withApi(async () => ({
+    product: "Browser CLI", browserVersion: "156.0.8067.0",
+    protocolVersion: 1, managedMode: true,
+    backgroundWindows: true, backgroundCapture: true,
+    hardFocusIsolation: true, foregroundAssist: true,
+    maxConcurrentWindows: 8,
+  }));
+  assert.equal(enhanced.mode, "enhanced");
+  assert.equal(enhanced.product, "Browser CLI");
+  assert.equal(enhanced.maxConcurrentWindows, 8);
+  assert.equal(capsMod.concurrencyLimit(enhanced), 8, "enhanced limit must come from the host");
+  assert.equal(capsMod.concurrencyLimit(absent), 1, "generic limit is exactly one");
+
+  // 6. 上限缺失/非法 → 退回 1，不得等于 0 或 NaN
+  const badMax = await withApi(async () => ({
+    protocolVersion: 1, managedMode: true, backgroundWindows: true,
+    backgroundCapture: true, hardFocusIsolation: true, foregroundAssist: true,
+    maxConcurrentWindows: 0,
+  }));
+  assert.equal(badMax.maxConcurrentWindows, 1, "non-positive host limit must fall back to 1");
+  assert.equal(capsMod.concurrencyLimit(badMax), 1);
+
+  // 7. 源码守卫：禁止用 UA / 产品名推断增强能力（要求 5）
+  const capsSource = fs.readFileSync("src/background/capabilities.ts", "utf8");
+  assert.doesNotMatch(capsSource, /userAgent|navigator\.platform|vendor/,
+    "capability detection must not read User-Agent or platform");
+  // product 只作为日志字段透传，源码里不得出现基于它的分支
+  assert.doesNotMatch(capsSource, /product\s*===\s*["']/,
+    "product name must never gate a capability decision");
+
+  delete globalThis.chrome.browserCli;
+  console.log("PASS core: host capability probe degrades safely and never trusts UA or product name");
+}
+
+// ---------- 截图策略：超时 / 降级 / 新鲜度（P0 后台截图链路） ----------
+{
+  const policy = await importTs("src/background/screenshot-policy.ts");
+  const T = 60;
+
+  // 1. 正常路径：合成器给帧，必须标记为新鲜。
+  const fresh = await policy.captureWithFallback(async (params) => {
+    assert.equal(params.fromSurface, true, "第一条路径必须尝试 fromSurface=true");
+    return { data: "FRESH-PNG" };
+  }, "png", T);
+  assert.equal(fresh.base64, "FRESH-PNG");
+  assert.equal(fresh.meta.possiblyStale, false, "合成器帧必须标记为新鲜");
+  assert.equal(fresh.meta.fromSurface, true);
+
+  // 2. 遮挡场景：fromSurface=true 永不返回 -> 必须超时并降级，且明确标注可能过期。
+  let seen = [];
+  const degraded = await policy.captureWithFallback(async (params) => {
+    seen.push(params.fromSurface);
+    if (params.fromSurface === true) return new Promise(() => {}); // 永不 resolve
+    return { data: "CACHED-PNG" };
+  }, "png", T);
+  assert.equal(degraded.base64, "CACHED-PNG");
+  assert.equal(degraded.meta.fromSurface, false, "超时后必须降级到浏览器进程快照");
+  assert.equal(degraded.meta.possiblyStale, true, "降级得到的图必须标记 possiblyStale");
+  assert.match(String(degraded.meta.reason), /60ms|没有返回/, "必须记录降级原因");
+  assert.deepEqual(seen, [true, false], "两条路径都必须被尝试");
+
+  // 3. 两条路径都失败 -> 抛错（带首次失败原因），不得返回空图。
+  await assert.rejects(
+    () => policy.captureWithFallback(async (params) => {
+      if (params.fromSurface === true) return new Promise(() => {});
+      throw new Error("snapshot unavailable");
+    }, "png", T),
+    /snapshot unavailable|两种路径/,
+    "both paths failing must throw, never return an empty image",
+  );
+
+  // 4. 返回空数据同样视为失败（不能把空串当作成功画面）。
+  await assert.rejects(
+    () => policy.captureWithFallback(async () => ({ data: "" }), "png", T),
+    /空数据|两种路径/,
+  );
+
+  // 5. 遮挡冷却：合成器超时后，冷却期内直接走快照，不重复挂起/累积 presentation 回调。
+  let clock = 1_000;
+  const cool = new policy.SurfaceCooldown({ baseMs: 5_000, maxMs: 20_000, maxConsecutiveTimeouts: 4 }, () => clock);
+  assert.equal(cool.shouldSkip(), false);
+  cool.recordTimeout();
+  assert.equal(cool.shouldSkip(), true);
+  assert.equal(cool.consecutiveTimeouts, 1);
+  assert.equal(cool.remainingMs, 5_000);
+  clock += 4_999;
+  assert.equal(cool.shouldSkip(), true);
+  clock += 1;
+  assert.equal(cool.shouldSkip(), false, "冷却到期后必须重新尝试合成器路径");
+  cool.recordTimeout();
+  assert.equal(cool.remainingMs, 10_000, "连续超时必须按 2 倍退避");
+  cool.recordSuccess();
+  assert.equal(cool.shouldSkip(), false, "合成器成功后必须清除冷却");
+  assert.equal(cool.consecutiveTimeouts, 0);
+
+  // 5b. 硬闸：连续超时达到上限后彻底停止尝试，直到显式 reset。
+  let hardClock = 1_000;
+  const hard = new policy.SurfaceCooldown({ baseMs: 1_000, maxMs: 8_000, maxConsecutiveTimeouts: 3 }, () => hardClock);
+  hard.recordTimeout();
+  hard.recordTimeout();
+  hard.recordTimeout();
+  assert.equal(hard.shouldSkip(), true);
+  assert.equal(hard.isHardStopped, true);
+  hardClock += 1_000_000;
+  assert.equal(hard.shouldSkip(), true, "硬闸不能被时间自动解除");
+  hard.reset();
+  assert.equal(hard.shouldSkip(), false, "reset 后必须恢复合成器尝试");
+
+  // 6. 冷却期内的降级路径：不调用 fromSurface=true，但仍然明确标记 stale。
+  const skippedCalls = [];
+  const skipped = await policy.captureWithFallback(async (params) => {
+    skippedCalls.push(params.fromSurface);
+    return { data: "SNAPSHOT-PNG" };
+  }, "png", T, {}, { skipFromSurface: true, skipReason: "fromSurface-cooldown-after-timeout" });
+  assert.deepEqual(skippedCalls, [false], "冷却期必须跳过合成器路径");
+  assert.equal(skipped.meta.possiblyStale, true);
+  assert.equal(skipped.meta.reason, "fromSurface-cooldown-after-timeout");
+
+  // 7. 源码守卫：截图路径不得再调用 ensureTabVisible（会把窗口拉到前台）。
+  const cdpSource = fs.readFileSync("src/background/cdp.ts", "utf8");
+  const activeLines = cdpSource
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("*") && !line.trim().startsWith("//"));
+  assert.ok(
+    !activeLines.some((line) => line.includes("ensureTabVisible(")),
+    "captureScreenshot must never call ensureTabVisible",
+  );
+  assert.ok(
+    cdpSource.includes("SurfaceCooldown") && cdpSource.includes("skipFromSurface"),
+    "cdp.ts must throttle repeated fromSurface attempts on a tab that timed out",
+  );
+  assert.ok(
+    cdpSource.includes("withTabCaptureLock"),
+    "cdp.ts must serialise captures per tab so concurrent callers cannot stack fromSurface requests",
+  );
+  assert.ok(
+    cdpSource.includes("resetSurfaceCooldown"),
+    "cdp.ts must expose an explicit reset for the hard-stop cooldown",
+  );
+  console.log("PASS core: screenshots time out, degrade with an explicit stale flag, and never touch window focus");
+}
+
+// ---------- 截图超时清理：pending 表清空 / 迟到帧丢弃 / 错误两段原因 ----------
+{
+  const policy = await importTs("src/background/screenshot-policy.ts");
+  // withTimeout 的迟到消费器：超时后 resolve 不得造成 unhandled rejection 或二次 settle。
+  let releaseLate;
+  const late = new Promise((resolve) => { releaseLate = resolve; });
+  const events = [];
+  await assert.rejects(
+    () => policy.withTimeout(late, 20, "late-test", {
+      phase: "fromSurface",
+      hooks: {
+        onAttemptSettle: (phase, outcome) => events.push([phase, outcome]),
+        onTimeout: () => events.push(["timeout"]),
+        onLateSettle: (phase, outcome) => events.push(["late", phase, outcome]),
+      },
+    }),
+    /20ms 内没有返回/,
+  );
+  releaseLate("LATE");
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(events, [["timeout"], ["fromSurface", "abandoned"], ["late", "fromSurface", "ok"]], "late settle must be consumed and reported exactly once");
+
+  // 两条路径都抛错：错误必须保留两段原因（不得只留最后一次失败）。
+  const bothFailed = await policy.captureWithFallback(async (params) => {
+    throw new Error(params.fromSurface ? "surface-fail" : "snapshot-fail");
+  }, "png", 30).then(() => undefined, (e) => e);
+  assert.equal(bothFailed?.code, "SCREENSHOT_FAILED");
+  assert.match(String(bothFailed?.firstReason), /surface-fail/);
+  assert.match(String(bothFailed?.secondReason), /snapshot-fail/);
+  assert.match(String(bothFailed?.message), /surface-fail[\s\S]*snapshot-fail/);
+  console.log("PASS core: screenshot timeout cleans up and both-path errors keep every reason");
+}
+
+// ---------- cdp.ts 截图请求表：挂在 fromSurface 的请求超时后必须从 pending 移除 ----------
+{
+  globalThis.chrome.debugger = {
+    onEvent: { addListener() {} },
+    onDetach: { addListener() {} },
+    async attach() {},
+    async detach() {},
+    async sendCommand() { return {}; },
+  };
+  const cdp = await importTs("src/background/cdp.ts");
+  let resolveHung;
+  let captured = 0;
+  globalThis.chrome.debugger.sendCommand = async (_target, method, params) => {
+    if (method !== "Page.captureScreenshot") return { result: { value: true } };
+    captured += 1;
+    if (params.fromSurface === true) {
+      return new Promise((resolve) => { resolveHung = () => resolve({ data: "LATE-FRAME" }); });
+    }
+    return { data: "FALLBACK-FRAME" };
+  };
+
+  const shot = await cdp.captureScreenshot(11, "png", { timeoutMs: 30 });
+  assert.equal(shot.base64, "FALLBACK-FRAME");
+  assert.equal(shot.meta.possiblyStale, true, "降级帧必须标记 possiblyStale，不能当新鲜帧");
+  assert.match(String(shot.meta.reason), /30ms/, "降级原因必须保留超时时长");
+  assert.equal(cdp.pendingScreenshotAttempts(11), 0, "超时后不得留下 pending 截图请求");
+
+  // 迟到的帧只允许被丢弃：不能成为下一次截图的结果。
+  resolveHung();
+  await new Promise((r) => setTimeout(r, 20));
+  assert.ok(cdp.screenshotCleanupStats().abandoned >= 1, "abandoned attempt must be counted");
+  assert.ok(cdp.screenshotCleanupStats().lateSettles >= 1, "late frame must be observed and discarded");
+  globalThis.chrome.debugger.sendCommand = async (_target, method, params) =>
+    method === "Page.captureScreenshot" ? { data: params.fromSurface ? "FRESH-2" : "OLD-2" } : { result: { value: true } };
+  const second = await cdp.captureScreenshot(11, "png", { timeoutMs: 500 });
+  assert.equal(second.base64, "OLD-2", "cooldown must go straight to the snapshot path");
+  assert.equal(second.meta.possiblyStale, true, "cooldown snapshot must stay explicitly stale");
+  assert.equal(second.meta.reason, "fromSurface-cooldown-after-timeout");
+  cdp.__resetSurfaceCooldownsForTests();
+  const third = await cdp.captureScreenshot(11, "png", { timeoutMs: 500 });
+  assert.equal(third.base64, "FRESH-2", "a late frame must never leak into the next capture");
+  assert.equal(third.meta.possiblyStale, false);
+  assert.equal(cdp.pendingScreenshotAttempts(11), 0);
+  assert.ok(captured >= 2);
+  console.log("PASS core: timed-out CDP screenshots are removed from the pending table and late frames are discarded");
+}
+
+// ---------- 同一 tab 截图串行 / 不同 tab 互不阻塞 / 冷却阻止重复 fromSurface ----------
+{
+  const cdp = await importTs("src/background/cdp.ts");
+  cdp.__resetSurfaceCooldownsForTests();
+  const surfaceCalls = new Map([[21, 0], [22, 0]]);
+  globalThis.chrome.debugger.sendCommand = async (target, method, params) => {
+    if (method === "Runtime.evaluate") return { result: { value: true } };
+    if (method !== "Page.captureScreenshot") return {};
+    const tabId = target.tabId;
+    if (params.fromSurface === true) {
+      surfaceCalls.set(tabId, (surfaceCalls.get(tabId) ?? 0) + 1);
+      if (tabId === 21) return new Promise(() => {}); // hangs forever
+      return { data: "FRESH-" + tabId };
+    }
+    return { data: "SNAPSHOT-" + tabId };
+  };
+
+  let firstSettled = false;
+  const first = cdp.captureScreenshot(21, "png", { timeoutMs: 500 });
+  void first.then(() => { firstSettled = true; }, () => { firstSettled = true; });
+  const second = cdp.captureScreenshot(21, "png", { timeoutMs: 500 });
+
+  const other = await cdp.captureScreenshot(22, "png", { timeoutMs: 500 });
+  assert.equal(other.base64, "FRESH-22");
+  assert.equal(other.meta.possiblyStale, false);
+  assert.equal(firstSettled, false, "a hanging tab must not block screenshots on other tabs");
+
+  const firstShot = await first;
+  assert.equal(firstShot.base64, "SNAPSHOT-21");
+  assert.equal(firstShot.meta.possiblyStale, true);
+  const secondShot = await second;
+  assert.equal(secondShot.base64, "SNAPSHOT-21");
+  assert.equal(secondShot.meta.possiblyStale, true);
+  assert.equal(secondShot.meta.reason, "fromSurface-cooldown-after-timeout");
+  assert.equal(surfaceCalls.get(21), 1, "same-tab concurrent captures issued more than one fromSurface request");
+  console.log("PASS core: same-tab captures serialise, other tabs stay independent, cooldown blocks repeat fromSurface");
+}
+
+// ---------- registry:check：CRLF 检出不得被误判为生成文件过期 ----------
+{
+  const registry = await import("./registry-check.mjs");
+  assert.equal(registry.normalizeNewlines("a\r\nb\rc\nd"), "a\nb\nc\nd", "CRLF and lone CR must normalize to LF");
+  assert.equal(registry.sameGeneratedContent("a\r\nb\r\n", "a\nb\n"), true, "CRLF checkout must match LF generator output");
+  assert.equal(registry.sameGeneratedContent("a\r\nb\n", "a\nB\n"), false, "real content differences must still fail");
+  const catalogText = fs.readFileSync("registry/catalog.json", "utf8");
+  const crlfCatalog = catalogText.replace(/\r?\n/g, "\r\n");
+  assert.equal(registry.sameGeneratedContent(crlfCatalog, catalogText), true, "a CRLF checkout of registry/catalog.json must pass registry:check");
+  const mismatch = registry.describeMismatch("a\nb\n", "a\nc\n");
+  assert.equal(mismatch?.line, 2, "mismatch reports the first differing line");
+  console.log("PASS core: registry check normalizes CRLF/LF instead of rewriting every generated file");
+}
+
+// ---------- 虚拟光标接线守卫：截图命令必须走 cursor-aware 策略 ----------
+{
+  const commandsSource = fs.readFileSync("src/background/commands.ts", "utf8");
+  assert.ok(
+    commandsSource.includes("captureScreenshotWithCursorPolicy("),
+    "screenshot must use the cursor-aware capture policy",
+  );
+  assert.ok(
+    commandsSource.includes("withCursorHiddenForCapture("),
+    "scroll_screenshot must hide the cursor for the whole capture",
+  );
+  assert.ok(commandsSource.includes("handleCursorCommand"), "commands.ts must expose the cursor command");
+  assert.ok(
+    !/\bcaptureScreenshot\(/.test(commandsSource),
+    "commands.ts must not bypass the cursor policy with a raw captureScreenshot call",
+  );
+  const indexSource = fs.readFileSync("src/background/index.ts", "utf8");
+  assert.ok(
+    indexSource.includes("registerVirtualCursorHandlers()"),
+    "index.ts must register cursor lifecycle handlers",
+  );
+  console.log("PASS core: virtual cursor is wired into screenshot, scroll capture, stop, and SW startup");
+}
+
+// ---------- AI 虚拟鼠标（虚拟光标 overlay / 截图排除 / 清理）----------
+await import("./test-virtual-cursor.mjs");
+
+// ---------- 输入权仲裁（P3，扩展侧）：HUMAN / ASSIST / AI 派生视图 + grant ----------
+// 与独立的 test:input-ownership 共用同一份用例，避免两处漂移。
+await import("./test-input-ownership.mjs");
+
+// ---------- 输入权生产 API（P3）：chrome.browserCli.inputOwnership 客户端 ----------
+// 覆盖 API 探测/generic no-op/单调 version/10s 心跳/30s 失联/SW 重启/命令 scope。
+await import("./test-input-ownership-api.mjs");

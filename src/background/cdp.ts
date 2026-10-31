@@ -1,12 +1,135 @@
 // CDP 辅助：页面求值 / ref->坐标 / glob 匹配 / 睡眠 / 受信输入的重用片段（M5）。
 import { attach, isAttached, sendCommand } from "./debugger-bridge";
-import { ensureTabVisible } from "./spaces";
+import {
+  captureWithFallback,
+  SurfaceCooldown,
+  type CaptureHooks,
+  type CapturePhase,
+  type ScreenshotResult,
+} from "./screenshot-policy";
 
 export async function ensureAttach(tabId: number): Promise<void> {
   if (!isAttached(tabId)) await attach(tabId);
 }
 
 export const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+// ---------------------------------------------------------------------------
+// 截图请求表：超时必须清理，迟到的帧必须丢弃。
+//
+// chrome.debugger.sendCommand 的 promise 无法取消。超时后我们只能「放弃」它：
+//   1. 立即把这次 attempt 从 pending 表移除（pendingScreenshotAttempts 归零）；
+//   2. 给底层 promise 挂 then/catch 消费器（withTimeout 内），迟到结果不会变成
+//      unhandled rejection，也不会被当成后续请求的响应（每次 send 都是独立 promise）；
+//   3. 计数/告警，便于诊断“窗口被遮挡导致合成器帧挂住”的频次。
+// ---------------------------------------------------------------------------
+
+interface ScreenshotFlight {
+  id: number;
+  phase: CapturePhase;
+  startedAt: number;
+}
+
+const screenshotFlights = new Map<number, Set<ScreenshotFlight>>();
+let screenshotSeq = 0;
+let abandonedAttempts = 0;
+let lateSettles = 0;
+
+function trackFlight(tabId: number, phase: CapturePhase): ScreenshotFlight {
+  const flight: ScreenshotFlight = { id: ++screenshotSeq, phase, startedAt: Date.now() };
+  let set = screenshotFlights.get(tabId);
+  if (!set) {
+    set = new Set();
+    screenshotFlights.set(tabId, set);
+  }
+  set.add(flight);
+  return flight;
+}
+
+function settleFlight(tabId: number, flight: ScreenshotFlight): void {
+  const set = screenshotFlights.get(tabId);
+  if (!set) return;
+  set.delete(flight);
+  if (!set.size) screenshotFlights.delete(tabId);
+}
+
+/** 仍在 pending 的截图请求数（tabId 缺省 = 全部）。超时清理后必须归零。 */
+export function pendingScreenshotAttempts(tabId?: number): number {
+  if (tabId !== undefined) return screenshotFlights.get(tabId)?.size ?? 0;
+  let total = 0;
+  for (const set of screenshotFlights.values()) total += set.size;
+  return total;
+}
+
+/** 诊断计数：超时被放弃的请求 / 超时后才迟到的 settle。 */
+export function screenshotCleanupStats(): { abandoned: number; lateSettles: number; pending: number } {
+  return { abandoned: abandonedAttempts, lateSettles, pending: pendingScreenshotAttempts() };
+}
+
+// 遮挡窗口不产帧：合成器路径超时后冷却 30s，期间直接走浏览器快照（仍标记 possiblyStale）。
+// 这既避免每次截图都挂满 timeout，也避免渲染进程累积 presentation-time 回调
+// （60 个即 DCHECK 崩溃，见 docs/windows-occluded-capture-2026-10-28.md §4.1）。
+const SURFACE_TIMEOUT_COOLDOWN_MS = 30_000;
+const surfaceCooldowns = new Map<number, SurfaceCooldown>();
+
+function surfaceCooldownFor(tabId: number): SurfaceCooldown {
+  let cooldown = surfaceCooldowns.get(tabId);
+  if (!cooldown) {
+    cooldown = new SurfaceCooldown({
+      baseMs: SURFACE_TIMEOUT_COOLDOWN_MS,
+      maxMs: 10 * 60_000,
+      maxConsecutiveTimeouts: 4,
+    });
+    surfaceCooldowns.set(tabId, cooldown);
+  }
+  return cooldown;
+}
+
+export interface SurfaceCooldownStats {
+  tabId: number;
+  active: boolean;
+  remainingMs: number;
+  consecutiveTimeouts: number;
+  /** true = 已触发防崩硬闸，直到 resetSurfaceCooldown() 前不再尝试合成器路径。 */
+  hardStopped: boolean;
+}
+
+/** 诊断：哪些 tab 正处于“合成器路径冷却”状态。 */
+export function surfaceCooldownStats(): SurfaceCooldownStats[] {
+  return [...surfaceCooldowns.entries()].map(([tabId, cooldown]) => ({
+    tabId,
+    active: cooldown.shouldSkip(),
+    remainingMs: cooldown.remainingMs,
+    consecutiveTimeouts: cooldown.consecutiveTimeouts,
+    hardStopped: cooldown.isHardStopped,
+  }));
+}
+
+/** 明确恢复某个 tab 的合成器尝试（例如 ensure_visible 之后）。 */
+export function resetSurfaceCooldown(tabId: number): void {
+  surfaceCooldowns.get(tabId)?.reset();
+}
+
+/** 测试/诊断：清空所有 tab 的冷却状态（不影响真实截图）。 */
+export function __resetSurfaceCooldownsForTests(): void {
+  surfaceCooldowns.clear();
+}
+
+// 同一个 tab 的截图串行执行：并发调用（多 Agent / scroll + viewport）不得各自发起
+// fromSurface 请求，否则一次超时窗口内会累积多个 presentation 回调。
+// 不同 tab 使用各自的链，互不阻塞。
+const captureQueues = new Map<number, Promise<void>>();
+
+function withTabCaptureLock<T>(tabId: number, fn: () => Promise<T>): Promise<T> {
+  const previous = captureQueues.get(tabId) ?? Promise.resolve();
+  const run = previous.then(fn, fn);
+  const tail = run.then(() => undefined, () => undefined);
+  captureQueues.set(tabId, tail);
+  void tail.then(() => {
+    if (captureQueues.get(tabId) === tail) captureQueues.delete(tabId);
+  });
+  return run;
+}
 
 /** "@N" -> '[data-bp-id="bp-N"]'；否则原样（当作 CSS selector）。 */
 export function selFrom(refOrSelector: string, snapshotId?: string): string {
@@ -69,28 +192,112 @@ export async function resolveCoord(
   return out && typeof out.x === "number" && typeof out.y === "number" ? { x: out.x, y: out.y } : null;
 }
 
-/** Page.captureScreenshot：视口截图，返回 base64（PNG）。 */
-export async function captureScreenshot(tabId: number, format = "png"): Promise<string> {
+/** @see screenshot-policy.ts —— 策略（超时/降级/新鲜度）与传输分离，便于离线测试。 */
+export type { ScreenshotMeta, ScreenshotResult } from "./screenshot-policy";
+
+/**
+ * Page.captureScreenshot：视口截图。
+ *
+ * 刻意**不**调用 ensureTabVisible：截图不允许改变窗口可见状态、焦点或用户当前
+ * 活动标签。隐藏/最小化窗口本身就能取帧（实测 1–4 秒）。
+ *
+ * 超时语义：fromSurface=true 挂住时按 timeoutMs 放弃并降级；被放弃的请求会从
+ * pending 表移除，迟到的帧只记日志，绝不串到下一次截图。
+ */
+export function captureScreenshot(
+  tabId: number,
+  format = "png",
+  opts: { timeoutMs?: number } = {}
+): Promise<ScreenshotResult> {
+  // 同一 tab 串行：第二个调用会等第一个结束（超时/降级完成）后再判断冷却，
+  // 不会在同一个超时窗口里再发一个 fromSurface 请求。
+  return withTabCaptureLock(tabId, () => captureScreenshotUnlocked(tabId, format, opts));
+}
+
+async function captureScreenshotUnlocked(
+  tabId: number,
+  format = "png",
+  opts: { timeoutMs?: number } = {}
+): Promise<ScreenshotResult> {
   await ensureAttach(tabId);
-  await ensureTabVisible(tabId).catch(() => {});
-  const res = (await sendCommand(tabId, "Page.captureScreenshot", { format })) as { data?: string };
-  return res.data ?? "";
+  const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 8000;
+  const cooldown = surfaceCooldownFor(tabId);
+  const skipSurface = cooldown.shouldSkip();
+  const flights = new Map<CapturePhase, ScreenshotFlight>();
+  const hooks: CaptureHooks = {
+    onAttemptStart(phase) {
+      flights.set(phase, trackFlight(tabId, phase));
+    },
+    onAttemptSettle(phase, outcome) {
+      const flight = flights.get(phase);
+      if (flight) {
+        settleFlight(tabId, flight);
+        flights.delete(phase);
+      }
+      if (outcome === "abandoned") abandonedAttempts += 1;
+      // 合成器路径真的返回了（哪怕数据为空）：清掉冷却，下次重新尝试新帧。
+      if (phase === "fromSurface" && outcome === "ok") cooldown.recordSuccess();
+    },
+    onTimeout(info) {
+      if (info.phase === "fromSurface") cooldown.recordTimeout();
+      console.warn("[cdp] 截图请求超时被放弃: tab=" + tabId + " phase=" + info.phase
+        + " timeout=" + info.timeoutMs + "ms"
+        + (info.phase === "fromSurface" ? " surfaceCooldown=" + cooldown.remainingMs + "ms" : ""));
+    },
+    onLateSettle(phase, outcome) {
+      lateSettles += 1;
+      console.warn("[cdp] 截图请求超时后才返回，已丢弃: tab=" + tabId + " phase=" + phase + " outcome=" + outcome);
+    },
+  };
+  try {
+    return await captureWithFallback(
+      (params) => sendCommand(tabId, "Page.captureScreenshot", params) as Promise<{ data?: string }>,
+      format,
+      timeoutMs,
+      hooks,
+      {
+        skipFromSurface: skipSurface,
+        skipReason: skipSurface ? "fromSurface-cooldown-after-timeout" : undefined,
+      },
+    );
+  } finally {
+    // 兜底：任何未走正常 settle 的异常路径都不留下 pending 记录。
+    for (const flight of flights.values()) settleFlight(tabId, flight);
+    flights.clear();
+  }
 }
 
 /**
  * 滚动拼接长截图（N 屏一屏屏滚、一屏屏拼）。
- * - 先把目标窗口带到前台：Chrome 对未聚焦窗口做合成节流，Page.captureScreenshot 会挂起，必须先聚焦。
+ * - 不改变窗口前台状态：不聚焦、不恢复、不切换活动标签（见 captureScreenshot 的说明）。
  * - pages：要截几屏（按视口高度计）。缺省 = 3（建议上限，长图别过长）；传 0 则整页全量；传 N 截前 N 屏。
  * - gap：每次滚动后等待毫秒，留给懒加载触发；缺省 400ms。
  * - 返回一张完整长图 base64 + 尺寸 / 屏数。
  */
+export interface ScrollCaptureResult {
+  base64: string;
+  width: number;
+  height: number;
+  pageCount: number;
+  viewH: number;
+  docH: number;
+  /** 任一屏走了降级快照路径即为 true：调用方不得把整图当作实时画面。 */
+  possiblyStale: boolean;
+  /** 走降级的屏数 / 新鲜屏数。 */
+  staleTiles: number;
+  freshTiles: number;
+  /** 降级原因（去重）；上层 API 必须原样透传，不得把 stale 当 fresh。 */
+  staleReasons: string[];
+  /** 整段滚动截图耗时。 */
+  durationMs: number;
+}
+
 export async function scrollCaptureScreenshot(
   tabId: number,
   opts: { pages?: number; gap?: number; format?: string } = {}
-): Promise<{ base64: string; width: number; height: number; pageCount: number; viewH: number; docH: number }> {
+): Promise<ScrollCaptureResult> {
+  const started = Date.now();
   await ensureAttach(tabId);
-  // 恢复并聚焦窗口，避免最小化/后台窗口导致截图和懒加载被节流。
-  await ensureTabVisible(tabId).catch(() => {});
   const format = opts.format ?? "png";
   const gap = typeof opts.gap === "number" && opts.gap > 0 ? opts.gap : 400;
   const m = (await evalPage(
@@ -105,11 +312,18 @@ export async function scrollCaptureScreenshot(
   const want = opts.pages === undefined ? 3 : opts.pages === 0 ? fullPages : opts.pages;
   const pageCount = Math.max(1, Math.min(want, fullPages));
   const tiles: string[] = [];
+  let staleTiles = 0;
+  const staleReasons: string[] = [];
   for (let i = 0; i < pageCount; i++) {
     await evalPage(tabId, "window.scrollTo(0," + i * viewH + ")").catch(() => {});
     await sleep(gap);
-    const b64 = await captureScreenshot(tabId, format);
-    if (b64) tiles.push(b64);
+    const shot = await captureScreenshot(tabId, format);
+    if (shot.base64) tiles.push(shot.base64);
+    if (shot.meta.possiblyStale) {
+      staleTiles += 1;
+      const reason = shot.meta.reason ?? "possibly-stale";
+      if (!staleReasons.includes(reason)) staleReasons.push(reason);
+    }
   }
   if (!tiles.length) throw new Error("滚动截图失败：没有截到任何一屏");
   const stitched = await stitchTiles(tiles);
@@ -120,6 +334,11 @@ export async function scrollCaptureScreenshot(
     pageCount,
     viewH,
     docH,
+    possiblyStale: staleTiles > 0,
+    staleTiles,
+    freshTiles: tiles.length - staleTiles,
+    staleReasons,
+    durationMs: Date.now() - started,
   };
 }
 

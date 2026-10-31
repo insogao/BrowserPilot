@@ -8,6 +8,14 @@ import { pushEvent } from "./native-bridge";
 const activeMasks = new Set<number>();
 const takeover = new Set<number>();
 
+/** mask 与虚拟光标互斥：遮罩出现 / 关闭 / 人工接管时都把光标收掉，避免 overlay 盖在接管流程上。
+ *  动态 import 保持 mask 与 virtual-cursor 无静态耦合（也让 mask 的单测不必拉整条 CDP 链）。 */
+function dropVirtualCursor(tabId: number): void {
+  void import("./virtual-cursor")
+    .then((m) => m.onMaskStateChange(tabId))
+    .catch(() => {});
+}
+
 // 「AI 停手 60s 自动解除遮罩」兜底：防止 AI 忘了 stop_mask 时页面被冻住。
 // - 任何命令（dispatch）都会 touchMaskActivity()：busy++ 并重置各 tab 的 60s 计时。
 // - 命令执行期间 busy>0，计时到点后不解除而是重新计时（长任务如 run_template 等待回复时不会误放）。
@@ -77,6 +85,7 @@ export async function maskOn(tabId: number): Promise<boolean> {
     activeMasks.add(tabId);
     takeover.delete(tabId);
     armIdle(tabId);
+    dropVirtualCursor(tabId);
     return true;
   }
   return false;
@@ -95,6 +104,7 @@ export async function maskOff(tabId: number, clearTakeoverState = true): Promise
   } catch {
     /* 页面可能已导航/关闭，忽略 */
   }
+  dropVirtualCursor(tabId);
 }
 
 /** 在 CDP 动作期间对遮罩做「临时放行→恢复」包裹（有遮罩时才需要，否则零开销直接执行）。 */
@@ -116,7 +126,7 @@ export function requestTakeover(tabId: number): void {
   persistTakeover();
   pushEvent("mask_takeover", { tabId });
   // 只释放视觉遮罩，保留 takeover 锁；必须显式 stop_mask/resume 才允许 Agent 继续。
-  void maskOff(tabId, false);
+  void maskOff(tabId, false); // 内部会一并收起虚拟光标
   void import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId));
   void import("./spaces").then(({ handoffSpaceForTab }) => handoffSpaceForTab(tabId));
 }

@@ -1,0 +1,6 @@
+# 生成文件统一 LF：registry:check 已忽略换行符差异，这里再固定 EOL，
+# 避免 Windows 本地与 CI 之间出现无意义的整仓重写与 diff 噪音。
+registry/catalog.json text eol=lf
+registry/bundle.json text eol=lf
+registry/INDEX.md text eol=lf
+registry/details/** text eol=lf

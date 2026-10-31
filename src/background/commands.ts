@@ -5,18 +5,37 @@ import { loadState, clearAllSpaces, mutateState, patchSpace } from "./state";
 import { drainEvents } from "./events";
 import * as sp from "./spaces";
 import { commandClientId } from "./spaces";
-import { acquireForegroundLease } from "./foreground-lease";
+import { acquireForegroundLease, deleteForegroundLeasesFor } from "./foreground-lease";
 import { resolveTargetTab } from "./tab-resolver";
 import { getL0Snapshot, readTextFromTab } from "./content-bridge";
-import { captureScreenshot, scrollCaptureScreenshot, ensureAttach } from "./cdp";
+import { scrollCaptureScreenshot, ensureAttach, resetSurfaceCooldown } from "./cdp";
+import {
+  captureScreenshotWithCursorPolicy,
+  withCursorHiddenForCapture,
+  handleCursorCommand,
+  clearAllCursors,
+  clearCursorsForTabs,
+} from "./virtual-cursor";
 import { sendCommand } from "./debugger-bridge";
 import * as act from "./actions";
 import * as ev from "./eval";
 import { maskOn, maskOff, isHumanTakeover, hasTakeover, touchMaskActivity, endMaskActivity, resetAllMasks, resetMasksForTabs } from "./mask";
-import { detach, detachAll, listAttachedTabs } from "./debugger-bridge";
+import { detach, detachAll, isAttached, listAttachedTabs } from "./debugger-bridge";
 import * as tpl from "./templates";
 import { downloadResource } from "./download-resource";
 import { transcribeMedia } from "./groq";
+import { genericCapabilities } from "./capabilities";
+import {
+  INPUT_COMMANDS,
+  grantInputCommand,
+  guardInputCommand,
+  humanPresenceCommand,
+  inputStatusCommand,
+} from "./input-ownership";
+import {
+  kernelInputOwnershipStatusForWindow,
+  withKernelInputScope,
+} from "./input-ownership-api";
 
 function getManifestVersion(): string {
   try {
@@ -30,6 +49,13 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   ping: () => Promise.resolve({ pong: true, at: Date.now() }),
   version: () =>
     Promise.resolve({ name: "BrowserPilot", version: getManifestVersion() }),
+
+  // 宿主能力：普通 Chrome 返回 generic + 原因，Browser CLI 返回 enhanced。
+  // 这是判断增强能力的唯一入口，禁止用 UA/产品名旁路（Phase 7 要求 5）。
+  host_capabilities: async () => {
+    const s = await loadState();
+    return s.hostCapabilities ?? genericCapabilities("not-probed");
+  },
 
   get_profile: async () => {
     const s = await loadState();
@@ -54,13 +80,39 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     const text = await readTextFromTab(tabId, { ref, selector });
     return { tabId, text };
   },
-  screenshot: async (cmd) => { const tabId = await resolveTargetTab(cmd); const format = ((cmd.args ?? {}) as { format?: string }).format ?? "png"; const base64 = await captureScreenshot(tabId, format); return { tabId, format, base64 }; },
+  // 截图不改变窗口可见状态/焦点/活动标签；元数据里带上耗时、取帧路径与新鲜度，
+  // 让调用方自己决定能不能把这张图当作实时画面。possiblyStale/reason 同时放在顶层，
+  // 避免上层 API 只看顶层字段时把降级帧误当新鲜帧。
+  // 默认先隐藏 AI 虚拟光标再截图（includeCursor=true 才显式包含）。
+  screenshot: async (cmd) => {
+    const tabId = await resolveTargetTab(cmd);
+    const args = (cmd.args ?? {}) as { format?: string; includeCursor?: boolean };
+    const format = args.format ?? "png";
+    const shot = await captureScreenshotWithCursorPolicy(tabId, format, {
+      includeCursor: args.includeCursor === true,
+    });
+    return {
+      tabId,
+      format,
+      base64: shot.base64,
+      screenshot: shot.meta,
+      possiblyStale: shot.meta.possiblyStale,
+      ...(shot.meta.reason ? { reason: shot.meta.reason } : {}),
+      cursorIncluded: shot.cursorIncluded,
+    };
+  },
   scroll_screenshot: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
-    const { pages, gap, format } = (cmd.args ?? {}) as { pages?: number; gap?: number; format?: string };
-    const r = await scrollCaptureScreenshot(tabId, { pages, gap, format });
-    return { tabId, ...r };
+    const { pages, gap, format, includeCursor } = (cmd.args ?? {}) as {
+      pages?: number; gap?: number; format?: string; includeCursor?: boolean;
+    };
+    // 整段滚动截图只隐藏/恢复一次，避免逐屏来回闪。
+    const r = await withCursorHiddenForCapture(tabId, includeCursor === true, () =>
+      scrollCaptureScreenshot(tabId, { pages, gap, format }),
+    );
+    return { tabId, ...r, cursorIncluded: includeCursor === true };
   },
+  cursor: (cmd) => handleCursorCommand(cmd),
   tab_cdp_call: async (cmd) => {
     const tabId = await resolveTargetTab(cmd);
     const { method, params } = (cmd.args ?? {}) as { method?: string; params?: Record<string, unknown> };
@@ -68,6 +120,14 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
     await ensureAttach(tabId);
     const result = await sendCommand(tabId, method, params ?? {});
     return { tabId, method, result };
+  },
+  // 释放 chrome.debugger 会话但不关闭标签（与 stop 的 detachAll 不同）。
+  // 未 attach 时也返回成功，wasAttached 告诉调用方是否真的释放过。
+  detach: async (cmd) => {
+    const tabId = await resolveTargetTab(cmd);
+    const wasAttached = isAttached(tabId);
+    await detach(tabId);
+    return { detached: true, wasAttached, tabId };
   },
   download_image: async (cmd) => {
     const { url, filename } = (cmd.args ?? {}) as { url?: string; filename?: string; tabId?: number };
@@ -119,8 +179,25 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
   open_tab: (cmd) => sp.open_tab(cmd),
   close_tab: (cmd) => sp.close_tab(cmd),
   switch_tab: (cmd) => sp.switch_tab(cmd),
-  ensure_visible: (cmd) => sp.ensure_visible(cmd),
+  ensure_visible: async (cmd) => {
+    const result = await sp.ensure_visible(cmd);
+    // 显式恢复窗口后，允许重新尝试合成器路径（冷却可能是遮挡期间留下的）。
+    resetSurfaceCooldown(result.tabId);
+    return result;
+  },
   list_spaces: (cmd) => sp.list_spaces(cmd),
+
+  // 输入权仲裁（P3）：HUMAN/ASSIST/AI 只是 ownership(+assist) 的派生视图。
+  grant_input: (cmd) => grantInputCommand(cmd),
+  // input_status 额外返回内核同步视图（只在 enhanced host 上有意义；generic 下 state=unsupported）。
+  input_status: async (cmd) => {
+    const status = await inputStatusCommand(cmd);
+    return {
+      ...status,
+      kernel: kernelInputOwnershipStatusForWindow(status.windowId, status.mode),
+    };
+  },
+  human_presence: (cmd) => humanPresenceCommand(cmd),
 
   import_template: (cmd) => tpl.importTemplate(cmd),
   install_template: (cmd) => tpl.installTemplate(cmd),
@@ -172,9 +249,13 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       tpl.cancelTemplateRuns();
       const attachedTabs = listAttachedTabs();
       await Promise.all(attachedTabs.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
-      const [maskedTabs, detachedTabs] = await Promise.all([resetAllMasks(), detachAll()]);
+      const [maskedTabs, detachedTabs, cursorTabs] = await Promise.all([
+        resetAllMasks(),
+        detachAll(),
+        clearAllCursors(),
+      ]);
       await clearAllSpaces();
-      return { stopped: true, scoped: false, detachedTabs, maskedTabs };
+      return { stopped: true, scoped: false, detachedTabs, maskedTabs, cursorTabs };
     }
 
     const state = await loadState();
@@ -190,20 +271,31 @@ const KNOWN: Record<CommandName, (cmd: Command) => Promise<unknown>> = {
       const tab = await chrome.tabs.get(tabId).catch(() => undefined);
       if (tab?.windowId !== undefined && ownWindowIds.has(tab.windowId)) ownAttached.push(tabId);
     }
+    // 光标可能由 cursor 命令直接显示（不经过 CDP attach），按窗口枚举全部 tab 再清理。
+    const ownWindowTabs: number[] = [];
+    for (const windowId of ownWindowIds) {
+      const tabs = await chrome.tabs.query({ windowId }).catch(() => []);
+      for (const tab of tabs) if (typeof tab.id === "number") ownWindowTabs.push(tab.id);
+    }
     await Promise.all(ownAttached.map((tabId) => import("./debugger-bridge").then(({ interruptTab }) => interruptTab(tabId))));
-    const [maskedTabs] = await Promise.all([resetMasksForTabs(ownAttached), Promise.all(ownAttached.map((tabId) => detach(tabId).catch(() => undefined)))]);
+    const [maskedTabs, , cursorTabs] = await Promise.all([
+      resetMasksForTabs(ownAttached),
+      Promise.all(ownAttached.map((tabId) => detach(tabId).catch(() => undefined))),
+      clearCursorsForTabs(ownWindowTabs),
+    ]);
     for (const space of ownSpaces) {
       if (space.windowId !== undefined) await chrome.windows.remove(space.windowId).catch(() => {});
       await patchSpace(space.spaceId, { ownership: "inactive", windowId: undefined, tabId: undefined, attached: false });
     }
-    // 模板运行权=前台租约：只有自己持有时取消运行代际，才不会误伤正在跑模板的其他 Agent。
-    if (state.foregroundLease?.ownerClientId === clientId) tpl.cancelTemplateRuns();
+    // 取消代际按 Agent 隔离：只取消该 Agent 自己的模板运行，不误伤其它 Agent 并行的模板。
+    tpl.cancelTemplateRuns(clientId);
     await mutateState((s) => {
-      if (s.foregroundLease?.ownerClientId === clientId) delete s.foregroundLease;
+      // 租约按 key 持有（space / global），只删除属于该 Agent 的记录。
+      deleteForegroundLeasesFor(s, clientId);
       if (s.activeSpaceIds?.[clientId]) delete s.activeSpaceIds[clientId];
       if (s.activeSpaceId && ownSpaceIds.has(s.activeSpaceId)) delete s.activeSpaceId;
     });
-    return { stopped: true, scoped: true, closedSpaces: [...ownSpaceIds], detachedTabs: ownAttached, maskedTabs };
+    return { stopped: true, scoped: true, closedSpaces: [...ownSpaceIds], detachedTabs: ownAttached, maskedTabs, cursorTabs };
   },
 };
 
@@ -225,6 +317,17 @@ export async function dispatch(cmd: Command): Promise<unknown> {
     if (ACTION_NAMES.has(name) && hasTakeover()) {
       const tabId = await resolveTargetTab(cmd).catch(() => undefined);
       if (tabId !== undefined && isHumanTakeover(tabId)) throw new Error("human_takeover_in_progress");
+    }
+    // 输入权仲裁（P3）：与上面的 mask/takeover 检查**叠加**，不是替代。
+    // HUMAN → INPUT_HUMAN_OWNED；ASSIST 无 grant → INPUT_ASSIST_REQUIRES_GRANT；
+    // ASSIST 有 grant → 消耗一次后放行；AI → 放行。守卫放在 handler 之前，
+    // 因此被拒绝时不会 attach/不会发任何 CDP Input.*。
+    // 守卫之后再用内核命令 scope 包住真正的 handler（仅 enhanced host）：
+    //   - AI：确认内核快照新鲜，失联则 fail closed（不静默继续 AI）；
+    //   - ASSIST：一条命令 = 一次内核 grant + begin/end，异常由绝对截止兜底。
+    if (INPUT_COMMANDS.has(name)) {
+      const guard = await guardInputCommand(cmd);
+      return await withKernelInputScope(cmd, guard, () => KNOWN[name](cmd), { attach: ensureAttach });
     }
     return await KNOWN[name](cmd);
   } finally {
@@ -391,9 +494,10 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `waitForURL` / `waitForSelector` / `waitForTimeout` | `{...}` | 等 URL/元素/时间 |",
     "| `wait_dom_idle` | `{idleMs?,timeoutMs?,selector?}` | 等 DOM 静默（MutationObserver）：AI 聊天流式输出结束后内容才停止变化；超时返回 idle:false |",
     "| `drainEvents` | `{after_sequence?, methods?, limit?}` | 拉取事件游标 `{events,cursor,hasMore}` |",
-    "| `screenshot` | `{format?}` | 视口截图(返回 base64) |",
-    "| `scroll_screenshot` | `{pages?, gap?, format?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量 |",
+    "| `screenshot` | `{format?, includeCursor?}` | 视口截图(返回 base64)；默认隐藏 AI 虚拟光标，`includeCursor:true` 才把光标画进图里 |",
+    "| `scroll_screenshot` | `{pages?, gap?, format?, includeCursor?}` | 滚动拼接长截图「截N屏拼一张」, 返回整图 base64 + pageCount/width/height; pages 缺省=3(建议, 长图别过长), 传 0 表示整页全量；默认隐藏虚拟光标 |",
     "| `tab_cdp_call` | `{tabId?, method, params?}` | 任意底层 CDP 透传(如 Network.enable/Network.getResponseBody/Runtime.evaluate), 全权交给 AI/CLI |",
+    "| `detach` | `{tabId?}` | 释放 chrome.debugger（不关标签）；下一次动作会自动重新 attach |",
     "| `download_image` | `{url, filename?}` | 下载 URL 到本地(支持 data:/http:), 配合模版回收的 images[] 落盘; blob: 明确拒绝 |",
     "| `download_resource` | `{url?\|urls?...[], selector?, filename?, tabId?}` | 页面上下文取字节后落盘：blob 图用 canvas 全尺寸提取(PNG)、登录态 http 用页面内 fetch 带 cookie；文件名可控；`urls[]` 传多张自动编号（AI 一次出多图 / Gemini Choice A/B 全收） |",
     "| `list_templates` | `{}` | 列出全部模板（ID/名称/输入/输出）——**写操作序列前必查** |",
@@ -401,6 +505,10 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "| `run_template` | `{id, params?, focus?}` | 一键跑流程模版(省 token); **默认后台执行**（不恢复/不聚焦窗口），显式 `focus:true`/`keepVisible:true`/`visible:true`/`background:false` 才前台运行（AI 聊天类模板内部已显式声明前台）; 聊天模版续问传 conversationUrl(上次返回的 url) 校验仍指向同一会话; 失灵返回结构化失败上下文 |",
     "| `start_mask` | `{tabId?}` | 开「人工接管遮罩」：蓝色半透明 + 拦截用户 + 底部「人工接管」按钮 |",
     "| `stop_mask` | `{tabId?}` | 关遮罩 / 清除接管态（人解完验证码后让 AI 继续） |",
+    "| `input_status` | `{space?\\|spaceId?, tabId?}` | 输入权状态：`mode`(human/assist/ai)、`ownership`、`assistSince`、`assistExpiresAt`、剩余 `grantActionsRemaining` |",
+    "| `grant_input` | `{space?\\|spaceId?, tabId?, actions, ttlMs?}` | **仅 ASSIST 下、仅用户入口可发**（Agent 不能自证）：发放一次性输入 grant（`actions` 次数 + TTL，默认 60s）。返回截断 token 摘要 |",
+    "| `human_presence` | `{space?\\|spaceId?, tabId?, source?, immediate?, debounceMs?}` | 内核事件/测试入口：人类在页面里输入 → 500ms 去抖后进入 ASSIST（ownership 不变）；**仅用户入口/内核桥可发** |",
+    "| `cursor` | `{action:\"show\"\\|\"move\"\\|\"hide\"\\|\"remove\"\\|\"state\", tabId?, ref?, selector?, x?, y?, style?, durationMs?}` | 插件级 AI 虚拟光标（只画不点）：show/move/hide/remove/state；轨迹与真实 CDP 点击坐标一致，不移动系统鼠标 |",
     "| 事件`mask_takeover` | `{tabId}` | 用户点了遮罩上的「人工接管」→ 暂停 AI，等 `stop_mask` 续跑 |",
     "| `export_guide` | `{}` | 导出本说明 |",
     "| `stop` | `{}` | 清理会话：Agent 身份调用=只清自己的空间/租约/遮罩；popup 全局停止=清全部 |",
@@ -414,7 +522,7 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "- **发送验证**：`press` 返回焦点元素与输入框长度前后状态（valueCleared）；AI 模板内置输入框清空检查，输入框未清空=消息未发出。",
     "- `set_humanize`、L1/AX、脚本型模板当前尚未实现，不应调用。",
     "- **页面已变**：任何动作前若快照过期，返回 `page_updated`，重拍再动，避免盲操作。",
-    "- **并发保护**：需要前台、截图或输入的命令由插件侧全局前台租约串行化；模板的全部子步骤继承同一租约。异常中断后租约会自动过期。",
+    "- **并发保护**：窗口级租约按目标（Task Space）加锁——同一空间的两个流程互斥、不会交错破坏状态；不同空间可真实并行。只有 `ensure_visible` / 显式 `focus` 的 `open_space`/`open_tab`/`switch_tab` 这类真正改变前台窗口的操作才全进程串行。`run_template` 整段按 space 持有租约，内部子步骤继承；截图/点击/求值等后台命令不取前台租约。",
     "",
     "## 7. 本机信息",
     "",
@@ -435,7 +543,10 @@ export function buildGuideFromCmd(profile: ProfileInfo | undefined, hostPort: nu
     "- **权限 / 调试横幅**: 只有用 `L1` 动作时标签页才出现「正在调试此浏览器」横幅, 这是 debugger API 固有, 纯 `L0` 观测无横幅。",
     "- **`SPACE_NOT_OWNED` / `TAB_OUTSIDE_SPACE`**：不要绕过；选择自己已有的 Space，或用 `open_space` 创建新空间。",
     "- **`SPACE_USER_IN_CONTROL`**：用户已经人工接管，必须等待用户明确允许后再调用 `claim_space`。",
-    "- **`FOREGROUND_BUSY`**：另一 Agent 正在进行可见浏览器操作，稍后重试，不要并发开页。",
+    "- **`INPUT_HUMAN_OWNED`**：输入权为 HUMAN（`ownership=user`）时 Agent 的输入类命令（click/type/fill/js/tab_cdp_call 等）被直接拒绝；不排队、不降级，需用户 `claim_space` 后才能恢复。",
+    "- **`INPUT_ASSIST_REQUIRES_GRANT`**：输入权为 ASSIST（人类临时在场，ownership 仍为 agent）时，Agent 必须先 `input_status` 确认，再由**用户入口** `grant_input` 发放一次性 grant（按命令次数消耗，默认 TTL 60s）；Agent 自己调用 `grant_input` 会返回 `INPUT_GRANT_FORBIDDEN`。过期/用尽/ownership 变化都会清空。",
+    "- **输入权速查**：`input_status` 返回 `mode`：`ai`（Agent 自主，输入放行）/ `assist`（人类在场，AI 需 grant）/ `human`（用户完全接管，AI 输入全拒）。人类真实输入按 pause 策略照常投递，`human_presence` 500ms 去抖后进入 ASSIST。",
+    "- **`FOREGROUND_BUSY`**：同一 Task Space 已有流程在运行（或另一个 Agent 正在切换前台窗口），稍后重试；不同 Task Space 不受影响。",
   ].join("\n");
 }
 

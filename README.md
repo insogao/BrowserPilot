@@ -27,9 +27,11 @@ plugin-v1/
 ├── native-host/               # M2 主通道
 │   ├── host.js                # native messaging 分帧 + TCP 桥（外部 AI 连入）
 │   ├── profile.js             # 读 Chrome 父进程命令行探测 profile
-│   ├── host.manifest.json     # host manifest（allowed_origins 用固定扩展 ID）
+│   ├── host.manifest.template.json # host manifest 模板（占位符；仓库唯一 tracked 真源）
+│   ├── host.manifest.json     # 生成物（path=实际 exe；.gitignore，不随仓库分发）
 │   ├── paths.js               # host/client 共享的本机 session 目录
-│   ├── register.ps1           # Windows：写 HKCU 注册表（Chrome + Edge）
+│   ├── register.ps1           # Windows：写 HKCU（默认只 Chrome；-IncludeEdge 才写 Edge），先备份
+│   ├── unregister.ps1         # Windows：按备份恢复旧值；无备份则删本 host 键
 │   ├── dist/browserpilot-host.exe  # Windows 打包产物（node scripts/build-host.mjs 生成）
 │   └── test-*.mjs             # host / profile 自测
 ├── assets/icons/
@@ -44,9 +46,20 @@ plugin-v1/
 cd plugin-v1
 npm install                 # esbuild / typescript / @types/chrome / postject
 npm run build               # 构建扩展 → dist/
-npm run build:host          # Windows：构建 native host → native-host/dist/browserpilot-host.exe
-npm run register-host       # Windows：注册 com.browserpilot.browseragent（HKCU Chrome+Edge）
+npm run build:host          # Windows：构建 native host → native-host/dist/browserpilot-host-<ts>.exe
+npm run register-host       # Windows：只写 HKCU Chrome 键（先备份旧值；Edge 用 -IncludeEdge）
+npm run unregister-host     # Windows：按 backup 恢复旧值；无 backup 则删除本 host 键
 ```
+
+Windows 注册的安全规则（实现见 `native-host/register.ps1` / `unregister.ps1`）：
+
+- 只写 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.browserpilot.browseragent`；
+  Edge 必须显式加 `-IncludeEdge`；任何情况下都不写 HKLM（`-RegistryRoot` 必须以 `HKCU:\` 开头）。
+- 修改前把每个目标键的旧默认值写入 `native-host/backup/<timestamp>.json`（host 名/旧值/时间/备注）；
+  回滚按该文件原样恢复，没有备份才删除本 host 键。
+- 每次注册都用实际构建出的 exe 重新生成 `native-host/host.manifest.json`（BOM-free UTF-8）；
+  exe 不存在、模板非法、`allowed_origins` 与 `manifest.json` key 推导的扩展 ID 不一致时拒绝注册。
+- 只操作 `com.browserpilot.browseragent`；绝不触碰 `com.egolite.browseragent` 等其它 host。
 
 macOS 无需 build:host：注册脚本生成一个用本机 node 直跑 `host.js` 的 wrapper（token 与 client 共用 `auth.json`）：
 
@@ -101,8 +114,8 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 
 1. 打开 `chrome://extensions`，右上角开启「开发者模式」。
 2. 点「加载已解压的扩展程序」，选本目录 `dist/`。
-3. 固定 ID：`manifest.json` 已带 `key`，扩展 ID 固定为 **`nnollghpaggbcdkkgoieneffnlijinio`**（与 `host.manifest.json` 的 `allowed_origins` 一致）。
-   - 首次加载后可在 `chrome://extensions` 核对；若 ID 不一致，用实际 ID 重跑 `register-host`。
+3. 固定 ID：`manifest.json` 已带 `key`，扩展 ID 固定为 **`nnollghpaggbcdkkgoieneffnlijinio`**（`host.manifest.json` 由模板生成，其 `allowed_origins` 必须与 key 推导值一致）。
+   - 首次加载后可在 `chrome://extensions` 核对；若 ID 不一致，注册脚本会 fail-closed 拒绝，需先核对仓库 `manifest.json`。
 4. 让连接生效：native host 注册在目标 user-data-dir 上**无需重启浏览器**（2026-09-16 实测）；若刚加载/更新了扩展代码，先在 `chrome://extensions` 重新加载扩展。然后点一次扩展图标，SW 会 `connectNative` 拉起 host，并缓存当前 profile，供官方 client 后续自动启动。首次安装会自动打开 onboarding 页。
 
 ---
@@ -130,10 +143,38 @@ npm run dev:no-reload     # 只 watch rebuild，不自动 reload
 ```bash
 npm run typecheck          # tsc --noEmit
 npm run test:profile       # profile 参数解析 + macOS 可执行路径探测单测
-npm run test:register      # macOS native host 注册：目标发现/幂等/冲突拒绝/自定义 user-data-dir/仅显式目标
+npm run test:register      # macOS native host 注册（非 macOS 显示 SKIP）
+npm run test:register:native # Windows HKCU 注册/回滚/fail-closed（隔离到 HKCU\Software\BrowserPilotTests）
 npm run test:host          # host.js：ready 帧 + TCP 命令转发
 npm run test:host:exe      # 打包后 exe：同上
+npm run test:e2e:native    # 真实链路 E2E：基线 Chrome + 真实 host + 六操作 + SW 重启 + generic
 ```
+
+### 测试进程清理安全（强制）
+
+测试启动的 Chrome / native host 只能按**可证明归属**的方式清理。禁止按镜像名或进程名匹配
+（包括 `taskkill /IM`、`Stop-Process -Name`、`pkill -f <browser>`、`killall <browser>`、
+`wmic process ... delete`）：用户 Chrome 正在运行时，这类写法会误杀用户进程。
+
+- `scripts/lib/test-process.mjs`：启动时记录 PID、创建时间、可执行路径、完整命令行与唯一
+  marker；清理前重新查询并核验 **PID + 创建时间 + 命令行含 marker + 可执行路径**，全部匹配才
+  按 PID 清理，任一不匹配即拒绝并记录（没有全局 kill 回退）。
+- 所有会启动 Chrome 的测试脚本都走这个库：`scripts/lib/cdp-client.mjs`（
+  `test-input-ownership-browser.mjs`、`test-virtual-cursor-browser.mjs` 共用）、
+  `scripts/test-native-e2e.mjs`、`scripts/test-concurrency-live.mjs`。
+- native host 等非本进程 spawn 的目标使用 `stopVerifiedPid()`，至少核验可执行路径。
+- 测试进程必须有唯一 marker：优先使用独立的临时 `--user-data-dir`
+  （`fs.mkdtempSync`），这也是命令行核验的依据。
+
+```bash
+npm run check:process-cleanup   # 静态门禁：扫描禁止的全局清理写法（CI 已接入）
+npm run test:process-safety     # 真实进程验证：只杀目标、控制存活、伪造 record 被拒
+npm run test:safety             # 上面两项依次执行
+```
+
+`test:process-safety` 使用基线 Chrome 启动两个 headless 实例（独立临时 profile、不使用
+`--no-sandbox`、不弹窗口），需要 `BROWSERPILOT_BASELINE_CHROME`（默认
+`D:\work\wt\browser-cli-baseline\chrome.exe`）。
 
 ---
 

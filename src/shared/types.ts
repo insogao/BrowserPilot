@@ -5,6 +5,7 @@ export type CommandName =
   // 基础 / 握手
   | "ping"
   | "version"
+  | "host_capabilities" // 宿主能力探测结果（Phase 7）：enhanced / generic + 降级原因
   | "get_profile" // 探测当前 profile（profile 感知，F1-1）
   | "export_guide" // 导出使用文档 Markdown（F1-2/F1-3）
   // 观测
@@ -39,6 +40,7 @@ export type CommandName =
   | "pageInfo"
   | "drainEvents"
   | "tab_cdp_call" // {tabId?, method, params?} 任意底层 CDP 透传（交给外部 AI/CLI 全权使用）
+  | "detach" // {tabId?} 释放 chrome.debugger（不关标签；下一次动作会自动重新 attach）
   // Task Space / 浏览器级接管（v1.2 定案，M7 实现）
   | "list_tabs" // {space?} 列出浏览器所有窗口/标签（Space=整台浏览器）
   | "open_tab" // {url, newWindow?} 开新标签/窗口并聚焦
@@ -52,6 +54,10 @@ export type CommandName =
   | "handoff_space" // {spaceId|name?} 把空间交给用户，暂停 Agent 命令
   | "complete_space" // {spaceId|name?,keep?} 保留给用户或关闭空间
   | "close_space" // {spaceId|name?} 关闭当前 Agent 空间
+  // 输入权仲裁（P3）：HUMAN/ASSIST/AI 是 ownership(+assist) 的派生视图，不是新的 ownership 取值
+  | "grant_input" // {space?,tabId?,actions,ttlMs?} ASSIST 下发放一次性输入 grant（仅用户入口，Agent 不能自证）
+  | "input_status" // {space?,tabId?} 返回 mode / assist 到期时间 / 剩余 grant actions
+  | "human_presence" // {space?,tabId?,source?,immediate?,debounceMs?} 内核事件/测试入口：进入 ASSIST（仅用户入口/内核桥）
   // 插件化操作模版（新需求，M9）
   | "import_template"
   | "install_template"
@@ -74,6 +80,8 @@ export type CommandName =
   // 人工接管遮罩（新需求，参考 Manus ActionMask）：拦截用户 + 蓝色半透明 + 「人工接管」按钮
   | "start_mask" // {tabId?} 开启遮罩（冻结用户，AI 用 CDP 操作）
   | "stop_mask" // {tabId?} 关闭遮罩 / 清除接管状态（人类解决验证码后 AI 继续）
+  // AI 虚拟光标（插件级，只画不点）：show/move/hide/remove/state。
+  | "cursor"
   // 图片下载：下载页面中的图片（data:/http:）
   | "download_image" // {url, filename?, tabId?} 下载图片到本地
   // 图片下载（通道 B）：页面上下文取字节后落盘（blob canvas 提取 / 登录态 http fetch，绕开 1MB 命令上限与 cookie 假成功）
@@ -91,7 +99,9 @@ export interface Command {
   requestId: string;
   /** Task Space 命名空间：对应 windowId 字符串。缺省 = 当前/主 space。 */
   space?: string;
-  /** Host 注入的可信逻辑客户端身份；外部消息中的同名字段会被覆盖。 */
+  /** Host 分配的逻辑客户端身份，形状固定为 `agent:<sanitized-id>`。
+   *  外部客户端自报的同名字段会被 host 覆盖；扩展只信任 `agent:` 前缀的形状，
+   *  其它值一律视为不可信。**用户入口身份不是消息字段**（见 spaces.ts 的 markInternalCommand）。 */
   _clientId?: string;
   /** 模板子命令继承的插件内部前台租约 token。 */
   _foregroundLeaseToken?: string;
@@ -142,10 +152,64 @@ export interface PopupRequest {
     | "get_guide" // 返回使用文档 markdown（popup 负责写剪贴板）
   | "get_skill" // 返回轻量技能引导（GitHub SKILL.md 地址 + 实时连接信息）
     | "template_command" // options 模板看板调用受限模板管理命令
-    | "stop";
+    | "stop"
+    // 输入权用户入口（P3）：SW 在进程内构造 Command + markInternalCommand()，
+    // 消息里的字段只用于选择目标 space，不构成身份（见 popup-entry.ts）。
+    | "input_status" // 只读：当前 space 的输入权视图 + 可选 space 列表
+    | "grant_input" // 允许一次输入：ASSIST 下发放 1 次 grant（TTL 默认 60s）
+    | "human_presence" // 我在操作：进入 ASSIST（不改 ownership）
+    | "ensure_visible"; // 显示窗口：ensure_visible { focus:false }
+  /** 目标 Task Space（用户在下拉框选择；缺省按活动 tab/窗口解析）。 */
+  spaceId?: string;
   name?: CommandName;
   args?: Record<string, unknown>;
 }
+
+/** popup 展示用的输入权视图（派生自 input_status 命令，不落第二份状态）。 */
+export interface PopupInputView {
+  spaceId: string;
+  tabId?: number;
+  windowId?: number;
+  mode: "human" | "assist" | "ai";
+  ownership: "agent" | "user" | "inactive" | "unknown";
+  ownerClientId?: string;
+  assistSince?: number;
+  assistReason?: string;
+  assistExpiresAt: number | null;
+  grantActionsRemaining: number | null;
+  kernel?: {
+    state: string;
+    supported: boolean;
+    degraded: boolean;
+    reason?: string;
+    effectiveMode?: "human" | "assist" | "ai";
+    version?: number;
+    kernelVersion?: number;
+    kernelMode?: "human" | "assist" | "ai";
+    stale?: boolean;
+    lastAckAt?: number;
+    lastError?: string;
+  };
+}
+
+/** popup 下拉框中的一个 Task Space 选项。 */
+export interface PopupSpaceOption {
+  spaceId: string;
+  name?: string;
+  windowId?: number;
+  tabId?: number;
+  ownership?: "agent" | "user" | "inactive";
+  mode?: "human" | "assist" | "ai";
+  updatedAt?: number;
+}
+
+/** SW → popup 的稳定错误形状（错误码来自 InputOwnershipError / TaskSpaceError / 本模块）。 */
+export interface PopupErrorInfo {
+  code: string;
+  message: string;
+  detail?: Record<string, unknown>;
+}
+
 export interface PopupStatus {
   attached: boolean;
   hostReady?: boolean;
@@ -156,6 +220,14 @@ export interface PopupStatus {
   layer?: string;
   profile?: ProfileInfo;
   hostPort?: number;
+  /** 当前/选中的 Task Space 输入权视图；没有活动 Task Space 时为 null。 */
+  input?: PopupInputView | null;
+  /** 可选择的 Task Space（只含窗口仍存在的非 inactive 空间）。 */
+  spaces?: PopupSpaceOption[];
+  /** popup 解析出的目标（供自动化断言）。 */
+  target?: { spaceId?: string; tabId?: number; windowId?: number };
+  /** 读取 input_status 失败时的稳定错误（例如 SPACE_INACTIVE）。 */
+  inputError?: PopupErrorInfo;
 }
 export interface PopupGuide {
   guide: string;
