@@ -269,9 +269,13 @@ function main() {
   const chromeRoot = path.join(tmp, "chrome-root");
   const edgeRoot = path.join(tmp, "edge-root");
   const ffRoot = path.join(tmp, "firefox-root");
+  const braveRoot = path.join(tmp, "brave-root");
+  const chromiumRoot = path.join(tmp, "chromium-root");
   const chromeProfile = makeChromiumRoot(chromeRoot);
   makeEdgeRoot(edgeRoot);
   const ffProfile = makeFirefoxRoot(ffRoot);
+  fs.mkdirSync(braveRoot, { recursive: true });
+  fs.mkdirSync(chromiumRoot, { recursive: true });
 
   const sourceHashBefore = {
     chrome: hashTree(chromeRoot),
@@ -286,6 +290,10 @@ function main() {
     `edge=${edgeRoot}`,
     "--root",
     `firefox=${ffRoot}`,
+    "--root",
+    `brave=${braveRoot}`,
+    "--root",
+    `chromium=${chromiumRoot}`,
   ];
 
   check("discover lists synthetic Chrome/Edge/Firefox profiles", () => {
