@@ -1,6 +1,13 @@
-# One-source-extension prototype
+# One-source-extension prototype (superseded)
 
-This is the minimal "source side only" design:
+> **Status: superseded (2026-10-31).** The product source extension is
+> `extensions/import-source/`; the loopback contract is
+> `scripts/import/contract.mjs`; the local test target is
+> `scripts/import/target/local-target.mjs`. The old `prototype/native-target.mjs`
+> referenced below does not exist in this branch; use the local target instead.
+> This directory is kept only as design history.
+
+This was the minimal "source side only" design:
 
 1. The user installs this extension in the source browser (Chrome/Edge).
 2. The user clicks the toolbar button on the site whose login should move.
@@ -12,7 +19,8 @@ This is the minimal "source side only" design:
 5. The target writes them with its own CookieStore (native interface), not by
    editing the SQLite file and not via a second extension.
 
-Prototype status: extension files and the loopback contract are provided. The
-target side in this prototype is `prototype/native-target.mjs`, which uses CDP
-`Storage.setCookies` against a Chromium test profile as a stand-in for the
-not-yet-implemented Browser CLI native command.
+For the productized flow, see:
+
+- `extensions/import-source/README.md`
+- `docs/browser-data-import-product-2026-10-31.md`
+- `docs/browser-cli-native-cookie-import-interface.md`

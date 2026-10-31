@@ -10,7 +10,9 @@ stale_after: 2027-01-30
 日期：2026-10-30
 关联研究：`docs/browser-data-import-research-2026-10-30.md`
 实现 worktree：`D:\work\wt\bp-import`（分支 `agent/p1-browser-data-import`）
-状态：MVP 已实现并测试；Cookie 端到端桥接仅协议级验证，浏览器内未实测。
+状态：MVP 已实现并测试；2026-10-31 增补 BrowserPilot 侧产品化流程
+（单来源扩展 + 原生目标契约），见 `docs/browser-data-import-product-2026-10-31.md`。
+Browser CLI 原生 CookieStore 目标尚未实现。
 
 ---
 
@@ -106,10 +108,12 @@ discover → select_source → select_items → plan → export → apply → co
    - 目标发现 `EncryptedBookmarks2`/`EncryptedAccountBookmarks2` 非空 → 拒绝。
    - 目标在运行/无法确认 → 拒绝。
    - 历史/自动填充/Cookie/密码不写入目标，记录对应状态。
-6. **cookie_bridge**（可选，需用户显式安装扩展）
+6. **cookie_bridge**（可选，需用户显式安装扩展；2026-10-31 起为原型/遗留路径）
    - 来源扩展用 `chrome.cookies.getAll` 读取用户勾选域名；本地 Broker 内存中转；
    - 目标扩展用 `chrome.cookies.set` 写入当前 Profile；
    - 结果只记录 `applied/failed/failuresByReason`，`loginVerified` 强制 `not_verified`。
+   - 产品流程已改为“单来源扩展 → Browser CLI 原生 CookieStore 目标”的 loopback
+     契约；`scripts/import/cookie-bridge/` 仅作为历史原型保留。
 7. **verify**
    - 用户实际打开网站确认；`verify --status user_confirmed --domain <d> --confirm-user-action`
      才写入 `user_confirmed`。
@@ -393,3 +397,24 @@ PASS result validation rejects impossible counts
 > 官方 ego(lite) 0.6.2.5 实测未完成 Chrome 登录态迁移（Chrome 运行中/源根不可重定向/v20 可能 UAC），
 > Edge 原生 ImportCookies 不需要来源扩展，单来源扩展 + 目标原生写入已验证目标侧。详见
 > `docs/browser-import-competitive-report-2026-10-30.md` 与 `docs/ego-lite-windows-import-test-2026-10-30.md`。
+
+---
+
+## 12. 2026-10-31 产品化增补
+
+本轮把“单来源扩展 + 原生目标”落成 BrowserPilot 侧可运行的流程，并冻结目标契约：
+
+| 能力 | 实现 |
+| --- | --- |
+| 来源扩展（最小权限、显式 consent、勾选域名、仅 loopback、无日志/持久化） | `extensions/import-source/` |
+| 契约 v1（请求/公开任务视图/错误码/三态） | `scripts/import/contract.mjs` |
+| 本地契约目标（memory 测试后端；可选 CDP 测试后端） | `scripts/import/target/local-target.mjs` |
+| 来源 Profile 发现/选择（Chrome/Edge；`Network/Cookies`） | `scripts/import/lib/sources.mjs`、`lib/browsers.mjs` |
+| CLI 授权/进度/失败/取消/重试/重新登录引导 | `scripts/import/browser-data-import.mjs`（`sources`/`connect`/`report`/`confirm-login`） |
+| 仅计数报告与用户显式登录确认 | `scripts/import/lib/report.mjs` |
+| 产品测试（合成 Profile、canary、无泄漏） | `scripts/test-import-product.mjs` |
+| 原生目标接口/最小 patch 设计 | `docs/browser-cli-native-cookie-import-interface.md` |
+
+仍未完成：Browser CLI 进程内 CookieStore 写入端点、原生重启持久化验收、真实浏览器
+内扩展验收、Web Store/策略分发。在这些完成前，本地测试目标（`native=false`）和
+CDP 后端（`mode=test-cdp`）都不得被当作产品闭环通过。
