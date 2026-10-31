@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browser CLI Cookie Bridge (source)</title>
+    <style>
+      body { font: 13px/1.45 system-ui, sans-serif; width: 520px; margin: 0; padding: 12px; color: #1b1b1b; }
+      h1 { font-size: 15px; margin: 0 0 4px; }
+      p.hint { color: #555; margin: 4px 0 10px; }
+      label { display: block; margin: 6px 0 2px; font-weight: 600; }
+      input[type="text"], input[type="password"] { width: 100%; box-sizing: border-box; padding: 5px 6px; }
+      button { margin: 8px 6px 0 0; padding: 6px 10px; }
+      .row { display: flex; gap: 8px; }
+      .row > div { flex: 1; }
+      #summary { margin: 8px 0; padding: 6px 8px; background: #f3f6fa; border-radius: 4px; white-space: pre-wrap; }
+      #groups { max-height: 260px; overflow: auto; border: 1px solid #ddd; margin-top: 6px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 3px 5px; border-bottom: 1px solid #eee; font-size: 12px; }
+      th { position: sticky; top: 0; background: #fafafa; }
+      .warn { color: #9a2b00; }
+      #sendResult { margin-top: 8px; white-space: pre-wrap; }
+      .danger { background: #fff4f0; border: 1px solid #f0c8bb; padding: 6px 8px; border-radius: 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Browser CLI Cookie Bridge（来源浏览器）</h1>
+    <p class="hint">
+      只通过官方 <code>chrome.cookies</code> API 读取本 Profile 的 Cookie，并仅在点击“发送”后发往本机
+      127.0.0.1 的 Broker。不会上传到任何服务器，也不会写入日志。
+    </p>
+
+    <div class="row">
+      <div>
+        <label for="brokerUrl">Broker 地址</label>
+        <input id="brokerUrl" type="text" value="http://127.0.0.1:47831" />
+      </div>
+      <div>
+        <label for="pair">配对码</label>
+        <input id="pair" type="password" placeholder="broker 启动时打印的 6 位数字" />
+      </div>
+    </div>
+    <label for="profileLabel">Profile 标签（仅用于结果说明）</label>
+    <input id="profileLabel" type="text" placeholder="例如：工作 / 个人" />
+
+    <button id="scanBtn">扫描本 Profile 的 Cookie</button>
+    <div id="summary">尚未扫描。</div>
+
+    <div id="listWrap" hidden>
+      <div class="row" style="align-items:center; margin-bottom:4px;">
+        <div><button id="allBtn">全选</button><button id="noneBtn">全不选</button></div>
+      </div>
+      <div id="groups"></div>
+      <label class="danger" style="font-weight:400; margin-top:8px;">
+        <input id="consent" type="checkbox" />
+        <strong>我理解：Cookie 等同于登录凭证。</strong>我只在明确同意时，把勾选域名的 Cookie 发送到本机 Broker；
+        迁移后应验证网站是否仍保持登录，并可在目标浏览器中随时退出登录。
+      </label>
+      <button id="sendBtn">发送勾选域名的 Cookie</button>
+      <div id="sendResult"></div>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

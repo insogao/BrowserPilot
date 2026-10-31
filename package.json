@@ -31,12 +31,23 @@
     "doctor": "node scripts/project-doctor.mjs",
     "registry:build": "node scripts/build-registry.mjs",
     "registry:check": "node scripts/build-registry.mjs --check",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "import:discover": "node scripts/import/browser-data-import.mjs discover",
+    "import:plan": "node scripts/import/browser-data-import.mjs plan",
+    "import:export": "node scripts/import/browser-data-import.mjs export",
+    "import:apply": "node scripts/import/browser-data-import.mjs apply",
+    "import:verify": "node scripts/import/browser-data-import.mjs verify",
+    "import:bridge": "node scripts/import/cookie-bridge/broker.mjs",
+    "test:import": "node scripts/test-browser-data-import.mjs",
+    "test:cookie-bridge": "node scripts/test-cookie-bridge.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",
     "esbuild": "^0.24.0",
     "postject": "^1.0.0-alpha.6",
     "typescript": "^5.6.0"
+  },
+  "engines": {
+    "node": ">=22.5.0"
   }
 }

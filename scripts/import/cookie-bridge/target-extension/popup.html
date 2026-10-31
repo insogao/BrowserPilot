@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Browser CLI Cookie Bridge (target)</title>
+    <style>
+      body { font: 13px/1.45 system-ui, sans-serif; width: 460px; margin: 0; padding: 12px; color: #1b1b1b; }
+      h1 { font-size: 15px; margin: 0 0 4px; }
+      p.hint { color: #555; margin: 4px 0 10px; }
+      label { display: block; margin: 6px 0 2px; font-weight: 600; }
+      input[type="text"], input[type="password"] { width: 100%; box-sizing: border-box; padding: 5px 6px; }
+      button { margin: 8px 6px 0 0; padding: 6px 10px; }
+      .row { display: flex; gap: 8px; }
+      .row > div { flex: 1; }
+      #out { margin-top: 10px; padding: 6px 8px; background: #f3f6fa; border-radius: 4px; white-space: pre-wrap; }
+      .warn { color: #9a2b00; }
+    </style>
+  </head>
+  <body>
+    <h1>Browser CLI Cookie Bridge（目标浏览器）</h1>
+    <p class="hint">
+      从本机 Broker 取回你刚刚明确授权发送的 Cookie，并通过官方
+      <code>chrome.cookies.set</code> 写入<strong>当前 Profile</strong>。不会上传，不写入日志。
+    </p>
+
+    <div class="row">
+      <div>
+        <label for="brokerUrl">Broker 地址</label>
+        <input id="brokerUrl" type="text" value="http://127.0.0.1:47831" />
+      </div>
+      <div>
+        <label for="pair">配对码</label>
+        <input id="pair" type="password" placeholder="broker 启动时打印的 6 位数字" />
+      </div>
+    </div>
+
+    <button id="fetchBtn">获取待导入任务</button>
+    <button id="applyBtn" disabled>应用 Cookie 到当前 Profile</button>
+    <div id="out">尚未获取任务。</div>
+
+    <p class="hint warn">
+      写入 Cookie 不等于登录成功：设备绑定、IP 绑定、WebAuthn/passkey、TLS 客户端证书等会话可能仍然失效。
+      请在目标浏览器中实际打开网站确认；本扩展不会、也不能替你声明“已验证登录”。
+    </p>
+
+    <script src="popup.js"></script>
+  </body>
+</html>

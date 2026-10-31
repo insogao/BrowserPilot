@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Browser CLI Cookie Bridge (target)",
+  "version": "0.1.0",
+  "description": "Receives user-authorized cookies from a local source-browser bridge and writes them into this profile via the official chrome.cookies API.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAy5eWVzoanxEBNKzvI5iNMSJrivYlMV3NZEDbkAeeUJtn37zrF2i28QES94vVtlwa9c5TYOfkGT5uYka5QXV31BTyuadvHZkdc2vM0SIjmlc7EqSk1Arx4RASUvDWQb+kHtAUb/6TaCAcQT2HuXNxwgPp+60TLsiM/9xWpMGu9d1ArTh4dwU6SfwcGsaAaT4tKvx3cfY7IeIURwqmaiPjFBcgfpk+9cORROZr+/lcRdGVGxBPnWrGro3I9KJH2zwstt4L1TsXZI0R1LWjSk6SiTOn+XNXF26Wt/ZiC55Vh7/GU63ARe2TsdMA33FnLNXEG4X3xpwf7rrjuNGdlQUtFwIDAQAB",
+  "permissions": [
+    "cookies"
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Browser CLI Cookie Bridge (target)",
+    "default_popup": "popup.html"
+  }
+}
