@@ -55,6 +55,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const DIST = path.join(root, "dist");
 const FIXTURE_MAIN = path.join(root, "tests", "fixtures", "input-arbitration-main.html");
 const FIXTURE_FRAME = path.join(root, "tests", "fixtures", "input-arbitration-frame.html");
+const FIXTURE_IME = path.join(root, "tests", "fixtures", "ime-inputs.html");
 const REGISTER_PS1 = path.join(root, "native-host", "register.ps1");
 const UNREGISTER_PS1 = path.join(root, "native-host", "unregister.ps1");
 const HOST_NAME = "com.browserpilot.browseragent";
@@ -1279,6 +1280,133 @@ const CASES = [
     },
   },
   {
+    id: "K15",
+    title: "新 tab 立即继承窗口快照；explicit tab override 永久优先于窗口 heartbeat/setOwnership",
+    stage: "kernel",
+    feature: "on",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) {
+        ctx.markBlocked(ready.blocked);
+        return;
+      }
+      const created = await ctx.createUntrackedWindow("k15");
+      check("K15 创建未跟踪窗口且 beacon 就绪", created.ok === true && Number.isInteger(created.tabId), JSON.stringify(created).slice(0, 700));
+      if (!created.ok) {
+        ctx.markBlocked({ code: "untracked-window-failed", deps: ["popup 可创建未跟踪窗口"], reason: JSON.stringify(created) });
+        return;
+      }
+      const attach = await ctx.popupDebuggerAttach(created.tabId);
+      check("K15 popup attach chrome.debugger", attach?.attached === true, JSON.stringify(attach));
+
+      const setWindow = await ctx.apiCall("setOwnership", { target: { windowId: created.windowId }, mode: "ai", version: 1 });
+      check("K15 setOwnership(windowId, ai, 1) accepted", setWindow?.result?.accepted === true && setWindow.result.mode === "ai" && setWindow.result.version === 1, JSON.stringify(setWindow));
+      const snapInitial = await ctx.kernelSnapshotOnTab(created.tabId);
+      check("K15 窗口现有 tab 继承 ai/1", snapInitial.snapshot?.mode === "ai" && snapInitial.snapshot?.version === 1 && snapInitial.snapshot?.stale === false, JSON.stringify(snapInitial));
+
+      // 不 heartbeat，直接在同一窗口新建 tab：插入通知必须同步写入 inherited 状态。
+      const tabA = await ctx.createTabInWindow(created.windowId, "k15a", true);
+      check("K15 同窗口新建 tab A 成功", tabA.ok === true && Number.isInteger(tabA.tabId), JSON.stringify(tabA).slice(0, 700));
+      if (!tabA.ok) {
+        await ctx.popupDebuggerDetach(created.tabId);
+        await ctx.closeWindow(created.windowId);
+        ctx.record("K15", { created, setWindow, snapInitial, tabA });
+        return;
+      }
+      const snapA = await ctx.kernelSnapshotOnTab(tabA.tabId);
+      check(
+        "K15 新 tab A 立即继承 ai/1（无需下一次 heartbeat）",
+        snapA.snapshot?.mode === "ai" && snapA.snapshot?.version === 1 && snapA.snapshot?.stale === false,
+        JSON.stringify(snapA),
+      );
+
+      // 立即投递一次 AI click，证明继承在第一条 debugger 输入之前已生效。
+      // 后台 tab 的 CDP 输入可能被渲染器按不可见丢弃；先激活该 tab，但不改 INPUT API。
+      {
+        const popupForTab = await ctx.ensurePopup();
+        const cdpForTab = await ctx.cdp();
+        await cdpForTab.evaluate(
+          popupForTab.sessionId,
+          "new Promise((resolve) => chrome.tabs.update(" + Number(tabA.tabId) + ", {active: true}, () => resolve({ok: !chrome.runtime.lastError})))",
+        ).catch(() => null);
+        await sleep(400);
+      }
+      await ctx.popupDebuggerAttach(tabA.tabId);
+      const stateA = { ...tabA.state, tabId: tabA.tabId };
+      const inheritedClick = await ctx.kernelMouseClick(stateA);
+      await sleep(500);
+      const clicksAfterInherited = (servers.stateFor(tabA.token) || {}).state?.clicks ?? 0;
+      check(
+        "K15 新 tab A 立即接受 AI click（inherited 状态已生效）",
+        inheritedClick.press.ok === true && inheritedClick.release.ok === true && clicksAfterInherited === 1,
+        JSON.stringify({ inheritedClick, clicks: clicksAfterInherited }),
+      );
+
+      // tab explicit override（与窗口版本空间无关）。
+      const explicit = await ctx.apiCall("setOwnership", { target: { tabId: tabA.tabId }, mode: "human", version: 1 });
+      check("K15 tab A explicit human/1 accepted", explicit?.result?.accepted === true && explicit.result.mode === "human", JSON.stringify(explicit));
+      const snapAExplicit = await ctx.kernelSnapshotOnTab(tabA.tabId);
+      check("K15 tab A 变 human/1（explicit）", snapAExplicit.snapshot?.mode === "human" && snapAExplicit.snapshot?.version === 1, JSON.stringify(snapAExplicit));
+
+      // 窗口写和 heartbeat 都不能覆盖 explicit tab。
+      const setWindow2 = await ctx.apiCall("setOwnership", { target: { windowId: created.windowId }, mode: "ai", version: 2 });
+      check("K15 窗口 setOwnership(ai,2) accepted", setWindow2?.result?.accepted === true && setWindow2.result.version === 2, JSON.stringify(setWindow2));
+      const tabB = await ctx.createTabInWindow(created.windowId, "k15b");
+      check("K15 同窗口新建 tab B 成功", tabB.ok === true && Number.isInteger(tabB.tabId), JSON.stringify(tabB).slice(0, 700));
+      if (tabB.ok) {
+        const snapB = await ctx.kernelSnapshotOnTab(tabB.tabId);
+        check(
+          "K15 tab B 立即继承窗口新快照 ai/2",
+          snapB.snapshot?.mode === "ai" && snapB.snapshot?.version === 2 && snapB.snapshot?.stale === false,
+          JSON.stringify(snapB),
+        );
+      }
+      const hbA = [];
+      for (let i = 0; i < 3; i++) {
+        hbA.push(await ctx.apiCall("heartbeat", { target: { windowId: created.windowId }, version: 2 }));
+      }
+      check("K15 窗口 heartbeat(2) ×3 全部 accepted", hbA.every((r) => r?.result?.ok === true), JSON.stringify(hbA));
+      const snapAAfterHb = await ctx.kernelSnapshotOnTab(tabA.tabId);
+      check(
+        "K15 explicit tab A 在窗口 heartbeat ×3 后仍为 human/1",
+        snapAAfterHb.snapshot?.mode === "human" && snapAAfterHb.snapshot?.version === 1,
+        JSON.stringify(snapAAfterHb),
+      );
+
+      // 激活切换不改变所有权。
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      await cdp.evaluate(
+        popup.sessionId,
+        "new Promise((resolve) => chrome.tabs.update(" + Number(tabA.tabId) + ", {active: true}, () => resolve({ok: !chrome.runtime.lastError})))",
+      ).catch(() => null);
+      const snapAStill = await ctx.kernelSnapshotOnTab(tabA.tabId);
+      check("K15 切换激活 tab 不改变 tab A 的 human/1", snapAStill.snapshot?.mode === "human" && snapAStill.snapshot?.version === 1, JSON.stringify(snapAStill));
+
+      const detach = await ctx.popupDebuggerDetach(tabA.tabId);
+      const closed = await ctx.closeWindow(created.windowId);
+      ctx.record("K15", {
+        created: { windowId: created.windowId, tabId: created.tabId, token: created.token },
+        attach,
+        setWindow,
+        snapInitial,
+        tabA: { tabId: tabA.tabId, token: tabA.token },
+        snapA,
+        inheritedClick,
+        clicksAfterInherited,
+        explicit,
+        snapAExplicit,
+        setWindow2,
+        tabB: tabB.ok ? { tabId: tabB.tabId, token: tabB.token } : tabB,
+        hbA,
+        snapAAfterHb,
+        snapAStill,
+        detach,
+        closed,
+      });
+    },
+  },
+  {
     id: "K1",
     title: "内核 HUMAN：setOwnership(human) 后全部 CDP Input 被拒、版本语义、Runtime.evaluate 边界",
     stage: "kernel",
@@ -1538,7 +1666,7 @@ const CASES = [
   },
   {
     id: "K4",
-    title: "内核 human_presence：事件桥 + 1s human pause（managed-visible 窗口）",
+    title: "内核 human_presence：事件桥 + 30s human latch（managed-visible 窗口）",
     stage: "kernel",
     feature: "on-visible",
     async run(ctx) {
@@ -1567,7 +1695,7 @@ const CASES = [
         });
         return;
       }
-      const tokenValue = token + "-k4";
+      const tokenValue = ctx.token + "-k4";
       const nav = await ctx.navigateInitialTab(ctx.mainOrigin + "/k4?token=" + tokenValue, tokenValue);
       check("K4 可见窗口的 tab 已导航到 fixture（beacon 就绪）", nav.ok === true, JSON.stringify(nav).slice(0, 800));
       if (!nav.ok) {
@@ -1606,13 +1734,22 @@ const CASES = [
       );
       check("K4 受信扩展页面可注册 onHumanPresence", listenerSetup?.ok === true, JSON.stringify(listenerSetup));
 
-      await ctx.attachOn(key);
+      // 冷启动可见 tab 不在 Task Space 中；popup 已 attach chrome.debugger，
+      // 直接用 tabId 注入，不经过 ctx.ai（后者需要真实 space）。
       const assist = await ctx.bumpMode(key, "assist");
       check("K4 setOwnership(assist) accepted", assist.bumped?.result?.accepted === true, JSON.stringify(assist));
 
       const before = await ctx.probe(key);
-      const human = await ctx.humanClick(key, before.rects.btn);
-      await sleep(800);
+      // The real keyboard path (SendKeys -> TSF) is more reliable than hitting a
+      // stale render-widget HWND after navigation. Focus the input via CDP, then
+      // send a real OS key; the kernel still sees a trusted human key event.
+      const humanTypeReal = async () => {
+        await cdp.evaluate(popup.sessionId, "window.__bpPresence = []").catch(() => null);
+        const clicked = await ctx.humanClick(key, before.rects.btn, { real: true });
+        await sleep(900);
+        return clicked;
+      };
+      const human = await humanTypeReal();
       const presence = await cdp.evaluate(popup.sessionId, "(window.__bpPresence || []).slice(-8)");
       const winState = await win32.call("state", { hwnd: ctx.windows[key].hwnd });
       ctx.record("K4", { show, listenerSetup, assist, before, human, presence, window: winState.window });
@@ -1627,33 +1764,226 @@ const CASES = [
         return;
       }
       check("K4 人类输入产生 onHumanPresence 事件", presence.length >= 1, JSON.stringify(presence));
-      check("K4 onHumanPresence 携带 tabId/kind/at", presence.every((e) => Number(e?.tabId) === tabId && typeof e?.kind === "string" && typeof e?.at === "number"), JSON.stringify(presence));
+      check("K4 onHumanPresence 携带 tabId/kind/at", presence.length > 0 && presence.every((e) => Number(e?.tabId) === tabId && typeof e?.kind === "string" && typeof e?.at === "number"), JSON.stringify(presence));
       const snapAfterPresence = await ctx.kernelSnapshot(key);
       check("K4 presence 不改变 mode（内核不擅自迁移所有权）", snapAfterPresence.snapshot?.mode === "assist", JSON.stringify(snapAfterPresence));
 
       const grant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 2, ttlMs: 10000 });
       check("K4 pause 测试前 grant granted（2 单位）", grant?.result?.granted === true, JSON.stringify(grant));
-      const human2 = await ctx.humanClick(key, before.rects.btn);
-      const pausedClick = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      const human2 = await humanTypeReal();
+      const popupClick = () => ctx.kernelMouseClick({ ...before, tabId });
+      const pausedClick = await popupClick();
       const afterPaused = await ctx.probe(key);
+      const kernelRejected = /InputOwnership: debugger input rejected/i;
       check(
         "K4 人类输入后 1s 内的 AI click 被暂停（human pause）",
-        human2.landed === true && pausedClick.ok === false && /InputOwnership: debugger input rejected/i.test(String(pausedClick.error)),
+        human2.landed === true && pausedClick.rejected === true && kernelRejected.test(String(pausedClick.error)),
         JSON.stringify({ human2, pausedClick, clicks: afterPaused.clicks }),
       );
+      // Patch 032: the latch is 30s, so an unresponsive SW cannot re-grab input
+      // after 1s. A responsive extension must explicitly acknowledge presence
+      // with a per-tab setOwnership (same version is enough) to release it.
       await sleep(1300);
-      const afterPause = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      const clickSecond = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
-      const clickThird = await ctx.ai(key, "click", { selector: "#btn", cursor: false });
+      const afterLatch = await popupClick();
+      check(
+        "K4 人类输入后 >1s（1.3s）AI click 仍被 30s latch 拒绝（SW 失联不抢输入）",
+        afterLatch.rejected === true && kernelRejected.test(String(afterLatch.error)),
+        JSON.stringify(afterLatch),
+      );
+      const snapBeforeClear = await ctx.kernelSnapshot(key);
+      const clearLatch = await ctx.apiCall("setOwnership", {
+        target: { tabId },
+        mode: "assist",
+        version: snapBeforeClear.snapshot.version,
+      });
+      check(
+        "K4 显式 setOwnership（同版本）清除 human latch",
+        clearLatch?.result?.accepted === true,
+        JSON.stringify({ snapBeforeClear, clearLatch }),
+      );
+      const afterPause = await popupClick();
+      const clickSecond = await popupClick();
+      const clickThird = await popupClick();
       await sleep(450);
       const final = await ctx.probe(key);
       check(
-        "K4 pause 不消耗 grant：恢复后 2 次 click 成功，第 3 次被拒",
-        afterPause.ok === true && clickSecond.ok === true && clickThird.ok === false,
+        "K4 清除 latch 后不改 grant：2 次 click 成功，第 3 次被拒",
+        afterPause.press.ok === true && clickSecond.press.ok === true && clickThird.rejected === true,
         JSON.stringify({ afterPause, clickSecond, clickThird, clicks: final.clicks }),
       );
-      ctx.record("K4", { snapAfterPresence, grant, pausedClick, afterPause, clickSecond, clickThird, final });
+      ctx.record("K4", { snapAfterPresence, grant, pausedClick, afterLatch, clearLatch, afterPause, clickSecond, clickThird, final });
       await ctx.bumpMode(key, "ai").catch(() => undefined);
+    },
+  },
+  {
+    id: "IME",
+    title: "真实搜狗 TSF IME：input/textarea/contenteditable、候选词、退格、HUMAN/ASSIST",
+    stage: "kernel",
+    feature: "on-visible",
+    async run(ctx) {
+      const ready = await ctx.kernelApiReady();
+      if (!ready.ok) { ctx.markBlocked(ready.blocked); return; }
+      const visibleWindow = await ctx.findColdStartVisibleWindow(20000);
+      check("IME 冷启动 user-explicit-show 呈现可见窗口", !!visibleWindow.window, JSON.stringify(visibleWindow.window));
+      if (!visibleWindow.window || !visibleWindow.widget) {
+        ctx.markBlocked({ code: "visible-window-unavailable", deps: ["可见 managed 窗口 + render widget"], reason: JSON.stringify(visibleWindow) });
+        return;
+      }
+      const tokenValue = ctx.token + "-ime";
+      const widget = visibleWindow.widget.hwnd;
+      const cdp = await ctx.cdp();
+      const popup = await ctx.ensurePopup();
+      const url = ctx.mainOrigin + "/ime-inputs?token=" + tokenValue;
+      // K4 and IME share the on-visible session. Do not rely on "first newtab"
+      // (it can be a tab in a different, non-visible window): create the IME
+      // tab in the window that holds the cold-start visible K4 fixture.
+      const created = await cdp.evaluate(
+        popup.sessionId,
+        "new Promise((resolve) => { try { chrome.windows.getAll({populate: true}, (ws) => { const w = (ws || []).find((x) => x.type === 'normal' && (x.tabs || []).some((t) => String(t.title || '').startsWith('ia-'))) || (ws || []).find((x) => x.focused) || (ws || [])[0]; if (!w) { resolve({ok:false, reason:'no-window'}); return; } chrome.windows.update(w.id, {focused: true}, () => { chrome.tabs.create({windowId: w.id, url: " + JSON.stringify(url) + ", active: true}, (tab) => resolve({ok: !chrome.runtime.lastError && !!tab, tabId: tab ? tab.id : null, windowId: tab ? tab.windowId : null, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); }); }); } catch (e) { resolve({ok:false, error:String((e && e.message) || e)}); } })",
+        { timeoutMs: 30000 },
+      ).catch((error) => ({ ok: false, error: String(error) }));
+      const nav = { ok: created?.ok === true, tabId: created?.tabId, windowId: created?.windowId, created };
+      check("IME 在可见窗口新建 IME tab", nav.ok === true, JSON.stringify(nav));
+      if (!nav.ok) { ctx.markBlocked({ code: "ime-navigation-failed", deps: ["tabs API 在可见窗口新建 tab"], reason: JSON.stringify(nav) }); return; }
+      const tabId = nav.tabId;
+      let target = null;
+      for (let i = 0; i < 100 && !target; i++) {
+        target = await cdp.findTarget("ime-inputs", "page").catch(() => null);
+        if (!target) await sleep(150);
+      }
+      check("IME fixture target 已就绪", !!target, JSON.stringify(target));
+      if (!target) { ctx.markBlocked({ code: "ime-target-missing", deps: ["IME fixture 页面 target"], reason: JSON.stringify(created) }); return; }
+      const sess = await cdp.attach(target.targetId);
+      const imeEval = async (expr) => await cdp.evaluate(sess, expr, { timeoutMs: 10000 });
+      const readIme = async () => {
+        const raw = await imeEval("JSON.stringify(window.__ime())");
+        return JSON.parse(raw);
+      };
+      const rects = await imeEval("(()=>{const r={};for(const id of ['in','ta','ce']){const b=document.getElementById(id).getBoundingClientRect();r[id]={x:b.x,y:b.y,w:b.width,h:b.height};}return JSON.stringify(r);})()");
+      const rect = JSON.parse(rects);
+      const clickField = async (id) => {
+        const r = rect[id];
+        return await win32.call("realMouse", { hwnd: widget, x: Math.round(r.x + r.w / 2), y: Math.round(r.y + r.h / 2) });
+      };
+      const realKey = async (vk) => {
+        const down = await win32.call("realKey", { hwnd: widget, vk, down: true });
+        await sleep(25);
+        const up = await win32.call("realKey", { hwnd: widget, vk, down: false });
+        await sleep(120);
+        return { down, up };
+      };
+      const typeLetters = async (text) => {
+        // WScript.Shell.SendKeys goes through the real OS keyboard input path
+        // (including TSF/IME), unlike a page-level DOM event.
+        await win32.call("sendKeys", { text });
+        await sleep(250);
+      };
+      const commitCandidate = async () => {
+        await win32.call("sendKeys", { text: " " }); // space commits the first candidate
+        await sleep(500);
+      };
+
+      const before = await readIme();
+      check("IME fixture 就绪且三个输入面存在", before && before.values && "in" in before.values && "ta" in before.values && "ce" in before.values, JSON.stringify(before));
+
+      // input
+      const clickIn = await clickField("in");
+      await imeEval("document.getElementById('in').focus(); true").catch(() => null);
+      await sleep(400);
+      const afterFocus = await readIme();
+      check("IME 点击后 input 获得焦点", afterFocus.active === "in", JSON.stringify({ clickIn, active: afterFocus.active, focus: afterFocus.focus }));
+      await typeLetters("n");
+      const firstKey = { down: { ok: true }, up: { ok: true } };
+      const afterFirstKey = await readIme();
+      check("IME 真实按键到达页面", afterFirstKey.keydown >= 1 || String(afterFirstKey.values.in).length > 0, JSON.stringify({ firstKey, state: afterFirstKey }));
+      await typeLetters("ihao");
+      await commitCandidate();
+      let s = await readIme();
+      if (!/[一-鿿]/.test(String(s.values.in))) {
+        await win32.call("sendKeys", { text: "1" }); // fallback: candidate 1
+        await sleep(300);
+        s = await readIme();
+      }
+      check("IME input 真实 TSF 输入得到中文", /[一-鿿]/.test(String(s.values.in)), JSON.stringify({ value: s.values.in, composition: s.composition, keys: s.keys.slice(-8) }));
+      const inBeforeBack = String(s.values.in);
+      await win32.call("sendKeys", { text: "{BACKSPACE}" }); // backspace
+      await sleep(350);
+      s = await readIme();
+      if (String(s.values.in).length >= inBeforeBack.length) {
+        await win32.call("sendKeys", { text: "{BS}" }); // WScript SendKeys alternate syntax
+        await sleep(350);
+        s = await readIme();
+      }
+      check("IME input 退格生效", String(s.values.in).length < inBeforeBack.length, JSON.stringify({ before: inBeforeBack, after: s.values.in }));
+
+      // textarea
+      await clickField("ta");
+      await imeEval("document.getElementById('ta').focus(); true").catch(() => null);
+      await sleep(250);
+      await typeLetters("nihao");
+      await commitCandidate();
+      s = await readIme();
+      check("IME textarea 真实 TSF 输入得到中文", /[一-鿿]/.test(String(s.values.ta)), JSON.stringify({ value: s.values.ta, composition: s.composition }));
+
+      // contenteditable
+      await clickField("ce");
+      await imeEval("document.getElementById('ce').focus(); true").catch(() => null);
+      await sleep(250);
+      await typeLetters("nihao");
+      await commitCandidate();
+      s = await readIme();
+      check("IME contenteditable 真实 TSF 输入得到中文", /[一-鿿]/.test(String(s.values.ce)), JSON.stringify({ value: s.values.ce, composition: s.composition }));
+
+      // HUMAN: AI insertText rejected, human key still lands.
+      const snapForHuman = await ctx.kernelSnapshotOnTab(tabId);
+      const humanVersion = Number(snapForHuman.snapshot?.version || 0) + 1;
+      const human = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: humanVersion });
+      check("IME setOwnership(human, version+1) accepted", human?.result?.accepted === true, JSON.stringify({ snapForHuman, human }));
+      await ctx.popupDebuggerAttach(tabId);
+      const aiInHuman = await ctx.popupDebuggerSend(tabId, "Input.insertText", { text: "AI-SHOULD-NOT" });
+      const kernelRejected = /InputOwnership: debugger input rejected/i;
+      check("IME HUMAN：AI insertText 被内核拒绝", aiInHuman.ok === false && kernelRejected.test(String(aiInHuman.lastError || aiInHuman.error)), JSON.stringify(aiInHuman));
+      await clickField("in");
+      await imeEval("document.getElementById('in').focus(); true").catch(() => null);
+      const humanBefore = (await readIme()).values.in;
+      await win32.call("sendKeys", { text: "a" });
+      await sleep(650); // let the real input event and human_presence reach the kernel
+      s = await readIme();
+      check("IME HUMAN：真实人类按键仍可输入", String(s.values.in) !== humanBefore, JSON.stringify({ before: humanBefore, after: s.values.in }));
+
+      // ASSIST: one grant allows exactly one AI insertText, then rejects.
+      const snapForAssist = await ctx.kernelSnapshotOnTab(tabId);
+      const assistVersion = Number(snapForAssist.snapshot?.version || 0) + 1;
+      const assist = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "assist", version: assistVersion });
+      check("IME setOwnership(assist, version+1) accepted", assist?.result?.accepted === true, JSON.stringify({ snapForAssist, assist }));
+      const grant = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      check("IME ASSIST grant(1) granted", grant?.result?.granted === true, JSON.stringify(grant));
+      const aiAssist = await ctx.popupDebuggerSend(tabId, "Input.insertText", { text: "-AI" });
+      s = await readIme();
+      await sleep(450); // text burst window is 300ms; make the second call a separate gesture
+      const aiSecond = await ctx.popupDebuggerSend(tabId, "Input.insertText", { text: "-MORE" });
+      check("IME ASSIST：grant 内 AI insertText 落地一次，第二次被拒", aiAssist.ok === true && /-AI/.test(String(s.values.in)) && aiSecond.ok === false, JSON.stringify({ aiAssist, aiSecond, value: s.values.in }));
+
+      // Recovery: HUMAN again, then explicit ASSIST same version clears latch.
+      const snapForHuman2 = await ctx.kernelSnapshotOnTab(tabId);
+      const human2Version = Number(snapForHuman2.snapshot?.version || 0) + 1;
+      const human2 = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "human", version: human2Version });
+      check("IME HUMAN 恢复 accepted", human2?.result?.accepted === true, JSON.stringify({ snapForHuman2, human2 }));
+      await clickField("in");
+      await imeEval("document.getElementById('in').focus(); true").catch(() => null);
+      await win32.call("sendKeys", { text: "b" }); // real human event creates the 30s latch
+      await sleep(650); // do not clear the latch before the human event lands
+      const snapForHuman3 = await ctx.kernelSnapshotOnTab(tabId);
+      const human3Version = Number(snapForHuman3.snapshot?.version || 0) + 1;
+      const human3 = await ctx.apiCall("setOwnership", { target: { tabId }, mode: "assist", version: human3Version });
+      const grant2 = await ctx.apiCall("grantInput", { target: { tabId }, actions: 1, ttlMs: 8000 });
+      const aiRecover = await ctx.popupDebuggerSend(tabId, "Input.insertText", { text: "-OK" });
+      check("IME ASSIST 恢复：显式 setOwnership 后 AI insertText 成功", human3?.result?.accepted === true && grant2?.result?.granted === true && aiRecover.ok === true, JSON.stringify({ human3, grant2, aiRecover }));
+
+      const final = await readIme().catch((error) => ({ error: String(error) }));
+      const detach = await ctx.popupDebuggerDetach(tabId);
+      const closed = await ctx.closeTab(tabId);
+      ctx.record("IME", { visibleWindow: visibleWindow.window, nav, tabId, before, final, human, aiInHuman, assist, grant, aiAssist, aiSecond, human2, human3, grant2, aiRecover, detach, closed });
     },
   },
 ];
@@ -1730,6 +2060,18 @@ public static class BpW {
   [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr hWnd, ref POINT pt);
   [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr hWnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
   [DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
+  [DllImport("user32.dll")] public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+  [DllImport("user32.dll")] public static extern IntPtr GetAncestor(IntPtr hWnd, uint flags);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int cmd);
+  [DllImport("user32.dll")] public static extern IntPtr SetFocus(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern IntPtr GetFocus();
+  [DllImport("user32.dll")] public static extern IntPtr SetActiveWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool attach);
+  [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr hWnd, StringBuilder text, int max);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr hWnd, StringBuilder text, int max);
@@ -1854,6 +2196,63 @@ while ($script:running) {
         $okPost = [BpW]::PostMessageW($h, [uint32]$msg, [IntPtr]([int64]$wp), (Mouse-LParam $x $y))
         Reply ([ordered]@{ ok = [bool]$okPost; msg = $msg; x = $x; y = $y })
       }
+      'realMouse' {
+        $h = [System.IntPtr]([int64]$cmd.hwnd)
+        $root = [BpW]::GetAncestor($h, 2)
+        [void][BpW]::ShowWindow($root, 5)
+        [void][BpW]::SetWindowPos($root, [System.IntPtr]::Zero, 0, 0, 0, 0, [uint32](0x0040 -bor 0x0002 -bor 0x0001))
+        $fgOk = [BpW]::SetForegroundWindow($root)
+        [void][BpW]::SetActiveWindow($root)
+        [void][BpW]::SetFocus($h)
+        Start-Sleep -Milliseconds 80
+        $pt = [BpW+POINT]::new()
+        $pt.X = [int]$cmd.x; $pt.Y = [int]$cmd.y
+        [void][BpW]::ClientToScreen($h, [ref]$pt)
+        $okPos = [BpW]::SetCursorPos($pt.X, $pt.Y)
+        Start-Sleep -Milliseconds 60
+        [BpW]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 60
+        [BpW]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+        Reply ([ordered]@{ ok = [bool]$okPos; fgOk = [bool]$fgOk; screen = @($pt.X, $pt.Y); root = $root.ToInt64(); foreground = ([BpW]::GetForegroundWindow()).ToInt64() })
+      }
+      'sendKeys' {
+        if ($cmd.hwnd) {
+          $h = [System.IntPtr]([int64]$cmd.hwnd)
+          $root = [BpW]::GetAncestor($h, 2)
+          [void][BpW]::ShowWindow($root, 5)
+          [void][BpW]::SetWindowPos($root, [System.IntPtr]::Zero, 0, 0, 0, 0, [uint32](0x0040 -bor 0x0002 -bor 0x0001))
+          [void][BpW]::SetForegroundWindow($root)
+          [void][BpW]::SetActiveWindow($root)
+          Start-Sleep -Milliseconds 80
+        }
+        $wshell = New-Object -ComObject WScript.Shell
+        $text = [string]$cmd.text
+        $wshell.SendKeys($text)
+        Reply ([ordered]@{ ok = $true; text = $text; foreground = ([BpW]::GetForegroundWindow()).ToInt64() })
+      }
+      'realKey' {
+        $h = [System.IntPtr]([int64]$cmd.hwnd)
+        $root = [BpW]::GetAncestor($h, 2)
+        [void][BpW]::ShowWindow($root, 5)
+        [void][BpW]::SetWindowPos($root, [System.IntPtr]::Zero, 0, 0, 0, 0, [uint32](0x0040 -bor 0x0002 -bor 0x0001))
+        $rootPid = [uint32]0
+        $rootThread = [BpW]::GetWindowThreadProcessId($root, [ref]$rootPid)
+        $selfThread = [BpW]::GetCurrentThreadId()
+        [void][BpW]::AttachThreadInput($selfThread, $rootThread, $true)
+        [void][BpW]::SetForegroundWindow($root)
+        [void][BpW]::SetActiveWindow($root)
+        [void][BpW]::SetFocus($h)
+        Start-Sleep -Milliseconds 80
+        $focusNow = ([BpW]::GetFocus()).ToInt64()
+        $vk = [int]$cmd.vk
+        $scan = [BpW]::MapVirtualKeyW([uint32]$vk, 0)
+        $flags = 0
+        if (-not [bool]$cmd.down) { $flags = 2 }
+        [BpW]::keybd_event([byte]$vk, [byte]$scan, [uint32]$flags, [UIntPtr]::Zero)
+        $focusAfter = ([BpW]::GetFocus()).ToInt64()
+        [void][BpW]::AttachThreadInput($selfThread, $rootThread, $false)
+        Reply ([ordered]@{ ok = $true; vk = $vk; scan = $scan; root = $root.ToInt64(); foreground = ([BpW]::GetForegroundWindow()).ToInt64(); focus = $focusAfter; focusBefore = $focusNow })
+      }
       'wheel' {
         $h = [System.IntPtr]([int64]$cmd.hwnd)
         $pt = [BpW+POINT]::new()
@@ -1969,6 +2368,7 @@ const pageStates = new Map();
 function startServers() {
   const mainHtml = fs.readFileSync(FIXTURE_MAIN, "utf8");
   const frameHtml = fs.readFileSync(FIXTURE_FRAME, "utf8");
+  const imeHtml = fs.readFileSync(FIXTURE_IME, "utf8");
   pageStates.clear();
   const handler = (body) => (req, res) => {
     const url = new URL(req.url || "/", "http://127.0.0.1");
@@ -2005,6 +2405,11 @@ function startServers() {
     if (url.pathname === "/favicon.ico") {
       res.writeHead(204);
       res.end();
+      return;
+    }
+    if (url.pathname === "/ime-inputs") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(imeHtml);
       return;
     }
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
@@ -2686,6 +3091,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
 
   const ctx = {
     feature,
+    token,
     session: sessionReport,
     mainOrigin: servers.mainOrigin,
     frameOrigin: servers.frameOrigin,
@@ -2804,7 +3210,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
      * 一个窗口可能同时存在多个 legacy widget（旧 tab/隐藏 widget），因此逐个候选尝试，
      * 直到页面状态真的变化为止；返回实际生效的候选与尝试次数（作为证据）。
      */
-    async humanClick(spaceKey, rect, { expect } = {}) {
+    async humanClick(spaceKey, rect, { expect, real = false, useKnownWidget = false } = {}) {
       const win = ctx.windows[spaceKey];
       if (!win?.hwnd) throw new Error("no window for " + spaceKey);
       const token = ctx.spaces[spaceKey].token;
@@ -2821,21 +3227,30 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       const dpr = Number(probe0.viewport.dpr) || 1;
       const x = Math.round((Number(rect.x) + Number(rect.w) / 2) * dpr);
       const y = Math.round((Number(rect.y) + Number(rect.h) / 2) * dpr);
-      const candidates = await findWidgetCandidates(win.hwnd);
+      const candidates = (useKnownWidget && real && win.widgetHwnd)
+        ? [{ hwnd: win.widgetHwnd, visible: true, clientWidth: 0, clientHeight: 0 }]
+        : await findWidgetCandidates(win.hwnd);
       // 默认判定：点击带来了任何可观察变化（点击计数或焦点变化）。
       // 仅看 clicks 会把“点击输入框（只改焦点）”误判为失败。
       const isBetter = expect || ((state) => state.clicks > probe0.clicks || state.activeElement !== probe0.activeElement);
       const attempts = [];
       for (const candidate of candidates) {
         const since = Date.now();
-        await win32.call("mouse", { hwnd: candidate.hwnd, type: "move", x, y, buttons: 0 });
-        await sleep(50);
-        const down = await win32.call("mouse", { hwnd: candidate.hwnd, type: "down", x, y });
-        await sleep(50);
-        const up = await win32.call("mouse", { hwnd: candidate.hwnd, type: "up", x, y });
+        let down, up;
+        let realResult = null;
+        if (real) {
+          realResult = await win32.call("realMouse", { hwnd: candidate.hwnd, x, y });
+          down = realResult; up = realResult;
+        } else {
+          await win32.call("mouse", { hwnd: candidate.hwnd, type: "move", x, y, buttons: 0 });
+          await sleep(50);
+          down = await win32.call("mouse", { hwnd: candidate.hwnd, type: "down", x, y });
+          await sleep(50);
+          up = await win32.call("mouse", { hwnd: candidate.hwnd, type: "up", x, y });
+        }
         const state = await readState(since);
         const landed = Boolean(state && isBetter(state));
-        attempts.push({ hwnd: candidate.hwnd, visible: candidate.visible, w: candidate.clientWidth, h: candidate.clientHeight, down: down?.ok, up: up?.ok, landed });
+        attempts.push({ hwnd: candidate.hwnd, visible: candidate.visible, w: candidate.clientWidth, h: candidate.clientHeight, down: down?.ok, up: up?.ok, realResult, landed });
         if (landed) {
           win.widgetHwnd = candidate.hwnd;
           ctx.lastProbeAt[spaceKey] = Number(state.at);
@@ -2852,7 +3267,9 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       if (!/^[a-z0-9]+$/i.test(text)) throw new Error("humanType 只接受 [a-z0-9]：" + text);
       const token = ctx.spaces[spaceKey].token;
       const base = await ctx.probe(spaceKey);
-      const candidates = await findWidgetCandidates(win.hwnd);
+      const candidates = (useKnownWidget && real && win.widgetHwnd)
+        ? [{ hwnd: win.widgetHwnd, visible: true, clientWidth: 0, clientHeight: 0 }]
+        : await findWidgetCandidates(win.hwnd);
       const knownIndex = candidates.findIndex((c) => c.hwnd === win.widgetHwnd);
       if (knownIndex > 0) candidates.unshift(candidates.splice(knownIndex, 1)[0]);
       const attempts = [];
@@ -3048,7 +3465,7 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
       return { window: null, allWindows: last };
     },
     /** 用 popup 的 chrome.tabs API 找到初始 tab 并导航到 fixture。 */
-    async navigateInitialTab(url, tokenValue, timeoutMs = 30000) {
+    async navigateInitialTab(url, tokenValue, timeoutMs = 30000, expectBeacon = true) {
       const popup = await ctx.ensurePopup();
       const cdp = await ctx.cdp();
       const found = await cdp.evaluate(
@@ -3064,6 +3481,10 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
         popup.sessionId,
         "new Promise((resolve) => chrome.tabs.update(" + Number(found.tabId) + ", {url: " + JSON.stringify(url) + "}, () => resolve({ok: !chrome.runtime.lastError, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})))",
       );
+      if (!expectBeacon) {
+        await sleep(2500);
+        return { ok: true, tabId: found.tabId, windowId: found.windowId };
+      }
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
         const entry = servers.stateFor(tokenValue);
@@ -3108,6 +3529,29 @@ async function runSessionWithCleanup({ feature, casesToRun }) {
         "new Promise((resolve) => { try { chrome.windows.create({url: " + JSON.stringify(url) + ", focused: false, state: 'normal'}, (win) => resolve({ok: !chrome.runtime.lastError, windowId: win ? win.id : null, tabId: win && win.tabs && win.tabs[0] ? win.tabs[0].id : null, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
       const created = await cdp.evaluate(popup.sessionId, expr, { timeoutMs: 30000 }).catch((error) => ({ ok: false, error: String(error) }));
       if (created?.ok !== true) return { ok: false, created };
+      const deadline = Date.now() + 30000;
+      while (Date.now() < deadline) {
+        const entry = servers.stateFor(tokenValue);
+        if (entry?.state?.token === tokenValue) {
+          return { ok: true, tabId: created.tabId, windowId: created.windowId, state: entry.state, token: tokenValue, url };
+        }
+        await sleep(150);
+      }
+      return { ok: false, created, reason: "beacon-not-ready", token: tokenValue, url };
+    },
+    /**
+     * 在指定窗口里新建一个 tab（同窗口），用于 K15 即时继承验证。
+     * 不经过扩展的 Task Space 同步；新 tab 只应继承窗口账本。
+     */
+    async createTabInWindow(windowId, name, active = false) {
+      const popup = await ctx.ensurePopup();
+      const cdp = await ctx.cdp();
+      const tokenValue = token + "-newtab-" + name;
+      const url = servers.mainOrigin + "/" + name + "?token=" + tokenValue;
+      const expr =
+        "new Promise((resolve) => { try { chrome.tabs.create({windowId: " + Number(windowId) + ", url: " + JSON.stringify(url) + ", active: " + (active ? "true" : "false") + "}, (tab) => resolve({ok: !chrome.runtime.lastError, tabId: tab ? tab.id : null, windowId: tab ? tab.windowId : null, lastError: chrome.runtime.lastError ? chrome.runtime.lastError.message : null})); } catch (e) { resolve({ok: false, error: String((e && e.message) || e)}); } })";
+      const created = await cdp.evaluate(popup.sessionId, expr, { timeoutMs: 30000 }).catch((error) => ({ ok: false, error: String(error) }));
+      if (created?.ok !== true) return { ok: false, created, token: tokenValue, url };
       const deadline = Date.now() + 30000;
       while (Date.now() < deadline) {
         const entry = servers.stateFor(tokenValue);
