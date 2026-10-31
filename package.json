@@ -51,7 +51,9 @@
     "doctor": "node scripts/project-doctor.mjs",
     "registry:build": "node scripts/build-registry.mjs",
     "registry:check": "node scripts/build-registry.mjs --check",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test:rc:release": "node scripts/test-release-candidate-e2e.mjs",
+    "test:rc:release:matrix": "node scripts/test-release-candidate-e2e.mjs --matrix"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.280",
