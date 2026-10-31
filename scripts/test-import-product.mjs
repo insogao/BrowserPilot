@@ -196,6 +196,23 @@ function runCli(args, { expect = 0, env = {} } = {}) {
   return { ...res, combined: `${res.stdout || ""}\n${res.stderr || ""}` };
 }
 
+// Async variant for tests that run a target server in this process: spawnSync
+// would block the event loop and the in-process target could not answer.
+function runCliAsync(args, { env = {} } = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, ...args], {
+      env: { ...process.env, BP_IMPORT_TEST_MODE: "1", ...env },
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.stderr.on("data", (d) => (stderr += d));
+    child.on("close", (status) => resolve({ status, stdout, stderr, combined: `${stdout}\n${stderr}` }));
+  });
+}
+
 async function request(base, pathname, { method = "GET", pair, origin, body, contentType } = {}) {
   const headers = {};
   if (pair) headers["x-bp-pair"] = pair;
@@ -946,6 +963,43 @@ async function main() {
       { expect: 2 },
     );
     assert.ok(noPair.combined.includes("--pair"));
+
+    const badFormat = runCli(
+      [
+        "connect",
+        "--source",
+        "chrome:Default",
+        "--endpoint",
+        "http://127.0.0.1:1",
+        "--pair",
+        "12345",
+        "--json",
+        ...roots.rootArgs,
+      ],
+      { expect: 2 },
+    );
+    assert.ok(badFormat.combined.includes("6 digits"));
+  });
+
+  await check("CLI rejects a wrong pairing code before waiting for a job", async () => {
+    const tPair = startLocalTarget({ port: 0, pair: "999999", backend: createMemoryBackend(), log: () => {} });
+    await tPair.listening;
+    const res = await runCliAsync([
+      "connect",
+      "--source",
+      "chrome:Default",
+      "--endpoint",
+      tPair.endpoint,
+      "--pair",
+      "000000",
+      "--json",
+      ...roots.rootArgs,
+    ]);
+    await tPair.close();
+    assert.equal(res.status, 3, `stdout:\n${res.stdout}\nstderr:\n${res.stderr}`);
+    const parsed = JSON.parse(res.stdout);
+    assert.equal(parsed.ok, false);
+    assert.equal(parsed.error, "pairing-required");
   });
 
   await check("CLI confirm-login refuses automatic confirmation and never upgrades cookie state", () => {

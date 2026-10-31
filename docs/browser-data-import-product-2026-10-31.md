@@ -174,7 +174,7 @@ node scripts/import/browser-data-import.mjs confirm-login `
 | `scripts/import/lib/verify.mjs` | 抽出可复用的 `applyLoginCheck` |
 | `scripts/import/browser-data-import.mjs` | 新增 `sources`/`connect`/`report`/`confirm-login` |
 | `scripts/import/lib/browsers.mjs` | 修正现代 Chromium `Network/Cookies` 发现 |
-| `scripts/test-import-product.mjs` | 32 项产品级测试 |
+| `scripts/test-import-product.mjs` | 33 项产品级测试 |
 | `scripts/test-browser-data-import.mjs` | 测试根隔离扩展到 Brave/Chromium |
 
 没有修改 Chromium 源码、没有新增 Chromium patch、没有修改
@@ -191,7 +191,7 @@ $ node scripts/import/sync-extension-contract.mjs --check
 contract copy is in sync
 
 $ node scripts/test-import-product.mjs
-32 passed, 0 failed
+33 passed, 0 failed
 
 $ node scripts/test-browser-data-import.mjs
 15 passed, 0 failed

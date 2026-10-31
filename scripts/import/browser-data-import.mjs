@@ -555,6 +555,12 @@ async function cmdConnect(args) {
         else console.error(`target unavailable: ${capabilities.error}`);
         return 3;
       }
+      const pairingProbe = await client.status();
+      if (!pairingProbe.ok) {
+        if (args.json) printJson({ ok: false, error: pairingProbe.error });
+        else console.error(`target pairing failed: ${pairingProbe.error}`);
+        return 3;
+      }
       endpoint = client.endpoint;
       pair = args.pair;
       return await runConnectLoop({
@@ -593,6 +599,12 @@ async function cmdConnect(args) {
     if (!capabilities.ok) {
       if (args.json) printJson({ ok: false, error: capabilities.error });
       else console.error(`local target unavailable: ${capabilities.error}`);
+      return 3;
+    }
+    const pairingProbe = await client.status();
+    if (!pairingProbe.ok) {
+      if (args.json) printJson({ ok: false, error: pairingProbe.error });
+      else console.error(`local target pairing failed: ${pairingProbe.error}`);
       return 3;
     }
     endpoint = client.endpoint;
