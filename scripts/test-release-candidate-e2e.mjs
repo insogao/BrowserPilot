@@ -229,7 +229,8 @@ const FLAG_RULES = [
   { re: /^--disable-component-update$/, klass: "profile-hygiene", why: "no component updates during the run" },
   { re: /^--enable-logging=stderr$/, klass: "diagnostics", why: "captures FATAL/CHECK/crash lines" },
   { re: /^--v=0$/, klass: "diagnostics", why: "WARNING+ logging only; no rendering/input semantics" },
-  { re: /^--enable-features=InputOwnershipEnforcement$/, klass: "product-switch", why: "agent-mode release configuration: kernel input arbitration" },
+  { re: /^--enable-features=InputOwnershipEnforcement(,|$)/, klass: "product-switch", why: "agent-mode release configuration: kernel input arbitration" },
+  { re: /^--enable-features=.*NetworkServiceSandbox/, klass: "product-switch", why: "release security configuration: network service sandbox" },
   { re: /^--browser-cli-background-presentation$/, klass: "product-switch", why: "agent-mode managed presentation (API availability + trust gate)" },
   { re: /^--browser-cli-user-explicit-show$/, klass: "product-switch", why: "user-explicit presentation intent; creates one visible window for real human/IME input" },
   { re: /^--no-startup-window$/, klass: "product-switch", why: "required by the user-explicit-show producer (no synthetic startup window)" },
@@ -713,6 +714,7 @@ function buildArgs(mode, { origin, token, profileDir }) {
     "--disable-component-update",
     "--enable-logging=stderr",
     "--v=0",
+    "--enable-features=NetworkServiceSandbox",
   ];
   if (mode === "normal") {
     return [...common, origin + "/boot?token=" + token];
@@ -724,7 +726,7 @@ function buildArgs(mode, { origin, token, profileDir }) {
     // forwarding path instead of the cold-start shortcut.
     return [
       ...common,
-      "--enable-features=" + FEATURE,
+      "--enable-features=" + FEATURE + ",NetworkServiceSandbox",
       "--browser-cli-background-presentation",
       "about:blank",
     ];
