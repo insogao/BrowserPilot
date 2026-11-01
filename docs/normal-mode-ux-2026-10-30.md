@@ -58,7 +58,8 @@ EgoLite 是 Electron 桌面浏览器：
 
 - `D:\work\BrowserPilot\manual-browser.cmd` 已改为正常模式：
   持久 profile `.manual-profile-normal`、`--load-extension`，**无**
-  `--in-process-gpu`、`--disable-direct-composition`、managed/user-explicit/remote-debugging 参数。
+  `--in-process-gpu`、`--disable-direct-composition`、managed/user-explicit/remote-debugging 参数；
+  显式 `--enable-features=NetworkServiceSandbox` 以恢复非 branded 构建关闭测试配置后的网络服务沙箱。
 - 前提是 browser-cli PR #1 的 `disable_fieldtrial_testing_config=true` 构建（commit
   `fc5e294`）。该配置阻止非 branded 构建自动启用 ACG，避免 Sogou Xbyak 在 TSF 初始化时
   被拒绝后 ExitProcess(3)。
