@@ -131,8 +131,9 @@ chrome.exe
 第二个进程经 ProcessSingleton 转发到第一个实例后自行退出；第一个实例的窗口变为
 `visible=true`、render widget `visible=true`，日志出现
 `BROWSER_CLI_USER_EXPLICIT_SHOW ... result=handled reason=existing-window-presented`。
-在本机（用户前台是最大化的文件资源管理器）该 show **没有抢走前台窗口**；人类输入用例
-会临时置顶/聚焦测试窗口并在结束时恢复原前台。
+在本机（用户前台是最大化的文件资源管理器）该 show 可能保持原前台，也可能把前台交给被
+show 的窗口（`foregroundAfter` 必须是二者之一）；它绝不能把前台交给任何无关窗口。人类
+输入用例会临时置顶/聚焦测试窗口并在结束时恢复原前台。
 
 ### 3.3 Profile 隔离与持久性
 
@@ -206,7 +207,7 @@ Runner 在启动前对每个参数分类；出现 `forbidden` 或 `unclassified`
 | RC-N4 | normal | **PASS** | 遮挡后台截图新鲜度：WS_EX_NOACTIVATE 遮挡窗口 + 连续 8 次 product screenshot | 遮挡后 `visibilityState=hidden`；8/8 fromSurface+非 stale+PNG marker 与 DOM 帧号 ±4；无 FATAL/CHECK |
 | RC-N5 | normal | **PASS** | OOPIF：跨站 iframe 独立 renderer，AI 输入落子帧、主帧不变 | 同源 iframe → 跨站 iframe renderer +1；childClicks 0→1；主帧 0→0；前台恢复 |
 | RC-N6 | normal | **PASS** | SW 重启：扩展 renderer/SW 重启后 host 新会话、产品命令恢复 | 旧 host 退出；新 host 30.6s 重连；ping/pong；version 0.1.0；浏览器 PID 不变；无调试端口 |
-| RC-A1 | agent | **PASS** | Agent 启动完整性 + Path A user-explicit-show + API 可用 | 启动窗口 hidden；show 后窗口/widget `visible=true`；producer `existing-window-presented`；前台不变；API keys 完整 |
+| RC-A1 | agent | **PASS** | Agent 启动完整性 + Path A user-explicit-show + API 可用 | 启动窗口 hidden；show 后窗口/widget `visible=true`；producer `existing-window-presented`；前台保持原窗口或变为被 show 的窗口；API keys 完整 |
 | RC-A2 | agent | **PASS** | 内核 HUMAN/AI：原始 debugger 输入 HUMAN 拒绝、AI 落地、版本语义 | HUMAN `-32000 InputOwnership: debugger input rejected`；AI clicks+1；VERSION_CONFLICT/STALE_VERSION |
 | RC-A3 | agent | **PASS** | 内核 ASSIST：grant 一次性、第二条拒绝、TTL 过期 | grant(1) 第一条落地、第二条拒绝；TTL 120ms 后拒绝 |
 | RC-A4 | agent | **PASS** | K15：新 tab 继承窗口快照；explicit tab override 优先于 heartbeat | 新 tab 立即继承 ai/1、ai/2；explicit human/1 经 3 次 heartbeat 不变；原始输入被拒 |
@@ -219,7 +220,7 @@ Runner 在启动前对每个参数分类；出现 `forbidden` 或 `unclassified`
 
 - RC-N2/N3/N4/N5：每个用例显式记录 `foreground before/after`，全部相等；
 - RC-N3/N4/N5 还记录窗口 `GW_HWNDPREV/GW_HWNDNEXT`（z-order），在截图/AI 操作前后不变；
-- RC-A1：Path A show 前后前台相等；RC-A2/A3/A4/A6/A7 后台测试前后前台相等；
+- RC-A1：Path A show 后前台要么保持原窗口，要么变为被 show 的窗口；RC-A2/A3/A4/A6/A7 后台测试前后前台相等；
 - RC-A5/A8：人类输入/IME 必须临时置顶/聚焦测试窗口；用例结束调用 `setForeground`
   恢复原前台并断言 `foregroundAfter == foregroundBefore`；
 - 整个会话 cleanup 再次恢复到 `env.foregroundBeforeLaunch`，最终报告

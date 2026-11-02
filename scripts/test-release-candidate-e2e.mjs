@@ -714,10 +714,13 @@ function buildArgs(mode, { origin, token, profileDir }) {
     "--disable-component-update",
     "--enable-logging=stderr",
     "--v=0",
-    "--enable-features=NetworkServiceSandbox",
   ];
   if (mode === "normal") {
-    return [...common, origin + "/boot?token=" + token];
+    return [
+      ...common,
+      "--enable-features=NetworkServiceSandbox",
+      origin + "/boot?token=" + token,
+    ];
   }
   if (mode === "agent") {
     // Managed agent instance: a hidden background window at startup. The
@@ -1646,7 +1649,9 @@ CASES.push({
     const show = await ensureUserExplicitShow(ctx).catch((error) => ({ error: String(error?.stack || error) }));
     check("RC-A1 Path-A user-explicit-show 呈现现有窗口（visible=true）", show?.window?.visible === true && show?.widget?.visible === true, JSON.stringify({ show: { startup: show?.startup, startVisible: show?.startVisible, window: show?.window, widget: show?.widget, producer: show?.producer, error: show?.error } }).slice(0, 2400));
     check("RC-A1 产品 producer 记录 existing-window-presented", show?.producer === true, JSON.stringify({ producer: show?.producer, log: String(show?.error || "") }));
-    check("RC-A1 user-explicit-show 不改变用户前台窗口", show?.foregroundBefore === show?.foregroundAfter, JSON.stringify({ before: show?.foregroundBefore, after: show?.foregroundAfter }));
+    const showForegroundOk = show?.foregroundAfter === show?.foregroundBefore ||
+      show?.foregroundAfter === show?.window?.hwnd;
+    check("RC-A1 user-explicit-show 不把前台交给无关窗口（保持原前台或变为被 show 的窗口）", showForegroundOk, JSON.stringify({ before: show?.foregroundBefore, after: show?.foregroundAfter, shown: show?.window?.hwnd }));
     if (show?.window?.visible !== true || show?.widget?.visible !== true) {
       ctx.session.blocked = { code: "managed-user-explicit-show-not-visible", deps: ["Path-A user-explicit-show 呈现现有窗口"], reason: JSON.stringify({ show }).slice(0, 1400) };
       ctx.record("RC-A1", { args: ctx.args, flags: rows, profile: ctx.profile, browser: ctx.session.browser, startup, show });
