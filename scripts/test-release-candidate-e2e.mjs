@@ -1565,7 +1565,7 @@ async function ensureUserExplicitShow(ctx) {
   const before = await listWindows(ctx.win32, ctx.chrome.record.pid);
   const startup = before.find((w) => w.className === "Chrome_WidgetWin_1" && /about:blank/i.test(String(w.title || "")));
   if (!startup) throw new Error("managed startup window (about:blank) not found: " + JSON.stringify(before.map((w) => ({ title: w.title, visible: w.visible, className: w.className }))));
-  const showArgs = ["--user-data-dir=" + ctx.profileDir, "--browser-cli-user-explicit-show", "--enable-features=NetworkServiceSandbox"];
+  const showArgs = ["--user-data-dir=" + ctx.profileDir, "--browser-cli-user-explicit-show", "--enable-features=InputOwnershipEnforcement,NetworkServiceSandbox"];
   const rows = classifyArgs(showArgs);
   report.flagClassification.push({ session: ctx.session.label + "-show", args: rows });
   mustCheck("[" + ctx.session.label + "-show] 无 release 禁止参数", rows.every((r) => r.klass !== "forbidden"), JSON.stringify(rows));
