@@ -968,7 +968,10 @@ class PipeClient {
         predicate,
         resolve: (frame) => finish({ type: "frame", frame }),
       };
-      const onClose = () => finish({ type: "closed" });
+      // A server-side DisconnectNamedPipe may surface as 'close' while the
+      // final frame is still queued for 'data'. Give the event loop a short
+      // grace period so the terminal error frame wins over the close signal.
+      const onClose = () => setTimeout(() => finish({ type: "closed" }), 500);
       const timer = setTimeout(() => finish({ type: "timeout" }), timeoutMs);
       this.waiters.push(waiter);
       this.closeWaiters.push(onClose);
