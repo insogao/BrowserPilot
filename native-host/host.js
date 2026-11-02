@@ -36,10 +36,15 @@ function resolveAuthToken() {
   return token;
 }
 const authToken = resolveAuthToken();
+// 每次 host 进程启动生成唯一实例 ID。它进入内部 requestId，确保旧 host 进程里
+// 未完成的扩展命令结果**不可能**在新 host 进程中匹配到另一个客户端的 pending
+// 请求（旧结果的 internal id 带旧实例 ID，新 host 的 pending 表永远不会命中）。
+const hostInstanceId = crypto.randomBytes(8).toString("hex");
 const pending = new Map();
 let clientSeq = 0;
 let requestSeq = 0;
 let sessionFile = "";
+let activeServer;
 const AGENT_ACTIVE_TTL_MS = 30_000;
 const PROFILE_CACHE_FILE = "profile-cache.json";
 let lastAgentActivity = 0;
@@ -73,6 +78,7 @@ function markAgentActivity() {
 let inBuf = Buffer.alloc(0);
 
 function sendToExtension(obj) {
+  if (shuttingDown) return;
   const json = Buffer.from(JSON.stringify(obj), "utf8");
   const len = Buffer.alloc(4);
   len.writeUInt32LE(json.length, 0);
@@ -123,6 +129,10 @@ function handleFromExtension(msg) {
 // ---------- 外部 AI TCP 接入 ----------
 function startServer(port) {
   const server = net.createServer((socket) => {
+    if (shuttingDown) {
+      try { socket.destroy(); } catch {}
+      return;
+    }
     socket.bpClientId = ++clientSeq;
     socket.bpAuthenticated = false;
     clients.add(socket);
@@ -161,13 +171,14 @@ function startServer(port) {
   });
 
   server.listen(port, "127.0.0.1", () => {
+    activeServer = server;
     activePort = port;
     const profile = detectProfile();
     writeProfileCache(profile);
     writeSessionFile(port);
-    console.error("[host] listening on 127.0.0.1:" + port);
+    console.error("[host] listening on 127.0.0.1:" + port + " instance=" + hostInstanceId);
     // ready 上报：port + profile 一并给扩展
-    sendToExtension({ type: "event", name: "ready", args: { port, authToken, profile } });
+    sendToExtension({ type: "event", name: "ready", args: { port, authToken, instanceId: hostInstanceId, profile } });
     emitClientState(false);
   });
 }
@@ -250,7 +261,9 @@ function handleFromClient(msg, socket) {
   // 转发给扩展执行
   // requestId 原样保存/回传（不强制 String 化）：对象型 requestId 之间不会互相串扰。
   const externalRequestId = msg.requestId ?? null;
-  const internalRequestId = "bp:" + socket.bpClientId + ":" + (++requestSeq);
+  // 实例 ID 是旧结果隔离的关键：host 重启后，旧 SW 命令返回时携带的是旧实例 ID，
+  // 不会与新 host 中任何 pending（即使 client/seq 相同）发生误路由。
+  const internalRequestId = "bp:" + hostInstanceId + ":" + socket.bpClientId + ":" + (++requestSeq);
   pending.set(internalRequestId, { socket, requestId: externalRequestId });
   const agentId = assignAgentId(msg, socket);
   const forward = {
@@ -269,7 +282,7 @@ function writeSessionFile(port) {
     const dir = sessionDir();
     fs.mkdirSync(dir, { recursive: true });
     sessionFile = path.join(dir, String(port) + ".json");
-    fs.writeFileSync(sessionFile, JSON.stringify({ port, authToken, pid: process.pid, updatedAt: Date.now() }), { mode: 0o600 });
+    fs.writeFileSync(sessionFile, JSON.stringify({ port, authToken, instanceId: hostInstanceId, pid: process.pid, updatedAt: Date.now() }), { mode: 0o600 });
   } catch (e) {
     console.error("[host] session file error:", e.message);
   }
@@ -313,7 +326,7 @@ function profilePayload() {
 
 /** 握手信息：端口 / capability token / profile。扩展与已认证 TCP 客户端共用。 */
 function readyStatePayload() {
-  return { port: activePort, authToken, profile: profilePayload() };
+  return { port: activePort, authToken, instanceId: hostInstanceId, profile: profilePayload() };
 }
 
 function cleanupSessionFile() {
@@ -332,19 +345,56 @@ function main() {
 // 这时必须主动退出并清理 session 文件，否则旧的 host 会一直占着端口和 session 记录，
 // 让下一次 connectNative 的发现逻辑看到两个“活着”的 host。
 let shuttingDown = false;
+
+/**
+ * 在 host 正常退出前，把所有仍在等待扩展结果的 TCP 请求显式失败。
+ *
+ * 必要性：客户端可能在等一条 10s/60s 的命令；如果 host 只是 close socket，
+ * 官方客户端在没有 'close' 处理时会一直挂到自身超时。这里先写一条
+ * `ok:false, errorCode:HOST_DISCONNECTED` 结果，再 half-close，保证“断开”是一个
+ * 明确错误而不是悬空等待。硬杀（taskkill /F）无法执行本函数，客户端侧必须同样
+ * 处理 close/error（见 native-host/client.mjs）。
+ */
+function failPendingClients(reason) {
+  const touched = new Set();
+  for (const route of pending.values()) {
+    if (!route.socket || route.socket.destroyed) continue;
+    try {
+      route.socket.write(JSON.stringify({
+        type: "result",
+        requestId: route.requestId,
+        ok: false,
+        error: reason,
+        errorCode: "HOST_DISCONNECTED",
+      }) + "\n");
+      touched.add(route.socket);
+    } catch {}
+  }
+  pending.clear();
+  for (const socket of touched) {
+    try { socket.end(); } catch {}
+  }
+  for (const socket of clients) {
+    try { socket.end(); } catch {}
+  }
+}
+
 function shutdownFromPort(reason) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.error("[host] native port closed (" + reason + "), shutting down");
+  failPendingClients("host_disconnected");
   cleanupSessionFile();
-  process.exit(0);
+  try { activeServer?.close(); } catch {}
+  // 给 socket write/end 一个刷新窗口；不使用 unref，确保进程在刷新完成后退出。
+  setTimeout(() => process.exit(0), 100);
 }
 process.stdin.on("end", () => shutdownFromPort("stdin end"));
 process.stdin.on("close", () => shutdownFromPort("stdin close"));
 process.stdout.on("error", () => shutdownFromPort("stdout error"));
 
 process.on("exit", cleanupSessionFile);
-process.on("SIGTERM", () => { cleanupSessionFile(); process.exit(0); });
-process.on("SIGINT", () => { cleanupSessionFile(); process.exit(0); });
+process.on("SIGTERM", () => shutdownFromPort("SIGTERM"));
+process.on("SIGINT", () => shutdownFromPort("SIGINT"));
 
 main();
