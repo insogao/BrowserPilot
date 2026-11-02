@@ -627,25 +627,48 @@ class Browser {
 // Native messaging host registration (test-only key, restored afterwards)
 // ---------------------------------------------------------------------------
 
+function regPowerShell(key, body) {
+  // reg.exe rejects this host key shape in the current environment; the
+  // PowerShell registry provider handles HKCU\... reliably.
+  const prefix = "HKCU" + String.fromCharCode(92);
+  const psKey = "HKCU:" + String.fromCharCode(92) + key.slice(prefix.length);
+  const script = body.replaceAll("__KEY__", psKey.replace(/'/g, "''"));
+  return runSync("powershell", ["-NoProfile", "-Command", script]);
+}
+
 function regQuery(key) {
-  const result = runSync("reg.exe", ["query", key, "/ve"]);
-  if (result.code !== 0) return { exists: false, value: null };
-  const line = result.stdout
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .find((l) => /REG_SZ|REG_EXPAND_SZ/i.test(l));
-  if (!line) return { exists: true, value: null };
-  const match = line.match(/REG_(?:EXPAND_)?SZ\s+(.*)$/i);
-  return { exists: true, value: match ? match[1].trim() : null };
+  const result = regPowerShell(
+    key,
+    `$p='__KEY__'; if (Test-Path -LiteralPath $p) { $v=(Get-ItemProperty -LiteralPath $p -ErrorAction Stop).'(default)'; if ($null -eq $v) { 'PRESENT-NULL' } else { 'VALUE=' + $v } } else { 'ABSENT' }`,
+  );
+  const out = result.stdout.trim();
+  if (out === "ABSENT" || out === "") return { exists: false, value: null };
+  if (out.startsWith("VALUE=")) return { exists: true, value: out.slice("VALUE=".length) };
+  if (out === "PRESENT-NULL") return { exists: true, value: null };
+  return { exists: true, value: null };
 }
 
 function regAdd(key, value) {
-  const result = runSync("reg.exe", ["add", key, "/ve", "/d", value, "/f"]);
-  if (result.code !== 0) throw new Error(`reg add failed: ${redact(result.stderr || result.stdout)}`);
+  const escaped = String(value).replace(/'/g, "''");
+  const result = regPowerShell(
+    key,
+    `$p='__KEY__'; New-Item -Path $p -Force | Out-Null; Set-ItemProperty -LiteralPath $p -Name '(default)' -Value '${escaped}'`,
+  );
+  if (result.code !== 0) {
+    throw new Error(`registry set failed: ${redact(result.stderr || result.stdout)}`);
+  }
 }
 
 function regDelete(key) {
-  runSync("reg.exe", ["delete", key, "/f"]);
+  const result = regPowerShell(
+    key,
+    `$p='__KEY__'; if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force }`,
+  );
+  if (result.code !== 0) {
+    throw new Error(`registry delete failed: ${redact(result.stderr || result.stdout)}`);
+  }
+  const after = regQuery(key);
+  if (after.exists) throw new Error(`registry key still exists after delete: ${key}`);
 }
 
 async function setupNativeHost(hostExe) {
