@@ -1,3 +1,10 @@
+---
+type: VerificationReport
+status: stable
+generated: { by: zcode, at: 2026-11-02T10:45:00+08:00 }
+stale_after: 2027-02-02
+---
+
 # Native Messaging Host 重启 RC 验证（Windows / WinRelease，2026-11-02）
 
 状态：**PASS**（矩阵 196/196；8 窗口 WinRelease 长稳含真实 host restart PASS）
