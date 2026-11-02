@@ -536,12 +536,16 @@ class Browser {
     const portFile = path.join(this.profileDir, "DevToolsActivePort");
     const deadline = Date.now() + 30000;
     while (Date.now() < deadline) {
-      if (fs.existsSync(portFile)) {
+      try {
         const lines = fs.readFileSync(portFile, "utf8").split(/\r?\n/);
         if (lines[0] && /^\d+$/.test(lines[0].trim())) {
           this.port = Number(lines[0].trim());
           break;
         }
+      } catch (error) {
+        // Chromium creates DevToolsActivePort in place; a concurrent read can
+        // hit a transient share/rename lock. Retry until the deadline.
+        if (error.code !== "EBUSY" && error.code !== "ENOENT") throw error;
       }
       if (this.child.exitCode !== null) break;
       await sleep(200);
