@@ -724,6 +724,7 @@ class TargetBrowser {
     this.profileDir = options.profileDir || path.join(runRoot, "profiles", `${this.name}-${stamp()}`);
     this.sessionDir = options.sessionDir || sessionsDir;
     this.importMode = options.importMode !== false;
+    this.managed = options.managed === true;
     this.browser = null;
     this.descriptor = null;
     this.descriptorPath = null;
@@ -742,6 +743,9 @@ class TargetBrowser {
         : [];
       targetArgs.push("--browser-cli-cookie-import", `--browser-cli-cookie-import-session-dir=${this.sessionDir}`);
       this.existingDescriptors = new Set(existing);
+    }
+    if (this.managed) {
+      targetArgs.unshift("--browser-cli-background-presentation");
     }
     this.browser = new Browser({
       name: this.name,
@@ -1353,8 +1357,8 @@ function assertPipeDacl(sddlText) {
   return sddlLine;
 }
 
-async function launchPair({ targetName, sourceName, site, importMode = true, initialSite = true }) {
-  const target = new TargetBrowser({ name: targetName });
+async function launchPair({ targetName, sourceName, site, importMode = true, initialSite = true, managed = false }) {
+  const target = new TargetBrowser({ name: targetName, managed });
   const source = new SourceBrowser({ name: sourceName });
   try {
     await target.start({ importMode });
@@ -1394,7 +1398,7 @@ async function closePair(pair) {
 
 async function scenarioApproveAndRestart(site) {
   return runScenario("approve-native-write-restart", async (details) => {
-    const pair = await launchPair({ targetName: "target-approve", sourceName: "source-approve", site });
+    const pair = await launchPair({ targetName: "target-approve", sourceName: "source-approve", site, managed: true });
     try {
       const { target, source, ticket } = pair;
       details.targetPid = target.browser.child.pid;
