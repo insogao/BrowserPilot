@@ -195,6 +195,9 @@ function launchSavedProfile() {
   const launchArgs = [];
   if (profile.userDataDir) launchArgs.push("--user-data-dir=" + profile.userDataDir);
   if (profile.profileDir) launchArgs.push("--profile-directory=" + profile.profileDir);
+  // The non-branded product build disables the test field-trial config, so the
+  // network service sandbox must be requested explicitly at every launch path.
+  launchArgs.push("--enable-features=NetworkServiceSandbox");
   const child = spawn(profile.chromeExe, launchArgs, {
     detached: true,
     stdio: "ignore",
