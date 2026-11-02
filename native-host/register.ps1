@@ -3,11 +3,14 @@
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File native-host/register.ps1
 #   powershell ... -File native-host/register.ps1 -IncludeEdge
+#   powershell ... -File native-host/register.ps1 -IncludeChromium
 #   powershell ... -File native-host/register.ps1 -HostPath <abs exe> -DryRun
 #
 # Fail-closed rules:
 #   - Only writes HKCU\Software\Google\Chrome\NativeMessagingHosts\com.browserpilot.browseragent.
-#     Edge is opt-in via -IncludeEdge. HKLM is never written (the registry root must start with HKCU:\).
+#     Edge is opt-in via -IncludeEdge. Chromium-branded Browser CLI builds read
+#     HKCU\Software\Chromium\NativeMessagingHosts first, so Browser CLI deployments must
+#     pass -IncludeChromium. HKLM is never written (the registry root must start with HKCU:\).
 #   - Before changing anything, backs up every target key's previous default value to
 #     native-host/backup/<timestamp>.json. native-host/unregister.ps1 restores it.
 #   - The manifest is regenerated on every run from host.manifest.template.json plus the
@@ -20,6 +23,7 @@ param(
     [string]$ManifestPath = "",
     [string]$TemplatePath = "",
     [switch]$IncludeEdge,
+    [switch]$IncludeChromium,
     [string]$RegistryRoot = "HKCU:\Software",
     [string]$BackupDir = "",
     [switch]$DryRun
@@ -200,6 +204,10 @@ try {
     $targets = @()
     $chromeKey = $RegistryRoot.TrimEnd('\') + '\Google\Chrome\NativeMessagingHosts\' + $HostName
     $targets += [pscustomobject]@{ browser = "chrome"; registryPath = $chromeKey }
+    if ($IncludeChromium) {
+        $chromiumKey = $RegistryRoot.TrimEnd('\') + '\Chromium\NativeMessagingHosts\' + $HostName
+        $targets += [pscustomobject]@{ browser = "chromium"; registryPath = $chromiumKey }
+    }
     if ($IncludeEdge) {
         $edgeKey = $RegistryRoot.TrimEnd('\') + '\Microsoft\Edge\NativeMessagingHosts\' + $HostName
         $targets += [pscustomobject]@{ browser = "edge"; registryPath = $edgeKey }

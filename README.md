@@ -30,7 +30,7 @@ plugin-v1/
 │   ├── host.manifest.template.json # host manifest 模板（占位符；仓库唯一 tracked 真源）
 │   ├── host.manifest.json     # 生成物（path=实际 exe；.gitignore，不随仓库分发）
 │   ├── paths.js               # host/client 共享的本机 session 目录
-│   ├── register.ps1           # Windows：写 HKCU（默认只 Chrome；-IncludeEdge 才写 Edge），先备份
+│   ├── register.ps1           # Windows：写 HKCU（Chrome + Chromium；-IncludeEdge 才写 Edge），先备份
 │   ├── unregister.ps1         # Windows：按备份恢复旧值；无备份则删本 host 键
 │   ├── dist/browserpilot-host.exe  # Windows 打包产物（node scripts/build-host.mjs 生成）
 │   └── test-*.mjs             # host / profile 自测
@@ -47,14 +47,17 @@ cd plugin-v1
 npm install                 # esbuild / typescript / @types/chrome / postject
 npm run build               # 构建扩展 → dist/
 npm run build:host          # Windows：构建 native host → native-host/dist/browserpilot-host-<ts>.exe
-npm run register-host       # Windows：只写 HKCU Chrome 键（先备份旧值；Edge 用 -IncludeEdge）
+npm run register-host       # Windows：写 HKCU Chrome + Chromium 键（-IncludeChromium；先备份旧值；Edge 额外用 -IncludeEdge）
 npm run unregister-host     # Windows：按 backup 恢复旧值；无 backup 则删除本 host 键
 ```
 
 Windows 注册的安全规则（实现见 `native-host/register.ps1` / `unregister.ps1`）：
 
-- 只写 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.browserpilot.browseragent`；
-  Edge 必须显式加 `-IncludeEdge`；任何情况下都不写 HKLM（`-RegistryRoot` 必须以 `HKCU:\` 开头）。
+- 写 `HKCU\Software\Google\Chrome\NativeMessagingHosts\com.browserpilot.browseragent` 和
+  `HKCU\Software\Chromium\NativeMessagingHosts\com.browserpilot.browseragent`：Chromium-branded
+  Browser CLI 会**先读 Chromium 键**，只注册 Chrome 键会被 Chromium 键下的其它 manifest 遮蔽；
+  `npm run register-host` 默认带 `-IncludeChromium`。Edge 必须显式加 `-IncludeEdge`；
+  任何情况下都不写 HKLM（`-RegistryRoot` 必须以 `HKCU:\` 开头）。
 - 修改前把每个目标键的旧默认值写入 `native-host/backup/<timestamp>.json`（host 名/旧值/时间/备注）；
   回滚按该文件原样恢复，没有备份才删除本 host 键。
 - 每次注册都用实际构建出的 exe 重新生成 `native-host/host.manifest.json`（BOM-free UTF-8）；

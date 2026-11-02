@@ -32,6 +32,10 @@ const DIST = path.join(root, "dist");
 const REGISTER_PS1 = path.join(root, "native-host", "register.ps1");
 const UNREGISTER_PS1 = path.join(root, "native-host", "unregister.ps1");
 const HOST_NAME = "com.browserpilot.browseragent";
+const CHROME_REGISTRY_KEY = "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\" + HOST_NAME;
+// Chromium-branded Browser CLI/WinRelease reads the Chromium key first
+// (chrome/browser/extensions/api/messaging/launch_context_win.cc), so register both.
+const CHROMIUM_REGISTRY_KEY = "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\" + HOST_NAME;
 const EXTENSION_ID = "nnollghpaggbcdkkgoieneffnlijinio";
 const AGENT_ID = "e2e-native-agent";
 const BASELINE_CHROME =
@@ -467,7 +471,7 @@ function hostExePath() {
 }
 
 function registerHost(exe, backupDir) {
-  const result = runPowerShellFile(REGISTER_PS1, ["-HostPath", exe, "-BackupDir", backupDir]);
+  const result = runPowerShellFile(REGISTER_PS1, ["-HostPath", exe, "-BackupDir", backupDir, "-IncludeChromium"]);
   if (result.status !== 0 || !result.json?.ok) {
     throw new Error("register.ps1 failed: " + (result.stderr || result.stdout));
   }
@@ -809,25 +813,36 @@ try {
     if (!hostExe) throw new Error("native host exe missing; run node scripts/build-host.mjs");
     report.host = { exe: hostExe };
 
-    const beforeValue = registryDefault("HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\" + HOST_NAME);
+    const beforeValue = registryDefault(CHROME_REGISTRY_KEY);
+    const beforeChromiumValue = registryDefault(CHROMIUM_REGISTRY_KEY);
     registration = registerHost(hostExe, backupDir);
     report.registration = {
       beforeValue,
-      afterValue: registryDefault("HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\" + HOST_NAME),
+      afterValue: registryDefault(CHROME_REGISTRY_KEY),
+      beforeChromiumValue,
+      afterChromiumValue: registryDefault(CHROMIUM_REGISTRY_KEY),
       backupFile: registration.backupFile,
       extensionId: registration.extensionId,
       manifestPath: registration.manifestPath,
       hostPath: registration.hostPath,
     };
     check("注册后 Chrome 键指向本次生成的 manifest", report.registration.afterValue === registration.manifestPath, JSON.stringify(report.registration));
+    check("注册后 Chromium 键指向本次生成的 manifest", report.registration.afterChromiumValue === registration.manifestPath, JSON.stringify(report.registration));
     {
       const backup = JSON.parse(fs.readFileSync(registration.backupFile, "utf8"));
-      const recorded = backup.targets?.[0];
+      const recorded = backup.targets?.find((target) => target.browser === "chrome");
+      const recordedChromium = backup.targets?.find((target) => target.browser === "chromium");
       const expectedOld = beforeValue === "<missing>" ? null : beforeValue;
+      const expectedOldChromium = beforeChromiumValue === "<missing>" ? null : beforeChromiumValue;
       check(
         "注册备份记录了旧值与键是否存在",
         recorded?.previousDefault === expectedOld && recorded?.keyExisted === (beforeValue !== "<missing>"),
         JSON.stringify(recorded),
+      );
+      check(
+        "注册备份记录了 Chromium 旧值与键是否存在",
+        recordedChromium?.previousDefault === expectedOldChromium && recordedChromium?.keyExisted === (beforeChromiumValue !== "<missing>"),
+        JSON.stringify(recordedChromium),
       );
     }
 
@@ -912,13 +927,17 @@ try {
   try {
     if (registration) {
       const rollback = rollbackHost(registration.backupFile);
-      const afterRollback = registryDefault("HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\" + HOST_NAME);
+      const afterRollback = registryDefault(CHROME_REGISTRY_KEY);
+      const afterChromiumRollback = registryDefault(CHROMIUM_REGISTRY_KEY);
       report.registration.rollback = {
         result: rollback,
         afterRollback,
+        afterChromiumRollback,
         expected: report.registration.beforeValue,
+        expectedChromium: report.registration.beforeChromiumValue,
       };
       check("回滚后 Chrome 键恢复测试前值", afterRollback === report.registration.beforeValue, JSON.stringify({ afterRollback, expected: report.registration.beforeValue }));
+      check("回滚后 Chromium 键恢复测试前值", afterChromiumRollback === report.registration.beforeChromiumValue, JSON.stringify({ afterChromiumRollback, expected: report.registration.beforeChromiumValue }));
     }
   } catch (error) {
     failed++;
