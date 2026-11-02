@@ -1,0 +1,1281 @@
+{
+  "test": "browserpilot-native-host-restart-rc",
+  "generatedAt": "2026-11-02T02:45:20.880Z",
+  "chrome": "D:\\c\\src\\out\\WinRelease\\chrome.exe",
+  "hostExe": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+  "extensionId": "nnollghpaggbcdkkgoieneffnlijinio",
+  "registry": {
+    "chromeKey": "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.browserpilot.browseragent",
+    "chromiumKey": "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\com.browserpilot.browseragent",
+    "before": {
+      "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\chrome\\plugin-v1\\native-host\\host.manifest.json",
+      "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\.tmp-browsercli\\e2e-all-final\\host\\com.browserpilot.browseragent.json"
+    },
+    "after": {
+      "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\wt\\bp-host-restart\\native-host\\host.manifest.json",
+      "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\wt\\bp-host-restart\\native-host\\host.manifest.json"
+    },
+    "rollback": {
+      "result": {
+        "status": 0,
+        "stdout": "{\"ok\":true,\"dryRun\":false,\"hostName\":\"com.browserpilot.browseragent\",\"mode\":\"restored-from-backup\",\"backupFile\":\"D:\\\\work\\\\wt\\\\bp-host-restart\\\\.e2e-tmp\\\\host-restart-2026-11-02T02-36-52-823Z\\\\registry-backup\\\\20261102-103653-988.json\",\"actions\":[{\"browser\":\"chrome\",\"registryPath\":\"HKCU:\\\\Software\\\\Google\\\\Chrome\\\\NativeMessagingHosts\\\\com.browserpilot.browseragent\",\"action\":\"restored-default\"},{\"browser\":\"chromium\",\"registryPath\":\"HKCU:\\\\Software\\\\Chromium\\\\NativeMessagingHosts\\\\com.browserpilot.browseragent\",\"action\":\"restored-default\"}]}\r\n",
+        "stderr": "",
+        "json": {
+          "ok": true,
+          "dryRun": false,
+          "hostName": "com.browserpilot.browseragent",
+          "mode": "restored-from-backup",
+          "backupFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\registry-backup\\20261102-103653-988.json",
+          "actions": [
+            {
+              "browser": "chrome",
+              "registryPath": "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.browserpilot.browseragent",
+              "action": "restored-default"
+            },
+            {
+              "browser": "chromium",
+              "registryPath": "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\com.browserpilot.browseragent",
+              "action": "restored-default"
+            }
+          ]
+        }
+      },
+      "after": {
+        "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\chrome\\plugin-v1\\native-host\\host.manifest.json",
+        "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\.tmp-browsercli\\e2e-all-final\\host\\com.browserpilot.browseragent.json"
+      },
+      "expected": {
+        "HKCU:\\Software\\Google\\Chrome\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\chrome\\plugin-v1\\native-host\\host.manifest.json",
+        "HKCU:\\Software\\Chromium\\NativeMessagingHosts\\com.browserpilot.browseragent": "D:\\work\\.tmp-browsercli\\e2e-all-final\\host\\com.browserpilot.browseragent.json"
+      }
+    }
+  },
+  "matrix": {
+    "runDir": ".e2e-tmp/host-restart-2026-11-02T02-36-52-823Z",
+    "verdict": "PASS",
+    "checks": {
+      "passed": 196,
+      "failed": 0,
+      "failures": []
+    },
+    "sessions": [
+      {
+        "mode": "normal",
+        "capabilities": {
+          "mode": "generic",
+          "managedMode": false,
+          "maxConcurrentWindows": 1
+        },
+        "scenarios": [
+          {
+            "name": "unexpected-host-kill",
+            "evidence": {
+              "before": {
+                "label": "unexpected-before",
+                "pid": 39356,
+                "port": 49024,
+                "instanceId": "c8ca61b0a839560a",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-normal-zub6jk\\BrowserPilot\\sessions\\49024.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 44904,
+                "hostCount": 1,
+                "allHostPids": [
+                  39356
+                ],
+                "handleCount": 253,
+                "workingSet": 43728896,
+                "privateBytes": 25300992,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 39356,
+                    "port": 49024,
+                    "instanceId": "c8ca61b0a839560a"
+                  }
+                ]
+              },
+              "after": {
+                "label": "unexpected-after",
+                "pid": 11304,
+                "port": 49024,
+                "instanceId": "fe3af83d85ccbf87",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-normal-zub6jk\\BrowserPilot\\sessions\\49024.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 23644,
+                "hostCount": 1,
+                "allHostPids": [
+                  11304
+                ],
+                "handleCount": 253,
+                "workingSet": 43900928,
+                "privateBytes": 25440256,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 11304,
+                    "port": 49024,
+                    "instanceId": "fe3af83d85ccbf87"
+                  }
+                ]
+              },
+              "kill": {
+                "stopped": true,
+                "refused": false,
+                "pid": 39356,
+                "label": "host-restart-e2e.unexpected-kill",
+                "reason": "host-restart-e2e.unexpected-kill",
+                "verified": {
+                  "creationTime": "2026-11-02T02:36:55.7807380Z",
+                  "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe"
+                },
+                "command": "taskkill /PID 39356 /T /F",
+                "status": 0,
+                "startedAt": 1793587022737,
+                "finishedAt": 1793587023470,
+                "killMs": 733
+              },
+              "killMs": 733,
+              "inflightMs": 4239,
+              "inflightAtMs": 4239,
+              "inflight": {
+                "error": "HOST_DISCONNECTED",
+                "message": "host_disconnected: socket error: read ECONNRESET"
+              },
+              "oldClient": {
+                "closed": true,
+                "closeInfo": "socket error: read ECONNRESET",
+                "closedAtMs": 4239
+              },
+              "reconnectMs": 3704
+            }
+          },
+          {
+            "name": "stale-result-isolation",
+            "evidence": {
+              "basePid": 11304,
+              "h1Pid": 26252,
+              "h2Pid": 28960,
+              "h2ReadyMs": 2999,
+              "newMs": 12568,
+              "newResult": {
+                "type": "result",
+                "requestId": "stale-new",
+                "ok": true,
+                "data": {
+                  "waitedMs": 12000
+                }
+              },
+              "oldOutcome": {
+                "code": "HOST_DISCONNECTED"
+              }
+            }
+          },
+          {
+            "name": "normal-host-exit",
+            "evidence": {
+              "before": {
+                "label": "normal-exit-before",
+                "pid": 28960,
+                "port": 49024,
+                "instanceId": "8a2cb4d4a808a543",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-normal-zub6jk\\BrowserPilot\\sessions\\49024.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 8032,
+                "hostCount": 1,
+                "allHostPids": [
+                  28960
+                ],
+                "handleCount": 253,
+                "workingSet": 43659264,
+                "privateBytes": 25333760,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 28960,
+                    "port": 49024,
+                    "instanceId": "8a2cb4d4a808a543"
+                  }
+                ]
+              },
+              "after": {
+                "label": "normal-exit-after",
+                "pid": 13120,
+                "port": 49024,
+                "instanceId": "00bd6186ab12969f",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-normal-zub6jk\\BrowserPilot\\sessions\\49024.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 7184,
+                "hostCount": 1,
+                "allHostPids": [
+                  13120
+                ],
+                "handleCount": 253,
+                "workingSet": 43798528,
+                "privateBytes": 25628672,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 13120,
+                    "port": 49024,
+                    "instanceId": "00bd6186ab12969f"
+                  }
+                ]
+              },
+              "swStop": {
+                "method": "Target.closeTarget(fallback)",
+                "targetId": "3BF90EF8263BC4B48072885043063F91",
+                "stopError": "'ServiceWorker.stopAllWorkers' wasn't found"
+              },
+              "hostGone": true,
+              "sessionGone": true,
+              "inflightMs": 530,
+              "reconnectMs": 533,
+              "oldPid": 28960,
+              "newPid": 13120,
+              "inflight": {
+                "type": "result",
+                "requestId": "normal-exit-inflight",
+                "ok": false,
+                "error": "host_disconnected",
+                "errorCode": "HOST_DISCONNECTED"
+              },
+              "oldClient": {
+                "closed": true,
+                "closeInfo": "socket end"
+              }
+            }
+          },
+          {
+            "name": "host-sw-interleave",
+            "evidence": {
+              "before": {
+                "label": "interleave-before",
+                "pid": 13120,
+                "port": 49024,
+                "instanceId": "00bd6186ab12969f",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-normal-zub6jk\\BrowserPilot\\sessions\\49024.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 7184,
+                "hostCount": 1,
+                "allHostPids": [
+                  13120
+                ],
+                "handleCount": 253,
+                "workingSet": 43880448,
+                "privateBytes": 25628672,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 13120,
+                    "port": 49024,
+                    "instanceId": "00bd6186ab12969f"
+                  }
+                ]
+              },
+              "after": {
+                "label": "interleave-after",
+                "pid": 42856,
+                "port": 49024,
+                "instanceId": "fee4d19044f709c3",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-normal-zub6jk\\BrowserPilot\\sessions\\49024.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 39664,
+                "hostCount": 1,
+                "allHostPids": [
+                  42856
+                ],
+                "handleCount": 253,
+                "workingSet": 43499520,
+                "privateBytes": 25198592,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 42856,
+                    "port": 49024,
+                    "instanceId": "fee4d19044f709c3"
+                  }
+                ]
+              },
+              "hostGone": true,
+              "swGone": true,
+              "reconnectMs": 531,
+              "oldPid": 13120,
+              "newPid": 42856,
+              "hosts": [
+                {
+                  "pid": 42856,
+                  "parentPid": 39664,
+                  "creationTime": "/Date(1793587061393)/",
+                  "creationMs": 1793587061393,
+                  "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                  "commandLine": "\"D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe\"  chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/ --parent-window=0 "
+                }
+              ],
+              "liveSessions": [
+                {
+                  "pid": 42856,
+                  "port": 49024,
+                  "instanceId": "fee4d19044f709c3",
+                  "updatedAt": 1793587062060,
+                  "file": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-normal-zub6jk\\BrowserPilot\\sessions\\49024.json"
+                }
+              ]
+            }
+          },
+          {
+            "name": "expired-grant-not-resurrected",
+            "evidence": {
+              "stop": {
+                "stopped": true,
+                "refused": false,
+                "pid": 42856,
+                "label": "host-restart-e2e.expired-grant-kill",
+                "reason": "host-restart-e2e.expired-grant-kill",
+                "verified": {
+                  "creationTime": "2026-11-02T02:37:41.3932310Z",
+                  "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe"
+                },
+                "command": "taskkill /PID 42856 /T /F",
+                "status": 0,
+                "startedAt": 1793587131760,
+                "finishedAt": 1793587132510,
+                "killMs": 750
+              },
+              "oldPid": 42856,
+              "newPid": 8412,
+              "status1": {
+                "spaceId": "space-54ef8ed8-614d-47b8-9076-7c5d9abd8299",
+                "windowId": 1985230010,
+                "tabId": 1985230011,
+                "mode": "assist",
+                "ownership": "agent",
+                "ownerClientId": "agent:host-restart-agent",
+                "assistSince": 1793587069731,
+                "assistReason": "popup:user",
+                "assistExpiresAt": 1793587129737,
+                "grantActionsRemaining": 1,
+                "grant": {
+                  "token": "8747c47c…",
+                  "actions": 1,
+                  "expiresAt": 1793587129737,
+                  "expiresInMs": 59993
+                },
+                "kernel": {
+                  "state": "unsupported",
+                  "supported": false,
+                  "reason": "generic-host",
+                  "degraded": false
+                }
+              },
+              "status2": {
+                "spaceId": "space-54ef8ed8-614d-47b8-9076-7c5d9abd8299",
+                "windowId": 1985230010,
+                "tabId": 1985230011,
+                "mode": "assist",
+                "ownership": "agent",
+                "ownerClientId": "agent:host-restart-agent",
+                "assistSince": 1793587069731,
+                "assistReason": "popup:user",
+                "assistExpiresAt": null,
+                "grantActionsRemaining": null,
+                "grant": null,
+                "kernel": {
+                  "state": "unsupported",
+                  "supported": false,
+                  "reason": "generic-host",
+                  "degraded": false
+                }
+              },
+              "status3": {
+                "spaceId": "space-54ef8ed8-614d-47b8-9076-7c5d9abd8299",
+                "windowId": 1985230010,
+                "tabId": 1985230011,
+                "mode": "assist",
+                "ownership": "agent",
+                "ownerClientId": "agent:host-restart-agent",
+                "assistSince": 1793587069731,
+                "assistReason": "popup:user",
+                "assistExpiresAt": null,
+                "grantActionsRemaining": null,
+                "grant": null,
+                "kernel": {
+                  "state": "unsupported",
+                  "supported": false,
+                  "reason": "generic-host",
+                  "degraded": false
+                }
+              },
+              "rejectedBefore": {
+                "type": "result",
+                "requestId": "hr-h8nroyhn",
+                "ok": false,
+                "error": "ASSIST 模式下需要 grant 才能放行 AI 输入: js（reason=expired，space=space-54ef8ed8-614d-47b8-9076-7c5d9abd8299）",
+                "errorCode": "INPUT_ASSIST_REQUIRES_GRANT"
+              },
+              "rejectedAfter": {
+                "type": "result",
+                "requestId": "hr-hpxuvo2e",
+                "ok": false,
+                "error": "ASSIST 模式下需要 grant 才能放行 AI 输入: js（reason=no-grant，space=space-54ef8ed8-614d-47b8-9076-7c5d9abd8299）",
+                "errorCode": "INPUT_ASSIST_REQUIRES_GRANT"
+              },
+              "grantWaitMs": 62000
+            }
+          }
+        ]
+      },
+      {
+        "mode": "agent",
+        "capabilities": {
+          "mode": "enhanced",
+          "managedMode": true,
+          "maxConcurrentWindows": 8
+        },
+        "scenarios": [
+          {
+            "name": "unexpected-host-kill",
+            "evidence": {
+              "before": {
+                "label": "unexpected-before",
+                "pid": 43492,
+                "port": 49163,
+                "instanceId": "5af46adfc1480c03",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-agent-vkt8bh\\BrowserPilot\\sessions\\49163.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 7688,
+                "hostCount": 1,
+                "allHostPids": [
+                  43492
+                ],
+                "handleCount": 253,
+                "workingSet": 43638784,
+                "privateBytes": 25632768,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 43492,
+                    "port": 49163,
+                    "instanceId": "5af46adfc1480c03"
+                  }
+                ]
+              },
+              "after": {
+                "label": "unexpected-after",
+                "pid": 27872,
+                "port": 49163,
+                "instanceId": "494a899e2514be8d",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-agent-vkt8bh\\BrowserPilot\\sessions\\49163.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 42836,
+                "hostCount": 1,
+                "allHostPids": [
+                  27872
+                ],
+                "handleCount": 253,
+                "workingSet": 44052480,
+                "privateBytes": 25354240,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 27872,
+                    "port": 49163,
+                    "instanceId": "494a899e2514be8d"
+                  }
+                ]
+              },
+              "kill": {
+                "stopped": true,
+                "refused": false,
+                "pid": 43492,
+                "label": "host-restart-e2e.unexpected-kill",
+                "reason": "host-restart-e2e.unexpected-kill",
+                "verified": {
+                  "creationTime": "2026-11-02T02:39:04.5243680Z",
+                  "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe"
+                },
+                "command": "taskkill /PID 43492 /T /F",
+                "status": 0,
+                "startedAt": 1793587151422,
+                "finishedAt": 1793587152168,
+                "killMs": 746
+              },
+              "killMs": 746,
+              "inflightMs": 4250,
+              "inflightAtMs": 4250,
+              "inflight": {
+                "error": "HOST_DISCONNECTED",
+                "message": "host_disconnected: socket error: read ECONNRESET"
+              },
+              "oldClient": {
+                "closed": true,
+                "closeInfo": "socket error: read ECONNRESET",
+                "closedAtMs": 4250
+              },
+              "reconnectMs": 3492
+            }
+          },
+          {
+            "name": "stale-result-isolation",
+            "evidence": {
+              "basePid": 27872,
+              "h1Pid": 27800,
+              "h2Pid": 12128,
+              "h2ReadyMs": 3117,
+              "newMs": 12501,
+              "newResult": {
+                "type": "result",
+                "requestId": "stale-new",
+                "ok": true,
+                "data": {
+                  "waitedMs": 12000
+                }
+              },
+              "oldOutcome": {
+                "code": "HOST_DISCONNECTED"
+              }
+            }
+          },
+          {
+            "name": "normal-host-exit",
+            "evidence": {
+              "before": {
+                "label": "normal-exit-before",
+                "pid": 12128,
+                "port": 49163,
+                "instanceId": "2c8d4fee2b410f70",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-agent-vkt8bh\\BrowserPilot\\sessions\\49163.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 42724,
+                "hostCount": 1,
+                "allHostPids": [
+                  12128
+                ],
+                "handleCount": 253,
+                "workingSet": 43454464,
+                "privateBytes": 25260032,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 12128,
+                    "port": 49163,
+                    "instanceId": "2c8d4fee2b410f70"
+                  }
+                ]
+              },
+              "after": {
+                "label": "normal-exit-after",
+                "pid": 45028,
+                "port": 49163,
+                "instanceId": "839e87fb1746b959",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-agent-vkt8bh\\BrowserPilot\\sessions\\49163.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 27280,
+                "hostCount": 1,
+                "allHostPids": [
+                  45028
+                ],
+                "handleCount": 253,
+                "workingSet": 43532288,
+                "privateBytes": 25104384,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 45028,
+                    "port": 49163,
+                    "instanceId": "839e87fb1746b959"
+                  }
+                ]
+              },
+              "swStop": {
+                "method": "Target.closeTarget(fallback)",
+                "targetId": "31126C9F1EEF93E7AAC77DA2EC2630DE",
+                "stopError": "'ServiceWorker.stopAllWorkers' wasn't found"
+              },
+              "hostGone": true,
+              "sessionGone": true,
+              "inflightMs": 530,
+              "reconnectMs": 507,
+              "oldPid": 12128,
+              "newPid": 45028,
+              "inflight": {
+                "type": "result",
+                "requestId": "normal-exit-inflight",
+                "ok": false,
+                "error": "host_disconnected",
+                "errorCode": "HOST_DISCONNECTED"
+              },
+              "oldClient": {
+                "closed": true,
+                "closeInfo": "socket end"
+              }
+            }
+          },
+          {
+            "name": "host-sw-interleave",
+            "evidence": {
+              "before": {
+                "label": "interleave-before",
+                "pid": 45028,
+                "port": 49163,
+                "instanceId": "839e87fb1746b959",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-agent-vkt8bh\\BrowserPilot\\sessions\\49163.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 27280,
+                "hostCount": 1,
+                "allHostPids": [
+                  45028
+                ],
+                "handleCount": 253,
+                "workingSet": 43606016,
+                "privateBytes": 25104384,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 45028,
+                    "port": 49163,
+                    "instanceId": "839e87fb1746b959"
+                  }
+                ]
+              },
+              "after": {
+                "label": "interleave-after",
+                "pid": 40852,
+                "port": 49163,
+                "instanceId": "957e64fadec3964d",
+                "sessionFile": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-agent-vkt8bh\\BrowserPilot\\sessions\\49163.json",
+                "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                "parentPid": 11960,
+                "hostCount": 1,
+                "allHostPids": [
+                  40852
+                ],
+                "handleCount": 253,
+                "workingSet": 43679744,
+                "privateBytes": 25276416,
+                "tcpEstablished": 1,
+                "liveSessions": [
+                  {
+                    "pid": 40852,
+                    "port": 49163,
+                    "instanceId": "957e64fadec3964d"
+                  }
+                ]
+              },
+              "hostGone": true,
+              "swGone": true,
+              "reconnectMs": 514,
+              "oldPid": 45028,
+              "newPid": 40852,
+              "hosts": [
+                {
+                  "pid": 40852,
+                  "parentPid": 11960,
+                  "creationTime": "/Date(1793587190311)/",
+                  "creationMs": 1793587190311,
+                  "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe",
+                  "commandLine": "\"D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe\"  chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/ --parent-window=0 "
+                }
+              ],
+              "liveSessions": [
+                {
+                  "pid": 40852,
+                  "port": 49163,
+                  "instanceId": "957e64fadec3964d",
+                  "updatedAt": 1793587190983,
+                  "file": "D:\\work\\wt\\bp-host-restart\\.e2e-tmp\\host-restart-2026-11-02T02-36-52-823Z\\localappdata-agent-vkt8bh\\BrowserPilot\\sessions\\49163.json"
+                }
+              ]
+            }
+          },
+          {
+            "name": "expired-grant-not-resurrected",
+            "evidence": {
+              "stop": {
+                "stopped": true,
+                "refused": false,
+                "pid": 40852,
+                "label": "host-restart-e2e.expired-grant-kill",
+                "reason": "host-restart-e2e.expired-grant-kill",
+                "verified": {
+                  "creationTime": "2026-11-02T02:39:50.3114260Z",
+                  "exePath": "D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe"
+                },
+                "command": "taskkill /PID 40852 /T /F",
+                "status": 0,
+                "startedAt": 1793587260579,
+                "finishedAt": 1793587261452,
+                "killMs": 873
+              },
+              "oldPid": 40852,
+              "newPid": 22740,
+              "status1": {
+                "spaceId": "space-f29732f3-74ca-4423-8c29-3b3bce691bfa",
+                "windowId": 963642742,
+                "tabId": 963642743,
+                "mode": "assist",
+                "ownership": "agent",
+                "ownerClientId": "agent:host-restart-agent",
+                "assistSince": 1793587198556,
+                "assistReason": "popup:user",
+                "assistExpiresAt": 1793587258566,
+                "grantActionsRemaining": 1,
+                "grant": {
+                  "token": "99114532…",
+                  "actions": 1,
+                  "expiresAt": 1793587258566,
+                  "expiresInMs": 59997
+                },
+                "kernel": {
+                  "state": "ready",
+                  "supported": true,
+                  "degraded": false,
+                  "effectiveMode": "assist",
+                  "version": 4,
+                  "kernelVersion": 4,
+                  "kernelMode": "assist",
+                  "stale": false,
+                  "lastAckAt": 1793587198558
+                }
+              },
+              "status2": {
+                "spaceId": "space-f29732f3-74ca-4423-8c29-3b3bce691bfa",
+                "windowId": 963642742,
+                "tabId": 963642743,
+                "mode": "assist",
+                "ownership": "agent",
+                "ownerClientId": "agent:host-restart-agent",
+                "assistSince": 1793587198556,
+                "assistReason": "popup:user",
+                "assistExpiresAt": null,
+                "grantActionsRemaining": null,
+                "grant": null,
+                "kernel": {
+                  "state": "ready",
+                  "supported": true,
+                  "degraded": false,
+                  "effectiveMode": "assist",
+                  "version": 4,
+                  "kernelVersion": 4,
+                  "kernelMode": "assist",
+                  "stale": false,
+                  "lastAckAt": 1793587260262
+                }
+              },
+              "status3": {
+                "spaceId": "space-f29732f3-74ca-4423-8c29-3b3bce691bfa",
+                "windowId": 963642742,
+                "tabId": 963642743,
+                "mode": "assist",
+                "ownership": "agent",
+                "ownerClientId": "agent:host-restart-agent",
+                "assistSince": 1793587198556,
+                "assistReason": "popup:user",
+                "assistExpiresAt": null,
+                "grantActionsRemaining": null,
+                "grant": null,
+                "kernel": {
+                  "state": "ready",
+                  "supported": true,
+                  "degraded": false,
+                  "effectiveMode": "assist",
+                  "version": 4,
+                  "kernelVersion": 4,
+                  "kernelMode": "assist",
+                  "stale": false,
+                  "lastAckAt": 1793587260262
+                }
+              },
+              "rejectedBefore": {
+                "type": "result",
+                "requestId": "hr-ap7jd831",
+                "ok": false,
+                "error": "ASSIST 模式下需要 grant 才能放行 AI 输入: js（reason=expired，space=space-f29732f3-74ca-4423-8c29-3b3bce691bfa）",
+                "errorCode": "INPUT_ASSIST_REQUIRES_GRANT"
+              },
+              "rejectedAfter": {
+                "type": "result",
+                "requestId": "hr-at226rj6",
+                "ok": false,
+                "error": "ASSIST 模式下需要 grant 才能放行 AI 输入: js（reason=no-grant，space=space-f29732f3-74ca-4423-8c29-3b3bce691bfa）",
+                "errorCode": "INPUT_ASSIST_REQUIRES_GRANT"
+              },
+              "grantWaitMs": 62000
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "existingSwRegression": {
+    "runDir": ".e2e-tmp/2026-11-02T02-41-25-305Z",
+    "verdict": "PASS",
+    "checks": {
+      "passed": 17,
+      "failed": 0,
+      "skipped": 0,
+      "failures": []
+    }
+  },
+  "longRun": {
+    "runDir": ".e2e-tmp/host-restart-2026-11-02T01-33-32-542Z",
+    "verdict": "PASS",
+    "durationSec": 1200,
+    "restartAtSec": 600,
+    "sampleIntervalSec": 15,
+    "hostRestart": {
+      "at": "2026-11-02T01:43:51.910Z",
+      "elapsedSec": 601,
+      "status": "PASS",
+      "before": [
+        {
+          "mode": "normal",
+          "hostPid": 17292,
+          "instanceId": "77af7bc63bb2bc75",
+          "hostHandleCount": 250
+        },
+        {
+          "mode": "agent",
+          "hostPid": 28220,
+          "instanceId": "71b9f2a08bb1df8e",
+          "hostHandleCount": 250
+        }
+      ],
+      "after": [
+        {
+          "mode": "normal",
+          "hostPid": 15156,
+          "instanceId": "0f7c8c6c7d9e9ffd",
+          "hostHandleCount": 253
+        },
+        {
+          "mode": "agent",
+          "hostPid": 36580,
+          "instanceId": "701d3cdace8d412f",
+          "hostHandleCount": 253
+        }
+      ],
+      "restarts": [
+        {
+          "mode": "normal",
+          "ok": true,
+          "oldPid": 17292,
+          "newPid": 15156,
+          "oldInstanceId": "77af7bc63bb2bc75",
+          "newInstanceId": "0f7c8c6c7d9e9ffd",
+          "reconnectMs": 2583,
+          "killMs": 743,
+          "oldPidGone": true,
+          "oldClientClosed": true,
+          "windows": [
+            {
+              "id": "normal-w1",
+              "spaceId": "space-fc6a8cfe-cc86-4c29-8b42-962eb458a0ff",
+              "windowId": 1316677543,
+              "tabId": 1316677544,
+              "ok": true,
+              "tabIds": [
+                1316677544
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "normal-w2",
+              "spaceId": "space-2a896df1-fc8d-4f4a-981a-f51abd4c3e64",
+              "windowId": 1316677545,
+              "tabId": 1316677546,
+              "ok": true,
+              "tabIds": [
+                1316677546
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "normal-w3",
+              "spaceId": "space-2ffc7bf1-f42c-4b54-adf3-f3d8c37a4be6",
+              "windowId": 1316677547,
+              "tabId": 1316677548,
+              "ok": true,
+              "tabIds": [
+                1316677548
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "normal-w4",
+              "spaceId": "space-b1544c2b-c9fd-44d9-8eb6-b47fe2175a9d",
+              "windowId": 1316677549,
+              "tabId": 1316677550,
+              "ok": true,
+              "tabIds": [
+                1316677550
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            }
+          ]
+        },
+        {
+          "mode": "agent",
+          "ok": true,
+          "oldPid": 28220,
+          "newPid": 36580,
+          "oldInstanceId": "71b9f2a08bb1df8e",
+          "newInstanceId": "701d3cdace8d412f",
+          "reconnectMs": 2591,
+          "killMs": 756,
+          "oldPidGone": true,
+          "oldClientClosed": true,
+          "windows": [
+            {
+              "id": "agent-w1",
+              "spaceId": "space-edb9bab0-31a8-49ec-b295-b4a4e2e6635c",
+              "windowId": 1372538571,
+              "tabId": 1372538572,
+              "ok": true,
+              "tabIds": [
+                1372538572
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "agent-w2",
+              "spaceId": "space-01753f74-68b7-412a-bcb3-8677838af9df",
+              "windowId": 1372538573,
+              "tabId": 1372538574,
+              "ok": true,
+              "tabIds": [
+                1372538574
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "agent-w3",
+              "spaceId": "space-362ce6c6-aaf2-4da3-965a-1c5adf7af16a",
+              "windowId": 1372538575,
+              "tabId": 1372538576,
+              "ok": true,
+              "tabIds": [
+                1372538576
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "agent-w4",
+              "spaceId": "space-cc1d2151-03a6-4772-b56d-38c6b8e6c4d5",
+              "windowId": 1372538577,
+              "tabId": 1372538578,
+              "ok": true,
+              "tabIds": [
+                1372538578
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "stability": {
+      "status": "PASS",
+      "samples": 156,
+      "allSamplesHealthy": true,
+      "finalWindowsOk": true,
+      "finalScreensOk": true,
+      "browserAlive": true,
+      "uniqueHosts": true,
+      "hostPids": [
+        15156,
+        36580
+      ],
+      "hostRows": [
+        {
+          "pid": 15156,
+          "parentPid": 35096,
+          "creationTime": "/Date(1793583826338)/",
+          "commandLine": "\"D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793582509431.exe\"  chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/ --parent-window=0 "
+        },
+        {
+          "pid": 36580,
+          "parentPid": 6484,
+          "creationTime": "/Date(1793583830038)/",
+          "commandLine": "\"D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793582509431.exe\"  chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/ --parent-window=0 "
+        }
+      ]
+    },
+    "crashes": [],
+    "resources": {
+      "first": {
+        "hostPrivateBytes": 53096448,
+        "hostHandleCount": 506,
+        "chromePrivateBytes": 348884992,
+        "chromeHandleCount": 4238
+      },
+      "last": {
+        "hostPrivateBytes": 53145600,
+        "hostHandleCount": 500,
+        "chromePrivateBytes": 340860928,
+        "chromeHandleCount": 4121
+      },
+      "peak": {
+        "hostPrivateBytes": 27807744,
+        "hostHandleCount": 253,
+        "chromePrivateBytes": 178237440,
+        "chromeHandleCount": 2146
+      }
+    },
+    "cleanup": {
+      "remainingHosts": [],
+      "remainingSessions": []
+    }
+  },
+  "finalCodeLongRunSmoke": {
+    "runDir": ".e2e-tmp/host-restart-2026-11-02T02-42-17-481Z",
+    "verdict": "PASS",
+    "durationSec": 90,
+    "restartAtSec": 30,
+    "hostRestart": {
+      "at": "2026-11-02T02:43:07.645Z",
+      "elapsedSec": 30,
+      "status": "PASS",
+      "before": [
+        {
+          "mode": "normal",
+          "hostPid": 33900,
+          "instanceId": "058369b5fb0f2be1",
+          "hostHandleCount": 252
+        },
+        {
+          "mode": "agent",
+          "hostPid": 11468,
+          "instanceId": "bfc24d2b3d874873",
+          "hostHandleCount": 253
+        }
+      ],
+      "after": [
+        {
+          "mode": "normal",
+          "hostPid": 35776,
+          "instanceId": "7701d28c1494b4cb",
+          "hostHandleCount": 253
+        },
+        {
+          "mode": "agent",
+          "hostPid": 9692,
+          "instanceId": "f221fbc977cacf98",
+          "hostHandleCount": 253
+        }
+      ],
+      "restarts": [
+        {
+          "mode": "normal",
+          "ok": true,
+          "oldPid": 33900,
+          "newPid": 35776,
+          "oldInstanceId": "058369b5fb0f2be1",
+          "newInstanceId": "7701d28c1494b4cb",
+          "reconnectMs": 2591,
+          "killMs": 757,
+          "oldPidGone": true,
+          "oldClientClosed": true,
+          "windows": [
+            {
+              "id": "normal-w1",
+              "spaceId": "space-42de2402-90a9-472b-bea8-5450641093e1",
+              "windowId": 230790036,
+              "tabId": 230790037,
+              "ok": true,
+              "tabIds": [
+                230790037
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "normal-w2",
+              "spaceId": "space-acf28ede-e9ad-45ef-a57c-83893a6213d2",
+              "windowId": 230790038,
+              "tabId": 230790039,
+              "ok": true,
+              "tabIds": [
+                230790039
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "normal-w3",
+              "spaceId": "space-042cf1b1-41d6-4f3c-9f02-24554c65153f",
+              "windowId": 230790040,
+              "tabId": 230790041,
+              "ok": true,
+              "tabIds": [
+                230790041
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "normal-w4",
+              "spaceId": "space-de39ce07-3756-471b-97ca-8d1bfb15b462",
+              "windowId": 230790042,
+              "tabId": 230790043,
+              "ok": true,
+              "tabIds": [
+                230790043
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            }
+          ]
+        },
+        {
+          "mode": "agent",
+          "ok": true,
+          "oldPid": 11468,
+          "newPid": 9692,
+          "oldInstanceId": "bfc24d2b3d874873",
+          "newInstanceId": "f221fbc977cacf98",
+          "reconnectMs": 2585,
+          "killMs": 757,
+          "oldPidGone": true,
+          "oldClientClosed": true,
+          "windows": [
+            {
+              "id": "agent-w1",
+              "spaceId": "space-f4f5da68-65cf-4e72-bdc4-ff1669f852af",
+              "windowId": 714346983,
+              "tabId": 714346984,
+              "ok": true,
+              "tabIds": [
+                714346984
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "agent-w2",
+              "spaceId": "space-7fc531af-0747-4ab9-8251-129c6458118f",
+              "windowId": 714346985,
+              "tabId": 714346986,
+              "ok": true,
+              "tabIds": [
+                714346986
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "agent-w3",
+              "spaceId": "space-4c06866e-ba60-471b-b0b5-2aaced935956",
+              "windowId": 714346987,
+              "tabId": 714346988,
+              "ok": true,
+              "tabIds": [
+                714346988
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            },
+            {
+              "id": "agent-w4",
+              "spaceId": "space-9231033d-43d9-4c4c-99cc-997827e516cc",
+              "windowId": 714346989,
+              "tabId": 714346990,
+              "ok": true,
+              "tabIds": [
+                714346990
+              ],
+              "js": {
+                "ok": true,
+                "value": 2
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "stability": {
+      "status": "PASS",
+      "samples": 18,
+      "allSamplesHealthy": true,
+      "finalWindowsOk": true,
+      "finalScreensOk": true,
+      "browserAlive": true,
+      "uniqueHosts": true,
+      "hostPids": [
+        35776,
+        9692
+      ],
+      "hostRows": [
+        {
+          "pid": 35776,
+          "parentPid": 20068,
+          "creationTime": "/Date(1793587381984)/",
+          "commandLine": "\"D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe\"  chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/ --parent-window=0 "
+        },
+        {
+          "pid": 9692,
+          "parentPid": 40684,
+          "creationTime": "/Date(1793587385750)/",
+          "commandLine": "\"D:\\work\\wt\\bp-host-restart\\native-host\\dist\\browserpilot-host-1793584484933.exe\"  chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/ --parent-window=0 "
+        }
+      ]
+    },
+    "crashes": [],
+    "cleanup": {
+      "remainingHosts": [],
+      "remainingSessions": []
+    }
+  },
+  "cBlockedItem": {
+    "source": "D:workwt\bc-longrundocswindows-longrun-stability-gate-2026-11-01.md §8",
+    "previous": "BLOCKED (Native Messaging Host restart not exercised: gate had no host process)",
+    "result": "PASS",
+    "evidence": "real BrowserPilot native host in both isolated WinRelease sessions; verified hard restart at t=601s; all 8 windows recovered; final-code smoke with -IncludeChromium also PASS"
+  },
+  "commands": [
+    "npm run test:host",
+    "npm run test:host:exe",
+    "npm run test:register:native",
+    "node scripts/test-native-host-restart-e2e.mjs --no-build",
+    "BROWSERPILOT_BASELINE_CHROME=D:\\c\\src\\out\\WinRelease\\chrome.exe node scripts/test-native-e2e.mjs --stage=sw",
+    "node scripts/test-native-host-restart-e2e.mjs --longrun --no-build --duration=1200 --restart-at=600 --sample-interval=15",
+    "node scripts/test-native-host-restart-e2e.mjs --longrun --no-build --duration=90 --restart-at=45 --sample-interval=10"
+  ]
+}

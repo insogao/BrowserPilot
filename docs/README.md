@@ -30,6 +30,7 @@ stale_after: 2026-12-03
 
 - [dev/task-spaces.md](dev/task-spaces.md) — Task Space、所有权和前台串行机制。
 - [p1-native-messaging-2026-10-28.md](p1-native-messaging-2026-10-28.md) — Windows native messaging 注册/回滚、真实链路、`chrome.debugger` 六操作、SW 重启与 generic 回归证据。
+- [host-restart-rc-2026-11-02.md](host-restart-rc-2026-11-02.md) — Native Messaging Host 重启 RC 验证：正常/异常退出、SW 交错、in-flight 显式错误、重连握手、旧实例结果隔离、过期输入权、8 窗口 WinRelease 长稳含真实 host restart。
 - [../registry/templates/README.md](../registry/templates/README.md) — 站点适配 Agent 的唯一工作规范与真实 smoke 要求。
 - [../registry/INDEX.md](../registry/INDEX.md) — 全部模板一览（自动生成，按分类分组）。
 - [../registry/README.md](../registry/README.md) — Registry 协议和发布侧说明。
