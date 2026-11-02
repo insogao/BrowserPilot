@@ -1264,7 +1264,7 @@
     }
   },
   "cBlockedItem": {
-    "source": "D:workwt\bc-longrundocswindows-longrun-stability-gate-2026-11-01.md §8",
+    "source": "D:/work/wt/bc-longrun/docs/windows-longrun-stability-gate-2026-11-01.md §8",
     "previous": "BLOCKED (Native Messaging Host restart not exercised: gate had no host process)",
     "result": "PASS",
     "evidence": "real BrowserPilot native host in both isolated WinRelease sessions; verified hard restart at t=601s; all 8 windows recovered; final-code smoke with -IncludeChromium also PASS"
