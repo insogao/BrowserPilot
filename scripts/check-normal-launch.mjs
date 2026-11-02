@@ -21,6 +21,9 @@ const forbidden = [
   ["--browser-cli-background-presentation", "managed automation mode is not normal browsing"],
   ["--browser-cli-user-explicit-show", "cold-start show is a test/help path, not normal launch"],
 ];
+const required = [
+  ["--enable-features=NetworkServiceSandbox", "the non-branded build disables the test field-trial config, so the network service sandbox must be requested explicitly"],
+];
 let failed = false;
 for (const [flag, why] of forbidden) {
   if (active.includes(flag)) {
@@ -28,5 +31,11 @@ for (const [flag, why] of forbidden) {
     failed = true;
   }
 }
+for (const [flag, why] of required) {
+  if (!active.includes(flag)) {
+    console.error("FAIL normal launcher is missing " + flag + " (" + why + ")");
+    failed = true;
+  }
+}
 if (failed) process.exit(1);
-console.log("PASS normal launcher has no webdriver/automation/headless/managed flags");
+console.log("PASS normal launcher has no webdriver/automation/headless/managed flags and requests NetworkServiceSandbox");
