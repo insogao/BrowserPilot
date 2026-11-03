@@ -28,6 +28,7 @@
 
 ## 详细说明
 
+
 Search Google Finance for a ticker symbol or company name. Returns matching quote links with ticker, company, price, and percentage change.
 ## 功能一览
 

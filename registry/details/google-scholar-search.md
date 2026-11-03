@@ -30,6 +30,7 @@
 
 ## 详细说明
 
+
 Search Google Scholar (scholar.google.com) for academic papers and return top results with title, URL, and visible text summary.
 ## 功能一览
 

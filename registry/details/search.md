@@ -30,6 +30,7 @@
 
 ## 详细说明
 
+
 Search Google and return the top 10 results with title, URL, and snippet.
 ## 功能一览
 
