@@ -28,8 +28,56 @@ interface TabBrief {
   index?: number;
 }
 
+/** 用户入口（popup / options / 内核事件桥）的客户端身份。
+ *  **不是**一个可以从消息里携带的值：见 `markInternalCommand()`。 */
+export const INTERNAL_CLIENT_ID = "browserpilot-internal";
+/** Host 分配的外部 Agent 身份前缀；host.js 是唯一写入者。 */
+export const AGENT_CLIENT_PREFIX = "agent:";
+/** 既没有 host 注入的 Agent 身份、也不是扩展内部入口的调用方。
+ *  fail closed：没有任何特权（不能 grant、不能伪造 human_presence、不属于任何 space）。 */
+export const UNTRUSTED_CLIENT_ID = "anonymous:untrusted";
+
+/** 「扩展内部入口」命令标记。
+ *
+ *  身份不再从消息字段推断：popup/options/内核桥在 **同一个 SW 进程里** 构造 Command 对象，
+ *  用这个 WeakSet 打标。JSON/native messaging 反序列化出来的对象永远不可能带这个标记，
+ *  因此外部 Agent 无论自报 `_clientId`、`_channel`、`internal:true` 还是别的字段，都拿不到
+ *  用户身份。标记只活在当前 SW 实例的堆里，SW 重启后自然消失（重启后也不存在跨重启的命令）。 */
+const internalCommands = new WeakSet<object>();
+
+export function markInternalCommand<T extends Command>(cmd: T): T {
+  internalCommands.add(cmd);
+  return cmd;
+}
+
+export function isInternalCommand(cmd: Command): boolean {
+  return internalCommands.has(cmd);
+}
+
+/** 模板子命令继承父命令的“内部入口”属性（父命令带 `_clientId` 时子命令也带，无需标记）。 */
+export function inheritInternalCommand<T extends Command>(parent: Command, child: T): T {
+  if (internalCommands.has(parent)) internalCommands.add(child);
+  return child;
+}
+
+/**
+ * 命令调用方身份（唯一入口）。
+ *
+ * 信任规则（fail closed）：
+ *  1. 带 `_clientId`：只接受 host 分配的 `agent:<id>` 形状；任何其它值（包括
+ *     `"browserpilot-internal"`）一律降级为 UNTRUSTED_CLIENT_ID。这样即使 host 回归、
+ *     换实现或被绕过，保留 ID 也不会变成用户身份。
+ *  2. 不带 `_clientId`：只有当前 SW 里用 `markInternalCommand()` 打过标的命令才是用户入口；
+ *     其余（缺字段的未知传输、未来的新通道）一律 UNTRUSTED_CLIENT_ID。
+ */
 export function commandClientId(cmd: Command): string {
-  return cmd._clientId?.trim() || "browserpilot-internal";
+  const raw = typeof cmd._clientId === "string" ? cmd._clientId.trim() : "";
+  if (raw) {
+    return raw.startsWith(AGENT_CLIENT_PREFIX) && raw.length > AGENT_CLIENT_PREFIX.length
+      ? raw
+      : UNTRUSTED_CLIENT_ID;
+  }
+  return internalCommands.has(cmd) ? INTERNAL_CLIENT_ID : UNTRUSTED_CLIENT_ID;
 }
 
 function selector(cmd: Command): string | undefined {
@@ -42,10 +90,24 @@ function findSpace(spaces: Record<string, SpaceState>, value: string): SpaceStat
   return spaces[value] ?? Object.values(spaces).find((space) => space.name === value);
 }
 
+/** 只读解析 space 选择器（spaceId 或 name），供租约 key 归一化复用；校验仍由各命令自己完成。 */
+export function resolveSpaceSelector(
+  spaces: Record<string, SpaceState>,
+  value: string,
+): SpaceState | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  return findSpace(spaces, trimmed);
+}
+
 function assertOwnership(space: SpaceState, clientId: string, allowUser = false): void {
   if (space.ownership === "inactive") {
     throw new TaskSpaceError("SPACE_INACTIVE", "Task Space 已结束: " + space.spaceId);
   }
+  // 用户入口（popup/options/内核事件桥）代表用户本人，可以操作任何 Task Space，
+  // 包括 HUMAN 空间。身份不是消息字段：只有 SW 进程内 markInternalCommand() 的命令
+  // 才会得到 INTERNAL_CLIENT_ID（设计 §12.11）。Agent 之间的隔离保持不变。
+  if (clientId === INTERNAL_CLIENT_ID) return;
   if (space.ownerClientId && space.ownerClientId !== clientId) {
     throw new TaskSpaceError("SPACE_NOT_OWNED", "Task Space 属于其他 Agent: " + space.spaceId);
   }
@@ -109,6 +171,8 @@ async function bindFocusedWindow(clientId: string): Promise<SpaceState> {
         createdAt: legacy?.createdAt ?? Date.now(),
         updatedAt: Date.now(),
       };
+      // 绑定/重建窗口等价于一次 ownership 写入：不得把旧记录的 assist 租约带进新绑定。
+      delete bound.assist;
       if (legacy && legacy.spaceId !== spaceId) delete state.spaces[legacy.spaceId];
       state.spaces[spaceId] = bound;
     }
@@ -159,22 +223,40 @@ export function wantsVisible(args: Record<string, unknown> | undefined): boolean
   return a.focus === true || a.keepVisible === true || a.visible === true || a.background === false;
 }
 
+export interface EnsureTabVisibleResult {
+  tab: chrome.tabs.Tab;
+  /** chrome.windows.update 被浏览器/策略拒绝时的原始错误（不静默吞掉）。
+   *  调用方（popup 用户入口）据此报告 PERMISSION_DENIED；Agent 路径保持既有语义。 */
+  updateError?: string;
+}
+
 /** 恢复目标窗口用于渲染/交互。focus=true 才把窗口激活到最前（显式可见路径）；
- *  focus=false（默认后台运行）只把 minimized 恢复为 normal，保持用户桌面焦点不变。 */
+ *  focus=false（默认后台运行）只把 minimized 恢复为 normal，保持用户桌面焦点不变。
+ *
+ *  windows.update 的失败不再静默：托管模式（managed presentation policy）会拒绝
+ *  extension-origin 的呈现请求，Windows 侧甚至在原生层剥离 SWP_SHOWWINDOW。返回
+ *  `updateError` 让用户入口能显示明确错误，而不是假装“已显示”。 */
 export async function ensureTabVisible(
   tabId: number,
   requestedState?: "normal" | "maximized",
   focus = true,
-): Promise<chrome.tabs.Tab> {
+): Promise<EnsureTabVisibleResult> {
   const tab = await chrome.tabs.get(tabId);
+  let updateError: string | undefined;
   if (tab.windowId !== undefined) {
     const win = await chrome.windows.get(tab.windowId).catch(() => undefined);
     const state = requestedState ?? (win?.state === "minimized" ? "normal" : undefined);
     const patch = focus ? (state ? { state, focused: true } : { focused: true }) : (state ? { state } : null);
-    if (patch) await chrome.windows.update(tab.windowId, patch).catch(() => {});
+    if (patch) {
+      try {
+        await chrome.windows.update(tab.windowId, patch);
+      } catch (e) {
+        updateError = e instanceof Error ? e.message : String(e);
+      }
+    }
   }
-  if (!tab.active) return chrome.tabs.update(tabId, { active: true });
-  return tab;
+  const active = !tab.active ? await chrome.tabs.update(tabId, { active: true }) : tab;
+  return updateError ? { tab: active, updateError } : { tab: active };
 }
 
 function tabBrief(tab: chrome.tabs.Tab): TabBrief {
@@ -323,7 +405,13 @@ export async function switch_tab(cmd: Command): Promise<{ tabId: number; windowI
   return { tabId: tab.id as number, windowId: tab.windowId, url: tab.url, title: tab.title };
 }
 
-export async function ensure_visible(cmd: Command): Promise<{ tabId: number; windowId: number; state?: string; focused?: boolean }> {
+export async function ensure_visible(cmd: Command): Promise<{
+  tabId: number;
+  windowId: number;
+  state?: string;
+  focused?: boolean;
+  updateError?: string;
+}> {
   const space = await ensureCommandSpace(cmd);
   const explicit = cmd.args?.tabId;
   let tabId = explicit === undefined || explicit === null ? NaN : Number(explicit);
@@ -344,9 +432,15 @@ export async function ensure_visible(cmd: Command): Promise<{ tabId: number; win
   await assertTabInCommandSpace(cmd, tabId);
   const requestedState = cmd.args?.state === "maximized" ? "maximized" : cmd.args?.state === "normal" ? "normal" : undefined;
   // 显式 ensure_visible 默认前台聚焦；run_template 的后台运行会带 focus:false（只恢复渲染，不抢焦点）。
-  const tab = await ensureTabVisible(tabId, requestedState, cmd.args?.focus !== false);
+  const { tab, updateError } = await ensureTabVisible(tabId, requestedState, cmd.args?.focus !== false);
   const win = await chrome.windows.get(tab.windowId);
-  return { tabId: tab.id as number, windowId: tab.windowId, state: win.state, focused: win.focused };
+  return {
+    tabId: tab.id as number,
+    windowId: tab.windowId,
+    state: win.state,
+    focused: win.focused,
+    ...(updateError ? { updateError } : {}),
+  };
 }
 
 export async function list_spaces(cmd: Command): Promise<SpaceState[]> {

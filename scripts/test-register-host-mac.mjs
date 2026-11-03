@@ -1,3 +1,11 @@
+// macOS 专属注册测试：依赖 POSIX 路径、可执行位与 $HOME 语义。
+// 在 Windows 上运行时 os.homedir() 不读 HOME，会写到真实用户名下的伪 mac 目录，
+// 因此明确跳过而不是让断言以平台差异的方式失败。
+if (process.platform !== "darwin") {
+  console.log("SKIP | register-host-mac tests require macOS (platform=" + process.platform + ")");
+  process.exit(0);
+}
+
 // 单测 register-host-mac.mjs：目标发现、幂等、安全拒绝、自定义 user-data-dir、注销与 CLI。
 import fs from "node:fs";
 import os from "node:os";
@@ -61,7 +69,8 @@ function makeRepo({ wrapper } = {}) {
   fs.copyFileSync(path.join(root, "manifest.json"), path.join(repo, "manifest.json"));
   fs.mkdirSync(path.join(repo, "native-host"), { recursive: true });
   fs.copyFileSync(path.join(root, "native-host", "host.js"), path.join(repo, "native-host", "host.js"));
-  fs.copyFileSync(path.join(root, "native-host", "host.manifest.json"), path.join(repo, "native-host", "host.manifest.json"));
+  // 仓库只 tracked 模板；host.manifest.json 是生成物（build-host / register.ps1 产出）。
+  fs.copyFileSync(path.join(root, "native-host", "host.manifest.template.json"), path.join(repo, "native-host", "host.manifest.template.json"));
   if (wrapper !== undefined) {
     fs.mkdirSync(path.join(repo, "native-host", "dist"), { recursive: true });
     fs.writeFileSync(path.join(repo, "native-host", "dist", "host-mac.sh"), wrapper);
@@ -84,9 +93,25 @@ function readJson(file) {
 
 const noop = () => {};
 
-// 1. 扩展 ID 固定且与 host.manifest.json 一致。
+// 1. 扩展 ID 固定；host manifest 模板不含机器路径，生成物（若存在）必须与推导一致。
 check("extensionIdFromRepo 推导固定扩展 ID", extensionIdFromRepo(root) === FIXED_EXTENSION_ID, extensionIdFromRepo(root));
-check("host.manifest.json 的 origins 与推导一致", registeredIdFromHostManifest(root) === FIXED_EXTENSION_ID);
+{
+  const template = readJson(path.join(root, "native-host", "host.manifest.template.json"));
+  check(
+    "host manifest 模板不含机器绝对路径且 ID 为占位符",
+    template.name === HOST_NAME &&
+      template.type === "stdio" &&
+      template.path === "__HOST_EXE__" &&
+      JSON.stringify(template.allowed_origins) === JSON.stringify(["chrome-extension://__EXTENSION_ID__/"]) &&
+      !/[A-Za-z]:\\\\/.test(JSON.stringify(template)),
+    JSON.stringify(template),
+  );
+  const generated = path.join(root, "native-host", "host.manifest.json");
+  check(
+    "生成物存在时必须与 manifest.json key 推导的 ID 一致",
+    !fs.existsSync(generated) || registeredIdFromHostManifest(root) === FIXED_EXTENSION_ID,
+  );
+}
 
 // 2. 目标发现：Chrome for Testing 两种产品目录都覆盖，未安装的浏览器不注册。
 {
@@ -277,9 +302,10 @@ check("host.manifest.json 的 origins 与推导一致", registeredIdFromHostMani
 // 12. CLI 端到端：复制到隔离仓库 + 隔离 HOME，注册/注销/错误参数。
 {
   const repo = makeRepo();
-  fs.mkdirSync(path.join(repo, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(repo, "scripts", "lib"), { recursive: true });
   const script = path.join(repo, "scripts", "register-host-mac.mjs");
   fs.copyFileSync(path.join(root, "scripts", "register-host-mac.mjs"), script);
+  fs.copyFileSync(path.join(root, "scripts", "lib", "host-manifest.mjs"), path.join(repo, "scripts", "lib", "host-manifest.mjs"));
   const home = makeHome(["Google/Chrome", "Google/ChromeForTesting"]);
   const udd = path.join(temp("browserpilot-cli-user-data-"), "profile");
   fs.mkdirSync(udd, { recursive: true });
@@ -387,9 +413,10 @@ check("host.manifest.json 的 origins 与推导一致", registeredIdFromHostMani
   check("parseArgs 默认不是 only 模式", parseArgs([]).onlyUserDataDirs === false);
 
   const cliRepo = makeRepo();
-  fs.mkdirSync(path.join(cliRepo, "scripts"), { recursive: true });
+  fs.mkdirSync(path.join(cliRepo, "scripts", "lib"), { recursive: true });
   const script = path.join(cliRepo, "scripts", "register-host-mac.mjs");
   fs.copyFileSync(path.join(root, "scripts", "register-host-mac.mjs"), script);
+  fs.copyFileSync(path.join(root, "scripts", "lib", "host-manifest.mjs"), path.join(cliRepo, "scripts", "lib", "host-manifest.mjs"));
   const cliHome = makeHome(["Google/Chrome", "Google/ChromeForTesting"]);
   const udd = path.join(temp("browserpilot-cli-only-"), "profile");
   fs.mkdirSync(udd, { recursive: true });

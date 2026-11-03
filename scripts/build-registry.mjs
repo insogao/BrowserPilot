@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { build } from "esbuild";
+import { describeMismatch, normalizeNewlines, sameGeneratedContent } from "./registry-check.mjs";
 
 const root = path.resolve(import.meta.dirname, "..");
 const templatesRoot = path.join(root, "registry", "templates");
@@ -50,7 +51,9 @@ function fingerprint(template, caps) {
 
 function detailMarkdown(template, entry, packageDir) {
   const readme = path.join(packageDir, "README.md");
-  const extra = fs.existsSync(readme) ? fs.readFileSync(readme, "utf8").trim().replace(/^# .+\r?\n+/, "") : "";
+  // 先规范化换行：Windows 检出（autocrlf=true）的 README 是 CRLF，而 `^# .+\r?\n+`
+  // 在 CRLF 空行处会残留一个 \r，导致生成结果多出空行、与 LF 机器上的产物不一致。
+  const extra = fs.existsSync(readme) ? normalizeNewlines(fs.readFileSync(readme, "utf8")).trim().replace(/^# .+\n+/, "") : "";
   const lines = [
     "# " + template.name,
     "",
@@ -195,8 +198,19 @@ for (const item of packages) outputs.set(path.join(detailsRoot, item.template.id
 
 if (check) {
   for (const [file, expected] of outputs) {
-    assert.ok(fs.existsSync(file), "缺少生成文件: " + path.relative(root, file));
-    assert.equal(fs.readFileSync(file, "utf8"), expected, "生成文件已过期: " + path.relative(root, file));
+    const relative = path.relative(root, file);
+    assert.ok(fs.existsSync(file), "缺少生成文件: " + relative);
+    const actual = fs.readFileSync(file, "utf8");
+    // Windows 检出可能是 CRLF，生成器输出 LF：先规范化换行再比较，避免把 34 个
+    // 生成文件误判为过期并整仓重写。真实内容差异仍会 fail closed。
+    if (sameGeneratedContent(actual, expected)) continue;
+    const diff = describeMismatch(actual, expected);
+    throw new Error(
+      "生成文件已过期: " + relative
+        + (diff
+          ? "（第 " + diff.line + " 行不一致；实际 " + JSON.stringify(diff.actual) + "，期望 " + JSON.stringify(diff.expected) + "）"
+          : "（行数不同）"),
+    );
   }
   console.log("PASS registry: schema + catalog + details + duplicate fingerprints");
 } else {

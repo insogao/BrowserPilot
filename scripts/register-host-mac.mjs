@@ -20,8 +20,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {
+  extensionIdFromKey,
+  extensionIdFromRepo,
+  registeredIdFromHostManifest,
+} from "./lib/host-manifest.mjs";
+
+export { extensionIdFromKey, extensionIdFromRepo, registeredIdFromHostManifest };
 
 export const HOST_NAME = "com.browserpilot.browseragent";
 export const HOST_DESCRIPTION = "BrowserPilot native messaging host";
@@ -47,27 +53,7 @@ const USAGE = [
 ].join("\n");
 
 // 扩展 ID 由 manifest.json 的 key 固定（任何机器加载都得到同一 ID）：
-// sha256(DER SPKI) 前 32 个 hex 位，0-9a-f 映射为 a-p。
-export function extensionIdFromKey(key) {
-  const hex = crypto.createHash("sha256").update(Buffer.from(key, "base64")).digest("hex");
-  return [...hex.slice(0, 32)].map((c) => String.fromCharCode(parseInt(c, 16) + 97)).join("");
-}
-
-export function extensionIdFromRepo(root) {
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
-  if (!manifest.key) throw new Error("manifest.json 缺少 key，无法推导稳定扩展 ID");
-  return extensionIdFromKey(manifest.key);
-}
-
-export function registeredIdFromHostManifest(root) {
-  try {
-    const m = JSON.parse(fs.readFileSync(path.join(root, "native-host", "host.manifest.json"), "utf8"));
-    const origin = (m.allowed_origins ?? [])[0] ?? "";
-    return String(origin).match(/^chrome-extension:\/\/([^/]+)\//)?.[1];
-  } catch {
-    return undefined;
-  }
-}
+// 推导与 host manifest 一致性检查统一在 scripts/lib/host-manifest.mjs。
 
 export function browserTargets(home = os.homedir()) {
   const support = path.join(home, "Library", "Application Support");

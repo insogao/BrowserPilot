@@ -3,6 +3,12 @@ dist/
 native-host/dist/
 native-host/auth.json
 native-host/profile-cache.json
+# 生成的 host manifest（path 是机器绝对路径）；仓库只 tracked host.manifest.template.json
+native-host/host.manifest.json
+# 注册前备份的 HKCU 旧值（含本机路径，不入库）
+native-host/backup/
+# 真实链路 E2E 的临时 profile / 隔离 LOCALAPPDATA
+.e2e-tmp/
 *.log
 .browserpilot-runs/
 .DS_Store

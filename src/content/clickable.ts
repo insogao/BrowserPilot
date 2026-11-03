@@ -87,7 +87,8 @@ export function collectClickable(max = 120, snapshotId = ""): L0Node[] {
     if (seen.has(el)) continue;
     seen.add(el);
     if (!visible(el)) continue;
-    if (el.closest("#bp-action-mask-host")) continue; // 排除自家遮罩（防 L0 污染）
+    // 排除自家 overlay（防 L0 污染）：人工接管遮罩 + AI 虚拟光标 host。
+    if (el.closest("#bp-action-mask-host, #bp-virtual-cursor-host")) continue;
     if (nodes.length >= max) break;
 
     const idx = nodes.length + 1;

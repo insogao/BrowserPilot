@@ -1,11 +1,20 @@
 // 把 native host 打包成单文件 exe（Node SEA，含 postject 注入）。
 // 运行：node scripts/build-host.mjs
+//
+// manifest 不再 tracked 机器绝对路径：本脚本从 host.manifest.template.json 生成
+// native-host/host.manifest.json（BOM-free UTF-8），path 指向本次构建的 exe，
+// allowed_origins 由 manifest.json 的 key 推导。
 import { build } from "esbuild";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import {
+  extensionIdFromRepo,
+  generatedManifestPath,
+  writeGeneratedManifest,
+} from "./lib/host-manifest.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -16,9 +25,9 @@ const blob = path.join(outDir, "sea-prep.blob");
 // Chrome 下次自动重连时直接启动新版，无需关闭 Chrome 或人工点击。
 const exe = path.join(outDir, "browserpilot-host-" + Date.now() + ".exe");
 const seaConfig = path.join(outDir, "sea-config.json");
-const hostManifest = path.join(root, "native-host", "host.manifest.json");
 const authFile = path.join(root, "native-host", "auth.json");
 const buildToken = crypto.randomBytes(24).toString("hex");
+const extensionId = extensionIdFromRepo(root);
 
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -67,18 +76,11 @@ try {
   });
 }
 
-const manifest = fs.existsSync(hostManifest)
-  ? JSON.parse(fs.readFileSync(hostManifest, "utf8"))
-  : {
-      name: "com.browserpilot.browseragent",
-      description: "BrowserPilot native messaging host",
-      type: "stdio",
-      allowed_origins: ["chrome-extension://nnollghpaggbcdkkgoieneffnlijinio/"],
-    };
-manifest.path = exe;
-const tmpManifest = hostManifest + ".tmp";
-fs.writeFileSync(tmpManifest, JSON.stringify(manifest, null, 2), "utf8");
-fs.renameSync(tmpManifest, hostManifest);
+if (!fs.existsSync(exe)) throw new Error("构建后找不到 host exe: " + exe);
+const { file: manifestFile } = writeGeneratedManifest({ root, hostPath: exe, extensionId });
 fs.writeFileSync(authFile, JSON.stringify({ authToken: buildToken, builtAt: Date.now() }, null, 2), { mode: 0o600 });
+
 console.log("[build:host] done -> " + exe);
-console.log("[build:host] manifest switched -> " + hostManifest);
+console.log("[build:host] extensionId -> " + extensionId);
+console.log("[build:host] manifest (BOM-free, generated) -> " + manifestFile);
+if (!fs.existsSync(generatedManifestPath(root))) throw new Error("manifest 生成失败");

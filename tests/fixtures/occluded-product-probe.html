@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>occl-probe-boot</title>
+<style>
+  /* 固定布局：所有采样块都在视口左上角，坐标由 __probe().rects 给出。
+     不使用 transform / 动画 / 滚动，保证截图坐标稳定。 */
+  html, body { margin: 0; padding: 0; background: #000; overflow: hidden;
+               font: 12px/1.4 Consolas, monospace; color: #fff; }
+  #marker { position: absolute; left: 8px; top: 8px; width: 24px; height: 24px;
+            background: #000; border: 0; }
+  #c2d { position: absolute; left: 8px; top: 48px; width: 160px; height: 64px;
+         background: #000; border: 0; display: block; }
+  #gl  { position: absolute; left: 8px; top: 128px; width: 160px; height: 64px;
+         background: #000; border: 0; display: block; }
+  #frame { position: absolute; left: 8px; top: 208px; width: 240px; height: 120px;
+           border: 0; background: #000; display: block; }
+  #info { position: absolute; left: 260px; top: 8px; font-size: 12px; color: #888;
+          white-space: pre; }
+</style>
+</head>
+<body>
+<div id="marker"></div>
+<canvas id="c2d" width="160" height="64"></canvas>
+<canvas id="gl" width="160" height="64"></canvas>
+<iframe id="frame" src="/frame" scrolling="no"></iframe>
+<div id="info"></div>
+<script>
+(() => {
+  const q = new URLSearchParams(location.search);
+  const id = q.get('id') || 'x';
+
+  const el = {
+    marker: document.getElementById('marker'),
+    c2d: document.getElementById('c2d'),
+    gl: document.getElementById('gl'),
+    frame: document.getElementById('frame'),
+    info: document.getElementById('info'),
+  };
+  const ctx2d = el.c2d.getContext('2d');
+
+  // ---- WebGL：只做 clear，颜色走真实 GPU 合成路径 -------------------------
+  const gl = (() => {
+    const g = el.gl.getContext('webgl2') || el.gl.getContext('webgl');
+    if (!g) return null;
+    g.viewport(0, 0, 160, 64);
+    return g;
+  })();
+
+  let rafCount = 0;
+  let timerCount = 0;
+  let rafRunning = true;
+
+  // Frame counter encoded as a colour: R = low byte, G = high byte, B = 255.
+  // 与 background-render-probe.html 的 markerColour 完全一致。
+  function markerColour(n) {
+    return [n & 0xff, (n >> 8) & 0xff, 255];
+  }
+
+  function paint() {
+    const [r, g, b] = markerColour(rafCount);
+    el.marker.style.background = `rgb(${r},${g},${b})`;
+    el.info.textContent =
+      `id=${id}\nframe=${rafCount}\nvis=${document.visibilityState}\nfocus=${document.hasFocus()}`;
+
+    // Canvas 2D：整块独特颜色（截图中心像素校验）。
+    ctx2d.fillStyle = '#ff00aa';
+    ctx2d.fillRect(0, 0, 160, 64);
+
+    // WebGL：整块独特颜色（0,255,102）。
+    if (gl) {
+      gl.clearColor(0, 1, 0.4, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+  }
+
+  function tick(ts) {
+    // 遮挡/隐藏后浏览器本来就会停/强节流 rAF；显式停掉，令帧号只由 __bump 驱动，
+    // 这样「PNG marker vs DOM rafCount」不受 rAF 节流抖动影响。
+    if (document.visibilityState === 'hidden') {
+      rafRunning = false;
+      return;
+    }
+    rafCount += 1;
+    paint();
+    requestAnimationFrame(tick);
+  }
+  requestAnimationFrame(tick);
+  setInterval(() => { timerCount += 1; paint(); }, 1000);
+  document.addEventListener('visibilitychange', () => {
+    paint();
+    if (document.visibilityState === 'visible' && !rafRunning) {
+      rafRunning = true;
+      requestAnimationFrame(tick);
+    }
+  });
+
+  // ---- probe / bump ------------------------------------------------------
+  function rectOf(node) {
+    const r = node.getBoundingClientRect();
+    return { x: r.x, y: r.y, w: r.width, h: r.height };
+  }
+
+  window.__probe = () => {
+    let canvasPixel = null;
+    try { canvasPixel = Array.from(ctx2d.getImageData(80, 32, 1, 1).data); } catch (e) { canvasPixel = 'error:' + e.message; }
+    let iframeReady = false;
+    try {
+      const d = el.frame.contentDocument;
+      iframeReady = !!(d && d.readyState === 'complete' && d.getElementById('frame-content'));
+    } catch (e) {
+      iframeReady = false;
+    }
+    return {
+      id,
+      rafCount,
+      timerCount,
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
+      dpr: window.devicePixelRatio || 1,
+      innerWidth: window.innerWidth,
+      innerHeight: window.innerHeight,
+      iframeReady,
+      markerColour: markerColour(rafCount),
+      rects: {
+        marker: rectOf(el.marker),
+        c2d: rectOf(el.c2d),
+        gl: rectOf(el.gl),
+        iframe: rectOf(el.frame),
+      },
+      canvasPixel,
+      webglVersion: gl ? String(gl.getParameter(gl.VERSION)) : null,
+      webglRendererr: gl ? String(gl.getParameter(gl.RENDERER)) : null,
+      webglError: gl ? gl.getError() : 'no-context',
+      title: document.title,
+    };
+  };
+
+  // 显式 DOM repaint（不依赖 rAF）：遮挡后 rAF 停止时由调用方驱动新帧。
+  window.__bump = (n = 1) => {
+    rafCount += Number(n) || 0;
+    paint();
+    // 强制一次样式/布局读取，确保 invalidation 在主线程落地。
+    void el.marker.getBoundingClientRect().width;
+    return rafCount;
+  };
+
+  document.title = 'occlp-' + id;
+  paint();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>input-arbitration main</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #f4f6f8; color: #111;
+    font: 13px/1.3 system-ui, "Segoe UI", sans-serif; }
+  #hud { position: absolute; left: 8px; top: 6px; font-size: 12px; color: #333; white-space: pre; }
+  #input { position: absolute; left: 40px; top: 56px; width: 320px; height: 34px;
+    font: 14px monospace; padding: 2px 6px; box-sizing: border-box; }
+  #btn { position: absolute; left: 400px; top: 56px; width: 200px; height: 90px;
+    background: #1a73e8; color: #fff; border: 0; border-radius: 8px; font-size: 18px; }
+  #scroll { position: absolute; left: 620px; top: 56px; width: 200px; height: 260px;
+    overflow: auto; background: #fff; border: 1px solid #bbb; }
+  #scroll .tall { height: 3000px; background: repeating-linear-gradient(
+      #fff 0 24px, #eef3ff 24px 48px); }
+  #drag-src { position: absolute; left: 40px; top: 180px; width: 120px; height: 80px;
+    background: #ffb300; color: #222; display: flex; align-items: center;
+    justify-content: center; user-select: none; }
+  #drag-dst { position: absolute; left: 180px; top: 180px; width: 140px; height: 80px;
+    background: #c5e1a5; color: #222; display: flex; align-items: center;
+    justify-content: center; }
+  #frame { position: absolute; left: 40px; top: 300px; width: 460px; height: 200px;
+    border: 2px solid #999; background: #fff; }
+  #keys { position: absolute; left: 620px; top: 330px; right: 8px; bottom: 6px;
+    font: 11px monospace; color: #333; overflow: hidden; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<div id="hud">clicks=<span id="count">0</span> child=<span id="child">0</span></div>
+<input id="input" type="text" autocomplete="off" spellcheck="false">
+<button id="btn" type="button">Target</button>
+<div id="scroll"><div class="tall"></div></div>
+<div id="drag-src">drag src</div>
+<div id="drag-dst">drag dst</div>
+<iframe id="frame" title="cross-site frame"></iframe>
+<div id="keys"></div>
+<script>
+(() => {
+  const params = new URLSearchParams(location.search);
+  const frameSrc = params.get("frame") || "";
+  const token = params.get("token") || "";
+  if (token) document.title = "ia-" + token;
+  if (frameSrc) document.getElementById("frame").src = frameSrc;
+
+  window.__clicks = 0;
+  window.__events = [];
+  window.__inputEvents = 0;
+  window.__keys = [];
+  window.__drag = { down: 0, moves: 0, movesDown: 0, up: 0, dstUp: 0, trace: [] };
+  window.__childClicks = 0;
+  window.__childMsgs = [];
+  window.__wheel = 0;
+  window.__jsRuns = 0;
+
+  const btn = document.getElementById("btn");
+  for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+    btn.addEventListener(type, (e) => {
+      window.__events.push({ type, x: e.clientX, y: e.clientY, trusted: e.isTrusted });
+      if (type === "click") {
+        window.__clicks += 1;
+        document.getElementById("count").textContent = String(window.__clicks);
+      }
+    });
+  }
+
+  const input = document.getElementById("input");
+  input.addEventListener("input", () => { window.__inputEvents += 1; });
+
+  const src = document.getElementById("drag-src");
+  const dst = document.getElementById("drag-dst");
+  src.addEventListener("mousedown", () => { window.__drag.down += 1; });
+  document.addEventListener("mousemove", (e) => {
+    // moves: 任何 move（产品 drag 目前发 buttons=0 的 move，仍然算一次移动）
+    // movesDown: 只有按住左键的 move（页面里判断拖拽的常规条件）
+    window.__drag.moves += 1;
+    if (e.buttons === 1) window.__drag.movesDown += 1;
+    if (window.__drag.trace.length < 200) {
+      window.__drag.trace.push([e.clientX, e.clientY, e.buttons]);
+    }
+  });
+  document.addEventListener("mouseup", (e) => {
+    window.__drag.up += 1;
+    if (e.target === dst) window.__drag.dstUp += 1;
+  });
+
+  // Ctrl+A 之类页面内组合：页面自证收到带 ctrl 的按键，并记录选区。
+  document.addEventListener("keydown", (e) => {
+    if (window.__keys.length < 60) {
+      window.__keys.push({
+        key: e.key, code: e.code, ctrl: e.ctrlKey, meta: e.metaKey,
+        alt: e.altKey, shift: e.shiftKey, trusted: e.isTrusted,
+        target: e.target && e.target.id ? e.target.id : (e.target && e.target.tagName) || "",
+      });
+      const el = document.getElementById("keys");
+      el.textContent = window.__keys.slice(-8).map((k) =>
+        k.key + (k.ctrl ? "+ctrl" : "") + "@" + k.target).join("\n");
+    }
+  });
+
+  const scroll = document.getElementById("scroll");
+  scroll.addEventListener("scroll", () => { window.__wheel += 1; });
+  window.__wheelEvents = 0;
+  window.__lastWheel = null;
+  document.addEventListener("wheel", (e) => {
+    window.__wheelEvents += 1;
+    window.__lastWheel = { deltaY: e.deltaY, x: e.clientX, y: e.clientY,
+      target: e.target && e.target.id ? e.target.id : (e.target && e.target.className) || "" };
+  }, { passive: false });
+
+  window.addEventListener("message", (e) => {
+    const data = e.data || {};
+    if (data.bp === "frame-click") {
+      window.__childClicks += 1;
+      document.getElementById("child").textContent = String(window.__childClicks);
+      if (window.__childMsgs.length < 100) {
+        window.__childMsgs.push({ n: data.n, origin: e.origin, trusted: data.trusted });
+      }
+    }
+  });
+
+  function snapshot() {
+    const frame = document.getElementById("frame");
+    const fr = frame.getBoundingClientRect();
+    const br = btn.getBoundingClientRect();
+    const sr = src.getBoundingClientRect();
+    const dr = dst.getBoundingClientRect();
+    const ir = input.getBoundingClientRect();
+    const sel = window.getSelection();
+    return {
+      token: token,
+      clicks: window.__clicks,
+      events: window.__events.slice(-20),
+      inputValue: input.value,
+      inputEvents: window.__inputEvents,
+      keys: window.__keys,
+      drag: window.__drag,
+      childClicks: window.__childClicks,
+      childMsgs: window.__childMsgs,
+      wheelEvents: window.__wheelEvents,
+      lastWheel: window.__lastWheel,
+      scrollTop: scroll.scrollTop,
+      jsRuns: window.__jsRuns,
+      countText: document.getElementById("count").textContent,
+      selection: sel ? String(sel) : "",
+      inputSelection: { start: input.selectionStart, end: input.selectionEnd, length: input.value.length },
+      activeElement: document.activeElement ? (document.activeElement.id || document.activeElement.tagName) : "",
+      rects: {
+        btn: { x: br.left, y: br.top, w: br.width, h: br.height },
+        input: { x: ir.left, y: ir.top, w: ir.width, h: ir.height },
+        src: { x: sr.left, y: sr.top, w: sr.width, h: sr.height },
+        dst: { x: dr.left, y: dr.top, w: dr.width, h: dr.height },
+        frame: { x: fr.left, y: fr.top, w: fr.width, h: fr.height },
+        scroll: { x: 620, y: 56, w: 200, h: 260 },
+      },
+      viewport: { w: innerWidth, h: innerHeight, dpr: devicePixelRatio },
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus(),
+      frameSrc: frame.src,
+      at: Date.now(),
+    };
+  }
+
+  window.__probe = snapshot;
+
+  // 带外观测通道：每 200ms 把状态 POST 回 harness 的 fixture server。
+  // HUMAN 模式下扩展会拒绝 js/tab_cdp_call（Runtime.evaluate 也算 AI 输入命令），
+  // 因此 HUMAN 用例必须用这条不经过任何扩展命令的通道读取页面状态。
+  const beacon = () => {
+    try {
+      const body = JSON.stringify(snapshot());
+      fetch("/state?token=" + encodeURIComponent(token), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body,
+        keepalive: true,
+      }).catch(() => {});
+    } catch (err) {
+      // beacon 失败不影响页面行为；harness 会看到状态过期。
+    }
+  };
+  setInterval(beacon, 200);
+  setTimeout(beacon, 0);
+  window.addEventListener("load", beacon);
+  window.addEventListener("resize", beacon);
+})();
+</script>
+</body>
+</html>

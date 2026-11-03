@@ -7,7 +7,12 @@ import fs from "node:fs";
 import net from "node:net";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const manifest = JSON.parse(fs.readFileSync(path.join(here, "host.manifest.json"), "utf8"));
+const manifestFile = path.join(here, "host.manifest.json");
+if (!fs.existsSync(manifestFile)) {
+  console.error("host.manifest.json 不存在（生成物，不入库）；先运行 node scripts/build-host.mjs");
+  process.exit(1);
+}
+const manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
 const exe = manifest.path;
 const port = 48101;
 

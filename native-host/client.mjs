@@ -76,7 +76,22 @@ function sendAtPort(port, commandName, commandArgs, timeoutMs) {
       socket.destroy();
       resolve(result);
     };
-    socket.setTimeout(timeoutMs, () => finish(undefined));
+    const disconnected = (detail) => finish({
+      type: "result",
+      requestId: null,
+      ok: false,
+      error: "host_disconnected",
+      errorCode: "HOST_DISCONNECTED",
+      detail,
+    });
+    socket.setTimeout(timeoutMs, () => finish({
+      type: "result",
+      requestId: null,
+      ok: false,
+      error: "host_request_timeout",
+      errorCode: "HOST_TIMEOUT",
+      detail: commandName + " timed out after " + timeoutMs + "ms",
+    }));
     socket.on("connect", () => socket.write(JSON.stringify({ type: "command", name: commandName, args: commandArgs, requestId: "cli-1", agentId, ...(authToken ? { authToken } : {}) }) + "\n"));
     socket.on("data", (d) => {
       buf += d.toString("utf8");
@@ -97,7 +112,11 @@ function sendAtPort(port, commandName, commandArgs, timeoutMs) {
         }
       }
     });
-    socket.on("error", () => finish(undefined));
+    // host 正常退出会 half-close；硬杀则可能只触发 error/close。两条路径都必须
+    // 显式返回错误，绝不能让一次已断开的请求挂到 2 分钟默认超时。
+    socket.on("end", () => disconnected("native host closed the connection before returning a result (end)"));
+    socket.on("close", () => disconnected("native host closed the connection before returning a result (close)"));
+    socket.on("error", (error) => disconnected("native host connection error: " + error.message));
   });
 }
 
@@ -176,6 +195,9 @@ function launchSavedProfile() {
   const launchArgs = [];
   if (profile.userDataDir) launchArgs.push("--user-data-dir=" + profile.userDataDir);
   if (profile.profileDir) launchArgs.push("--profile-directory=" + profile.profileDir);
+  // The non-branded product build disables the test field-trial config, so the
+  // network service sandbox must be requested explicitly at every launch path.
+  launchArgs.push("--enable-features=NetworkServiceSandbox");
   const child = spawn(profile.chromeExe, launchArgs, {
     detached: true,
     stdio: "ignore",

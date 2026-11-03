@@ -59,7 +59,27 @@
       button.primary:hover { background: var(--blue-hover); }
       button.resume { color: #92400e; background: #fffbeb; border-color: #fcd34d; }
       button[hidden] { display: none; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
       .toast { margin-top: 10px; font-size: 12px; color: var(--muted); min-height: 16px; }
+      .toast.error { color: #b91c1c; }
+      .toast.ok { color: var(--ok); }
+      select {
+        width: 100%;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 7px 8px;
+        font-size: 12px;
+        background: #fff;
+        color: var(--fg);
+        margin-bottom: 8px;
+      }
+      .input-actions { display: flex; gap: 6px; margin-top: 6px; }
+      .input-actions button { flex: 1; padding: 8px 6px; font-size: 12px; }
+      .input-actions button.accent { color: #1d4ed8; background: #eff6ff; border-color: #bfdbfe; }
+      .input-actions button.warn { color: #92400e; background: #fffbeb; border-color: #fcd34d; }
+      .input-hint { font-size: 12px; color: var(--muted); margin-top: 4px; }
+      .input-hint:empty { display: none; }
+      .section-title { font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
     </style>
   </head>
   <body>
@@ -78,6 +98,28 @@
     <div class="utilities">
       <button class="copy" id="guide" title="复制技能安装引导（GitHub SKILL.md + 本机连接信息）">⧉&nbsp; Copy Skill</button>
       <button class="icon" id="manage" title="管理操作模板" aria-label="管理操作模板">⚙</button>
+    </div>
+
+    <div class="card" id="input-card">
+      <div class="section-title">输入权（当前 Task Space）</div>
+      <select id="space-select" aria-label="选择 Task Space">
+        <option value="">先 open_space 或选择一个 Task Space</option>
+      </select>
+      <div class="row"><span class="k">模式</span><span class="v" id="input-mode">-</span></div>
+      <div class="row"><span class="k">归属</span><span class="v" id="input-ownership">-</span></div>
+      <div class="row"><span class="k">剩余授权</span><span class="v" id="input-grant">-</span></div>
+      <div class="row"><span class="k">内核</span><span class="v" id="input-kernel">-</span></div>
+      <div class="row"><span class="k">目标</span><span class="v" id="input-target">-</span></div>
+      <div class="input-hint" id="input-hint"></div>
+      <div class="input-actions">
+        <button class="warn" id="human-presence" data-bp-action="human_presence" title="我在操作：进入 ASSIST（不改 ownership）">我在操作</button>
+        <button class="accent" id="grant-input" data-bp-action="grant_input" title="允许 Agent 执行一次输入（默认 60s 内有效）">允许一次输入</button>
+        <button id="show-window" data-bp-action="ensure_visible" title="显示当前 Task Space 窗口（不抢焦点）">显示窗口</button>
+      </div>
+      <div class="input-actions">
+        <button id="input-refresh" data-bp-action="input_status">刷新输入权</button>
+      </div>
+      <div class="toast" id="input-toast" role="status" aria-live="polite"></div>
     </div>
 
     <div class="card" id="groq-card">

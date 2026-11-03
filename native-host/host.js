@@ -36,10 +36,15 @@ function resolveAuthToken() {
   return token;
 }
 const authToken = resolveAuthToken();
+// 每次 host 进程启动生成唯一实例 ID。它进入内部 requestId，确保旧 host 进程里
+// 未完成的扩展命令结果**不可能**在新 host 进程中匹配到另一个客户端的 pending
+// 请求（旧结果的 internal id 带旧实例 ID，新 host 的 pending 表永远不会命中）。
+const hostInstanceId = crypto.randomBytes(8).toString("hex");
 const pending = new Map();
 let clientSeq = 0;
 let requestSeq = 0;
 let sessionFile = "";
+let activeServer;
 const AGENT_ACTIVE_TTL_MS = 30_000;
 const PROFILE_CACHE_FILE = "profile-cache.json";
 let lastAgentActivity = 0;
@@ -73,6 +78,7 @@ function markAgentActivity() {
 let inBuf = Buffer.alloc(0);
 
 function sendToExtension(obj) {
+  if (shuttingDown) return;
   const json = Buffer.from(JSON.stringify(obj), "utf8");
   const len = Buffer.alloc(4);
   len.writeUInt32LE(json.length, 0);
@@ -114,11 +120,7 @@ function handleFromExtension(msg) {
   } else if (msg.type === "command") {
     // 扩展主动问 host（如 get_profile 由扩展侧触发时不常见；此处兜底回 profile）
     if (msg.name === "get_profile" || msg.name === "get_ready_state") {
-      const profile = detectProfile();
-      writeProfileCache(profile);
-      const data = msg.name === "get_ready_state"
-        ? { port: activePort, authToken, profile }
-        : profile;
+      const data = msg.name === "get_ready_state" ? readyStatePayload() : profilePayload();
       sendToExtension({ type: "result", requestId: msg.requestId, ok: true, data });
     }
   }
@@ -127,6 +129,10 @@ function handleFromExtension(msg) {
 // ---------- 外部 AI TCP 接入 ----------
 function startServer(port) {
   const server = net.createServer((socket) => {
+    if (shuttingDown) {
+      try { socket.destroy(); } catch {}
+      return;
+    }
     socket.bpClientId = ++clientSeq;
     socket.bpAuthenticated = false;
     clients.add(socket);
@@ -165,13 +171,14 @@ function startServer(port) {
   });
 
   server.listen(port, "127.0.0.1", () => {
+    activeServer = server;
     activePort = port;
     const profile = detectProfile();
     writeProfileCache(profile);
     writeSessionFile(port);
-    console.error("[host] listening on 127.0.0.1:" + port);
+    console.error("[host] listening on 127.0.0.1:" + port + " instance=" + hostInstanceId);
     // ready 上报：port + profile 一并给扩展
-    sendToExtension({ type: "event", name: "ready", args: { port, authToken, profile } });
+    sendToExtension({ type: "event", name: "ready", args: { port, authToken, instanceId: hostInstanceId, profile } });
     emitClientState(false);
   });
 }
@@ -183,10 +190,52 @@ function tokenMatches(supplied) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+// 外部客户端身份**只由 Host 服务端分配**：`agent:<sanitized-id>`。
+// 规则：
+//  - 客户端自报的 `agentId` 只作为“期望名”，必须通过字符集/长度校验且不是保留 ID；
+//  - 校验失败或使用保留 ID → 分配 `socket-<连接序号>`（永不回显客户端原文）；
+//  - `_clientId` / `_foregroundLeaseToken` / 任何 `_` 前缀字段都只允许 Host 注入；
+//  - 转发给扩展的命令是**字段白名单**（type/name/args/space），未来新增的内部字段不会
+//    因为“忘了剥离”而泄漏到不可信客户端可控的位置。
+const AGENT_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+// 保留 ID：用户入口/内部通道名，以及容易被误认为特权身份的词。
+// 扩展侧的身份判定不依赖这个表（见 src/background/spaces.ts），这里只是纵深防御 + 明确拒绝。
+const RESERVED_AGENT_IDS = new Set([
+  "browserpilot-internal", "internal", "user", "human", "popup", "options",
+  "kernel", "host", "system", "admin", "root", "anonymous", "untrusted",
+]);
+const COMMAND_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+/** 服务端分配身份。返回值永远匹配 AGENT_ID_PATTERN（或 socket-<n>）。 */
+function assignAgentId(msg, socket) {
+  const raw = typeof msg.agentId === "string" ? msg.agentId.trim() : "";
+  if (!raw) return "socket-" + socket.bpClientId;
+  if (!AGENT_ID_PATTERN.test(raw) || RESERVED_AGENT_IDS.has(raw.toLowerCase())) {
+    console.error("[host] rejected agentId " + JSON.stringify(raw.slice(0, 80)) + " from socket " + socket.bpClientId + "; assigning socket-" + socket.bpClientId);
+    return "socket-" + socket.bpClientId;
+  }
+  return raw;
+}
+
+/** args 只保留普通字段：内部标记（`internal` / `_*`）不允许从外部注入。 */
+function sanitizeArgs(args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (key === "internal" || key.startsWith("_")) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
 function handleFromClient(msg, socket) {
   if (!msg || typeof msg !== "object") return;
   if (msg.type !== "command") {
     socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: false, error: "only command messages accepted" }) + "\n");
+    return;
+  }
+  if (typeof msg.name !== "string" || !COMMAND_NAME_PATTERN.test(msg.name)) {
+    socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: false, error: "bad_command_name" }) + "\n");
     return;
   }
   // ping/reload 仅用于本机发现与开发热更新；所有浏览器数据/操作命令必须持有 capability token。
@@ -198,6 +247,12 @@ function handleFromClient(msg, socket) {
   }
   if (tokenMatches(supplied)) socket.bpAuthenticated = true;
   if (socket.bpAuthenticated && !publicCommand) markAgentActivity();
+  // get_ready_state 是 host 自身的握手命令（不属于扩展命令表）：已认证客户端直接取
+  // port/authToken/profile，不必绕到 SW 再报 unknown command。
+  if (msg.name === "get_ready_state") {
+    socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: true, data: readyStatePayload() }) + "\n");
+    return;
+  }
   // 未应答请求设上限：异常客户端不能无限膨胀 pending 表。
   if (pending.size >= 512) {
     socket.write(JSON.stringify({ type: "result", requestId: msg.requestId ?? null, ok: false, error: "too_many_pending_requests" }) + "\n");
@@ -206,20 +261,20 @@ function handleFromClient(msg, socket) {
   // 转发给扩展执行
   // requestId 原样保存/回传（不强制 String 化）：对象型 requestId 之间不会互相串扰。
   const externalRequestId = msg.requestId ?? null;
-  const internalRequestId = "bp:" + socket.bpClientId + ":" + (++requestSeq);
+  // 实例 ID 是旧结果隔离的关键：host 重启后，旧 SW 命令返回时携带的是旧实例 ID，
+  // 不会与新 host 中任何 pending（即使 client/seq 相同）发生误路由。
+  const internalRequestId = "bp:" + hostInstanceId + ":" + socket.bpClientId + ":" + (++requestSeq);
   pending.set(internalRequestId, { socket, requestId: externalRequestId });
-  const declaredAgentId = typeof msg.agentId === "string" && /^[A-Za-z0-9._:-]{1,80}$/.test(msg.agentId)
-    ? msg.agentId
-    : "socket-" + socket.bpClientId;
-  // 身份与内部租约字段只允许 Host 注入，外部消息中的同名字段一律覆盖/丢弃。
-  const {
-    authToken: _ignored,
-    agentId: _agentId,
-    _clientId: _spoofedClientId,
-    _foregroundLeaseToken: _spoofedLease,
-    ...forward
-  } = msg;
-  sendToExtension({ ...forward, requestId: internalRequestId, _clientId: "agent:" + declaredAgentId });
+  const agentId = assignAgentId(msg, socket);
+  const forward = {
+    type: "command",
+    name: msg.name,
+    args: sanitizeArgs(msg.args),
+    ...(typeof msg.space === "string" && msg.space.trim() ? { space: msg.space.trim() } : {}),
+    requestId: internalRequestId,
+    _clientId: "agent:" + agentId,
+  };
+  sendToExtension(forward);
 }
 
 function writeSessionFile(port) {
@@ -227,7 +282,7 @@ function writeSessionFile(port) {
     const dir = sessionDir();
     fs.mkdirSync(dir, { recursive: true });
     sessionFile = path.join(dir, String(port) + ".json");
-    fs.writeFileSync(sessionFile, JSON.stringify({ port, authToken, pid: process.pid, updatedAt: Date.now() }), { mode: 0o600 });
+    fs.writeFileSync(sessionFile, JSON.stringify({ port, authToken, instanceId: hostInstanceId, pid: process.pid, updatedAt: Date.now() }), { mode: 0o600 });
   } catch (e) {
     console.error("[host] session file error:", e.message);
   }
@@ -262,6 +317,18 @@ function writeProfileCache(profile) {
   }
 }
 
+/** profile 的唯一读取入口：探测 + 写缓存，扩展与外部客户端看到同一份结果。 */
+function profilePayload() {
+  const profile = detectProfile();
+  writeProfileCache(profile);
+  return profile;
+}
+
+/** 握手信息：端口 / capability token / profile。扩展与已认证 TCP 客户端共用。 */
+function readyStatePayload() {
+  return { port: activePort, authToken, instanceId: hostInstanceId, profile: profilePayload() };
+}
+
 function cleanupSessionFile() {
   if (!sessionFile) return;
   try { fs.unlinkSync(sessionFile); } catch {}
@@ -274,8 +341,60 @@ function main() {
   console.error("[host] com.browserpilot.browseragent up, pid=" + process.pid);
 }
 
+// Chrome 关闭 native port（SW 停止 / 浏览器退出）时 stdin 会 EOF。
+// 这时必须主动退出并清理 session 文件，否则旧的 host 会一直占着端口和 session 记录，
+// 让下一次 connectNative 的发现逻辑看到两个“活着”的 host。
+let shuttingDown = false;
+
+/**
+ * 在 host 正常退出前，把所有仍在等待扩展结果的 TCP 请求显式失败。
+ *
+ * 必要性：客户端可能在等一条 10s/60s 的命令；如果 host 只是 close socket，
+ * 官方客户端在没有 'close' 处理时会一直挂到自身超时。这里先写一条
+ * `ok:false, errorCode:HOST_DISCONNECTED` 结果，再 half-close，保证“断开”是一个
+ * 明确错误而不是悬空等待。硬杀（taskkill /F）无法执行本函数，客户端侧必须同样
+ * 处理 close/error（见 native-host/client.mjs）。
+ */
+function failPendingClients(reason) {
+  const touched = new Set();
+  for (const route of pending.values()) {
+    if (!route.socket || route.socket.destroyed) continue;
+    try {
+      route.socket.write(JSON.stringify({
+        type: "result",
+        requestId: route.requestId,
+        ok: false,
+        error: reason,
+        errorCode: "HOST_DISCONNECTED",
+      }) + "\n");
+      touched.add(route.socket);
+    } catch {}
+  }
+  pending.clear();
+  for (const socket of touched) {
+    try { socket.end(); } catch {}
+  }
+  for (const socket of clients) {
+    try { socket.end(); } catch {}
+  }
+}
+
+function shutdownFromPort(reason) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.error("[host] native port closed (" + reason + "), shutting down");
+  failPendingClients("host_disconnected");
+  cleanupSessionFile();
+  try { activeServer?.close(); } catch {}
+  // 给 socket write/end 一个刷新窗口；不使用 unref，确保进程在刷新完成后退出。
+  setTimeout(() => process.exit(0), 100);
+}
+process.stdin.on("end", () => shutdownFromPort("stdin end"));
+process.stdin.on("close", () => shutdownFromPort("stdin close"));
+process.stdout.on("error", () => shutdownFromPort("stdout error"));
+
 process.on("exit", cleanupSessionFile);
-process.on("SIGTERM", () => { cleanupSessionFile(); process.exit(0); });
-process.on("SIGINT", () => { cleanupSessionFile(); process.exit(0); });
+process.on("SIGTERM", () => shutdownFromPort("SIGTERM"));
+process.on("SIGINT", () => shutdownFromPort("SIGINT"));
 
 main();
