@@ -3,6 +3,7 @@
 # Usage:
 #   powershell -NoProfile -ExecutionPolicy Bypass -File native-host/unregister.ps1
 #   powershell ... -File native-host/unregister.ps1 -IncludeEdge
+#   powershell ... -File native-host/unregister.ps1 -IncludeChromium
 #   powershell ... -File native-host/unregister.ps1 -BackupFile native-host\backup\<stamp>.json
 #
 # Rules:
@@ -10,11 +11,13 @@
 #     com.egolite.browseragent are never read, written or deleted.
 #   - With a backup: restore each target's previous default value verbatim; keys recorded as
 #     "did not exist" are removed.
-#   - Without a backup: delete this host's key (Chrome; Edge too when -IncludeEdge is given).
+#   - Without a backup: delete this host's key (Chrome; Chromium/Edge too when
+#     -IncludeChromium/-IncludeEdge is given).
 #   - Only HKCU:\ is accepted, and every registryPath read from a backup must end with this
 #     host name, so a tampered backup file cannot point the script at an unrelated key.
 param(
     [switch]$IncludeEdge,
+    [switch]$IncludeChromium,
     [string]$RegistryRoot = "HKCU:\Software",
     [string]$BackupDir = "",
     [string]$BackupFile = "",
@@ -131,6 +134,7 @@ try {
     }
 
     $chromeKey = $RegistryRoot.TrimEnd('\') + '\Google\Chrome\NativeMessagingHosts\' + $HostName
+    $chromiumKey = $RegistryRoot.TrimEnd('\') + '\Chromium\NativeMessagingHosts\' + $HostName
     $edgeKey = $RegistryRoot.TrimEnd('\') + '\Microsoft\Edge\NativeMessagingHosts\' + $HostName
 
     $actions = New-Object System.Collections.ArrayList
@@ -157,6 +161,10 @@ try {
         }
         # Edge explicitly requested but not covered by the backup: this is the
         # "no backup for that target -> remove our host key" branch.
+        if ($IncludeChromium -and -not $seen.ContainsKey("chromium")) {
+            Assert-OwnKeyPath $chromiumKey
+            [void]$actions.Add([ordered]@{ browser = "chromium"; registryPath = $chromiumKey; action = (Remove-RegistryKey $chromiumKey) })
+        }
         if ($IncludeEdge -and -not $seen.ContainsKey("edge")) {
             Assert-OwnKeyPath $edgeKey
             [void]$actions.Add([ordered]@{ browser = "edge"; registryPath = $edgeKey; action = (Remove-RegistryKey $edgeKey) })
@@ -164,6 +172,10 @@ try {
     } else {
         Assert-OwnKeyPath $chromeKey
         [void]$actions.Add([ordered]@{ browser = "chrome"; registryPath = $chromeKey; action = (Remove-RegistryKey $chromeKey) })
+        if ($IncludeChromium) {
+            Assert-OwnKeyPath $chromiumKey
+            [void]$actions.Add([ordered]@{ browser = "chromium"; registryPath = $chromiumKey; action = (Remove-RegistryKey $chromiumKey) })
+        }
         if ($IncludeEdge) {
             Assert-OwnKeyPath $edgeKey
             [void]$actions.Add([ordered]@{ browser = "edge"; registryPath = $edgeKey; action = (Remove-RegistryKey $edgeKey) })
