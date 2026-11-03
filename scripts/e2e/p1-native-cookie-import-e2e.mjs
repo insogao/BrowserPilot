@@ -593,6 +593,25 @@ class Browser {
     return page;
   }
 
+  async firstPageForUrl(prefix, timeoutMs = 15000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const targets = await this.listTargets();
+      const info = targets.find((t) => t.type === "page" &&
+        String(t.url || "").startsWith(prefix) && t.webSocketDebuggerUrl);
+      if (info) {
+        const connection = await CdpConnection.connect(info.webSocketDebuggerUrl);
+        const page = new CdpPage(connection, info);
+        await page.waitFor("location.href", (v) => String(v).startsWith(prefix),
+                           { timeoutMs: 15000 });
+        await page.waitFor("document.readyState", (v) => v === "complete", { timeoutMs: 15000 });
+        return page;
+      }
+      await sleep(100);
+    }
+    throw new Error(`${this.name}: page for ${prefix} did not appear`);
+  }
+
   async close({ graceful = true, timeoutMs = 15000 } = {}) {
     if (!this.child) return;
     if (graceful && this.browserConnection) {
@@ -1232,10 +1251,15 @@ class SourceBrowser {
   }
 
   async sourceLoginCheck(site) {
-    const page = this.browser ? await this.browser.firstPage() : null;
-    if (!page) return null;
-    const result = await page.eval("fetch('/login-check').then((r) => r.text())");
-    return result;
+    if (!this.browser) return null;
+    // The startup URL is /set, which sets the synthetic cookie. Wait for that
+    // exact page rather than whichever page /json/list returns first (Chrome
+    // can expose an initial about:blank or extension page), then fetch the
+    // relative check from the same origin/cookie jar.
+    const page = await this.browser.firstPageForUrl(site.base);
+    // Keep the /set page open: closing the last source tab can race Chrome's
+    // shutdown and make the later popup Target.createTarget time out.
+    return await page.eval("fetch('/login-check').then((r) => r.text())");
   }
 
   async close() {
