@@ -1,8 +1,10 @@
 // CDP 辅助：页面求值 / ref->坐标 / glob 匹配 / 睡眠 / 受信输入的重用片段（M5）。
-import { attach, isAttached, sendCommand } from "./debugger-bridge";
+import { attach, isAttached, sendCommand, waitForDebuggerEvent } from "./debugger-bridge";
 import {
-  captureWithFallback,
+  captureFromSurface,
+  ScreenshotCaptureError,
   SurfaceCooldown,
+  withTimeout,
   type CaptureHooks,
   type CapturePhase,
   type ScreenshotResult,
@@ -195,14 +197,87 @@ export async function resolveCoord(
 /** @see screenshot-policy.ts —— 策略（超时/降级/新鲜度）与传输分离，便于离线测试。 */
 export type { ScreenshotMeta, ScreenshotResult } from "./screenshot-policy";
 
+const DEFAULT_SCREENSHOT_TIMEOUT_MS = 4000;
+
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String((error as { message?: unknown })?.message ?? error);
+}
+
+/**
+ * 单帧投屏兜底：静态/隐藏页面没有新合成帧时，Page.captureScreenshot 的 copy
+ * request 会一直挂到超时；Page.startScreencast 走 viz FrameSinkVideoCapturer，
+ * 直接按 frame sink 取当前 surface，并会触发一次刷新帧（实测静态页 bump 后也能
+ * 拿到新内容）。取第一帧后立即 stop，不改变窗口可见性/焦点/标签。
+ *
+ * 只接受第一帧非空数据；超时/断连/空帧一律失败，绝不返回旧图。
+ */
+async function captureViaScreencast(
+  tabId: number,
+  format: string,
+  timeoutMs: number,
+  hooks: CaptureHooks,
+  firstReason: string,
+): Promise<ScreenshotResult> {
+  const started = Date.now();
+  hooks.onAttemptStart?.("screencast");
+  const framePromise = waitForDebuggerEvent(tabId, "Page.screencastFrame", timeoutMs);
+  // If startScreencast itself fails, nobody awaits this promise; consume it so a
+  // later timeout cannot become an unhandled rejection.
+  framePromise.catch(() => undefined);
+  let castStarted = false;
+  try {
+    await withTimeout(
+      sendCommand(tabId, "Page.startScreencast", { format, quality: 100, everyNthFrame: 1 }),
+      2000,
+      "Page.startScreencast",
+    );
+    castStarted = true;
+    const params = (await withTimeout(
+      framePromise,
+      timeoutMs,
+      "Page.screencastFrame",
+    )) as { data?: string; sessionId?: number };
+    const base64 = params?.data ?? "";
+    if (!base64) throw new Error("Page.screencastFrame 返回空数据");
+    if (typeof params.sessionId === "number") {
+      await sendCommand(tabId, "Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined);
+    }
+    hooks.onAttemptSettle?.("screencast", "ok");
+    return {
+      base64,
+      meta: {
+        fromSurface: true,
+        path: "screencast",
+        durationMs: Date.now() - started,
+        possiblyStale: false,
+        reason: firstReason,
+      },
+    };
+  } catch (error) {
+    hooks.onAttemptSettle?.("screencast", "error");
+    throw error;
+  } finally {
+    if (castStarted) {
+      await withTimeout(
+        sendCommand(tabId, "Page.stopScreencast", {}),
+        1000,
+        "Page.stopScreencast",
+      ).catch(() => undefined);
+    }
+  }
+}
+
 /**
  * Page.captureScreenshot：视口截图。
  *
  * 刻意**不**调用 ensureTabVisible：截图不允许改变窗口可见状态、焦点或用户当前
  * 活动标签。隐藏/最小化窗口本身就能取帧（实测 1–4 秒）。
  *
- * 超时语义：fromSurface=true 挂住时按 timeoutMs 放弃并降级；被放弃的请求会从
- * pending 表移除，迟到的帧只记日志，绝不串到下一次截图。
+ * 取帧顺序：Page.captureScreenshot(fromSurface=true) → 失败/超时后用单帧投屏
+ * 兜底。两条路径都来自合成器；不会再返回 fromSurface=false 的浏览器进程快照
+ * （chrome.debugger 是 untrusted session，Chromium 会拒绝该路径）。
+ * 被放弃的 fromSurface 请求会从 pending 表移除，迟到的帧只记日志，绝不串到
+ * 下一次截图。
  */
 export function captureScreenshot(
   tabId: number,
@@ -220,7 +295,12 @@ async function captureScreenshotUnlocked(
   opts: { timeoutMs?: number } = {}
 ): Promise<ScreenshotResult> {
   await ensureAttach(tabId);
-  const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : 8000;
+  const timeoutMs = opts.timeoutMs && opts.timeoutMs > 0
+    ? opts.timeoutMs
+    : DEFAULT_SCREENSHOT_TIMEOUT_MS;
+  // 调用方给的是「整次截图预算」；主路径最多等 4s，剩余时间留给投屏兜底。
+  // 这样即使调用方传 30s，也不会在已知会挂住的 copy request 上白等 30s。
+  const primaryTimeoutMs = Math.min(timeoutMs, DEFAULT_SCREENSHOT_TIMEOUT_MS);
   const cooldown = surfaceCooldownFor(tabId);
   const skipSurface = cooldown.shouldSkip();
   const flights = new Map<CapturePhase, ScreenshotFlight>();
@@ -249,17 +329,29 @@ async function captureScreenshotUnlocked(
       console.warn("[cdp] 截图请求超时后才返回，已丢弃: tab=" + tabId + " phase=" + phase + " outcome=" + outcome);
     },
   };
+  let firstReason = skipSurface ? "fromSurface-cooldown-after-timeout" : "";
   try {
-    return await captureWithFallback(
-      (params) => sendCommand(tabId, "Page.captureScreenshot", params) as Promise<{ data?: string }>,
-      format,
-      timeoutMs,
-      hooks,
-      {
-        skipFromSurface: skipSurface,
-        skipReason: skipSurface ? "fromSurface-cooldown-after-timeout" : undefined,
-      },
-    );
+    if (!skipSurface) {
+      try {
+        return await captureFromSurface(
+          (params) => sendCommand(tabId, "Page.captureScreenshot", params) as Promise<{ data?: string }>,
+          format,
+          primaryTimeoutMs,
+          hooks,
+        );
+      } catch (error) {
+        firstReason = describeError(error);
+      }
+    }
+    try {
+      return await captureViaScreencast(tabId, format, timeoutMs, hooks, firstReason);
+    } catch (error) {
+      throw new ScreenshotCaptureError(
+        "截图失败：合成器帧与单帧投屏都没有返回新鲜画面。"
+          + "合成器: " + firstReason + "；单帧投屏: " + describeError(error),
+        { firstReason, secondReason: describeError(error), timeoutMs },
+      );
+    }
   } finally {
     // 兜底：任何未走正常 settle 的异常路径都不留下 pending 记录。
     for (const flight of flights.values()) settleFlight(tabId, flight);

@@ -1,10 +1,11 @@
 // 截图策略：超时、降级与新鲜度标记。刻意与 chrome.debugger 分离，便于离线测试。
 //
-// 背景：Page.captureScreenshot 的 fromSurface=true 在"窗口可见但被其它窗口完全
-// 遮挡"时不会返回新帧（Chromium 的 DelegatedFrameHost 对 HiddenCause::kOccluded
-// 提前返回，保留了表面），请求会一直挂住。这里给它一个硬超时，超时后退回浏览器
-// 进程快照（fromSurface=false），并明确标记 this frame may be stale —— 绝不把
-// 旧帧当成实时画面返回。
+// 背景：Page.captureScreenshot 的 fromSurface=true 在静态/隐藏窗口里可能永远
+// 不返回——页面没有新合成帧时 copy request 会一直挂在 viz。产品路径（cdp.ts）
+// 给主路径 4s 硬超时，超时后用 Page.startScreencast 单帧兜底；两条路径都来自
+// 合成器，绝不返回 fromSurface=false 的浏览器进程快照（chrome.debugger 是
+// untrusted session，Chromium 对该路径返回 "Only screenshots from surface are
+// allowed"）。
 //
 // 超时清理（P0，2026-10-28）：底层 CDP 请求无法从扩展侧取消。withTimeout 在超时后
 // 会主动挂上 then/catch 消费器（late settle），保证迟到的响应被丢弃而不是变成
@@ -12,11 +13,13 @@
 // 迟到的帧绝不会被当作后续请求的结果（每次 send 都是独立 promise，不做共享响应表）。
 
 export interface ScreenshotMeta {
-  /** true = 合成器取帧；false = 浏览器进程快照（可能是缓存位图）。 */
+  /** true = 合成器/视频捕获取帧；false = 浏览器进程快照（可能是缓存位图）。 */
   fromSurface: boolean;
   durationMs: number;
   /** true 表示这次结果可能不是最新画面，调用方必须自行决定能否接受。 */
   possiblyStale: boolean;
+  /** 实际取帧路径：surface=Page.captureScreenshot；screencast=单帧投屏。 */
+  path?: "surface" | "screencast";
   /** 走到降级路径的原因（超时/空数据/第一条路径失败）。 */
   reason?: string;
 }
@@ -28,7 +31,7 @@ export interface ScreenshotResult {
 
 export type CaptureSend = (params: Record<string, unknown>) => Promise<{ data?: string }>;
 
-export type CapturePhase = "fromSurface" | "snapshot";
+export type CapturePhase = "fromSurface" | "snapshot" | "screencast";
 export type CaptureAttemptOutcome = "ok" | "error" | "abandoned";
 
 export interface CaptureTimeoutInfo {
@@ -203,6 +206,39 @@ export interface CaptureFallbackOptions {
 }
 
 /**
+ * 只取一次合成器帧（Page.captureScreenshot fromSurface=true）。
+ *
+ * 失败时抛出原始错误；调用方决定是否走 screencast 兜底。不在这里返回旧图，
+ * 也不把 fromSurface=false 当作通用降级——chrome.debugger 是 untrusted session，
+ * Chromium 会以 "Only screenshots from surface are allowed" 拒绝它。
+ */
+export async function captureFromSurface(
+  send: CaptureSend,
+  format: string,
+  timeoutMs: number,
+  hooks: CaptureHooks = {},
+): Promise<ScreenshotResult> {
+  const started = Date.now();
+  hooks.onAttemptStart?.("fromSurface");
+  const res = await withTimeout(
+    send({ format, fromSurface: true }),
+    timeoutMs,
+    "Page.captureScreenshot(fromSurface=true)",
+    { phase: "fromSurface", hooks },
+  );
+  const base64 = res?.data ?? "";
+  if (!base64) throw new Error("Page.captureScreenshot 返回空数据");
+  return {
+    base64,
+    meta: { fromSurface: true, path: "surface", durationMs: Date.now() - started, possiblyStale: false },
+  };
+}
+
+/**
+ * @deprecated 产品路径已改用 captureFromSurface + Page.startScreencast 单帧兜底；
+ * 此函数保留给离线策略测试/旧调用方，fromSurface=false 在 chrome.debugger
+ * (untrusted session) 下会被 Chromium 拒绝，不得作为产品降级路径。
+ *
  * 先取合成器帧，超时/失败后退回浏览器进程快照。
  *
  * 两条路径都拿不到数据时抛 ScreenshotCaptureError（带两段原始原因），不返回空图。
@@ -221,17 +257,8 @@ export async function captureWithFallback(
   if (options.skipFromSurface === true) {
     firstReason = options.skipReason ?? "fromSurface-skipped";
   } else {
-    hooks.onAttemptStart?.("fromSurface");
     try {
-      const res = await withTimeout(
-        send({ format, fromSurface: true }),
-        timeoutMs,
-        "Page.captureScreenshot(fromSurface=true)",
-        { phase: "fromSurface", hooks },
-      );
-      const base64 = res?.data ?? "";
-      if (!base64) throw new Error("Page.captureScreenshot 返回空数据");
-      return { base64, meta: { fromSurface: true, durationMs: Date.now() - started, possiblyStale: false } };
+      return await captureFromSurface(send, format, timeoutMs, hooks);
     } catch (error) {
       firstReason = errorMessage(error);
     }
@@ -249,7 +276,7 @@ export async function captureWithFallback(
     if (!base64) throw new Error("Page.captureScreenshot 返回空数据");
     return {
       base64,
-      meta: { fromSurface: false, durationMs: Date.now() - started, possiblyStale: true, reason: firstReason },
+      meta: { fromSurface: false, path: "surface", durationMs: Date.now() - started, possiblyStale: true, reason: firstReason },
     };
   } catch (error) {
     const secondReason = errorMessage(error);

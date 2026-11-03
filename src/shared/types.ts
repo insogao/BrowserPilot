@@ -11,7 +11,8 @@ export type CommandName =
   // 观测
   | "snapshot" // {level: "L0"|"L1", scope?}
   | "readText"
-  | "screenshot" // {format?} 视口截图(返回 base64)
+  | "screenshot" // {format?, timeoutMs?} 视口截图(返回 base64 + 取帧路径/新鲜度)
+  | "screenshot_diagnostics" // {tabId?, resetCooldown?} 截图管线只读诊断（冷却/pending/清理计数）
   | "scroll_screenshot" // {tabId?, pages?, gap?, format?} 滚动拼接长截图(返回整图 base64 + pageCount)
   | "getElementInfo"
   // 动作
